@@ -5,6 +5,7 @@ import type { AppearanceId } from '../../../types'
 import { cn } from '../../../lib/format'
 import { APPEARANCE_IDS, renderSig } from '../../../lib/projectOps'
 import { APPEARANCE_VISUAL } from '../../../lib/meta'
+import { appearanceLabel } from '../../../lib/labels'
 import { useAppStore } from '../../../store/app'
 import { useEditor } from '../../../store/editor'
 import { useRender, type RenderEntry } from '../../../store/render'
@@ -65,7 +66,7 @@ export function RenditionsStrip() {
       </div>
       <div className="no-scrollbar flex min-w-0 flex-1 items-center justify-center gap-2 overflow-x-auto">
         {APPEARANCE_IDS.map((a, i) => (
-          <RenditionTile key={a} appearance={a} index={i} active={a === appearance} supported={allowed.includes(a)} label={presets?.appearances[a]?.short ?? a} sig={sig} />
+          <RenditionTile key={a} appearance={a} index={i} active={a === appearance} supported={allowed.includes(a)} label={appearanceLabel(a, presets, 'short')} long={appearanceLabel(a, presets)} sig={sig} />
         ))}
       </div>
       <IconButton label="Hide renditions" size="sm" onClick={() => useUi.getState().set({ renditionsOpen: false })}>
@@ -81,6 +82,7 @@ function RenditionTile({
   active,
   supported,
   label,
+  long,
   sig,
 }: {
   appearance: AppearanceId
@@ -88,6 +90,8 @@ function RenditionTile({
   active: boolean
   supported: boolean
   label: string
+  /** Full name for the tooltip / accessible name. */
+  long: string
   sig: string
 }) {
   const { entry, running } = useAppearanceImage(appearance)
@@ -97,8 +101,8 @@ function RenditionTile({
     <button
       type="button"
       onClick={() => setAppearance(appearance)}
-      data-tip={supported ? `Edit ${label}` : `${label} — not used by this platform`}
-      aria-label={`${label} appearance`}
+      data-tip={supported ? `Edit ${long}` : `${long} — not used by this platform`}
+      aria-label={`${long} appearance`}
       aria-pressed={active}
       data-tip-kbd={String(index + 1)}
       className={cn('group flex shrink-0 flex-col items-center gap-1', !supported && 'opacity-40')}

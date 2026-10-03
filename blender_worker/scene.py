@@ -204,6 +204,7 @@ def image_quad(im: dict, fallback_bbox) -> list:
 
 
 HALO_SOFT_MIN = 0.25         # share of the visible pixels that are soft (0.02 < alpha < 0.6)
+GLOW_SOFT_MIN = 0.5          # ... above this a raster region IS a glow (light, not an object): card only
 _SOFT_ALPHA: dict = {}
 
 
@@ -230,6 +231,23 @@ def soft_alpha_fraction(path: str) -> float:
             frac = 0.0          # no solid core (a translucent shading overlay, e.g. Find Device): no halo
     _SOFT_ALPHA[key] = frac
     return frac
+
+
+def touching_opaque(g: dict, images: Optional[dict] = None) -> bool:
+    """True when some regions of a layer share edges (the union silhouette has fewer outer contours than the
+    regions together) and every region is opaque vector paint — the layer then renders as one body."""
+    regions = g.get("regions") or []
+    if len(regions) < 2 or not g.get("silhouette"):
+        return False
+    if images or g.get("images"):
+        return False
+    if any(float(r.get("opacity", 1.0)) < 0.999 or float(r.get("zSub", 0.0) or 0.0) != 0.0 for r in regions):
+        return False
+    if any(float(st.get("opacity", 1.0)) < 0.999 for r in regions for st in (r.get("paint") or {}).get("stops") or []):
+        return False
+    sil_outer = sum(1 for s in g["silhouette"] if not s.get("hole"))
+    reg_outer = sum(1 for r in regions for s in r.get("splines") or [] if not s.get("hole"))
+    return 0 < sil_outer < reg_outer
 
 
 def paint_rgb(paint: dict) -> tuple:
@@ -278,10 +296,11 @@ class SceneBuilder:
     # -------------------------------------------------------------------------- main entry
     def build(self, project: dict, bundle: dict, appearance: str = "light", *, camera: Optional[dict] = None,
               full_bleed: bool = False, backdrop: Optional[str] = None, backdrop_color: Optional[str] = None,
-              overrides: Optional[dict] = None, editable: bool = False) -> dict:
+              overrides: Optional[dict] = None, editable: bool = False, engine: Optional[str] = None) -> dict:
         """Build/update the scene. ``overrides`` (animations): {'lightAngle', 'explode', 'layerZ': {id: dz}}.
         ``editable`` (save_blend): pieces become live curve objects (round bevel / GN modifier stack) instead
-        of the baked meshes renders use, so the .blend can be tweaked in Blender."""
+        of the baked meshes renders use, so the .blend can be tweaked in Blender. ``engine`` (render engine
+        id of the tier about to render) selects the per-engine light calibration (lighting.ENGINE_CAL)."""
         self.warnings = []
         self.editable = bool(editable)
         overrides = overrides or {}
@@ -298,6 +317,8 @@ class SceneBuilder:
         rset = eff["render"]
         backdrop = backdrop or rset.get("backdrop", "transparent")
         backdrop_color = backdrop_color or rset.get("backdropColor", "#1c1c22")
+        # paints are pre-compensated for the view transform of the colour mode (materials.display_paint)
+        self._cm = str(rset.get("colorMode", "neutral") or "neutral")
 
         icon_col, rig_col = self.collections()
         scene = self.scene
@@ -305,8 +326,8 @@ class SceneBuilder:
         rig = lighting.resolve(lighting_spec, env["envScale"], env["keyScale"], overrides.get("lightAngle"))
         L = lighting.key_vector(rig)
         self._lit = max(0.4, min(1.4, 0.55 + 0.45 * float(rig["key"])))
-        lighting.update_lights(scene, rig_col, rig)
-        lighting.update_world(scene, rig, (*hex_to_linear(backdrop_color), 1.0))
+        lighting.update_lights(scene, rig_col, rig, engine)
+        lighting.update_world(scene, rig, (*hex_to_linear(backdrop_color), 1.0), engine)
         # perspective views are auto-framed on the subject (framing.py); animations pass one shared plan
         fplan = None
         if cam.get("view", "front") != "front" and not full_bleed:
@@ -564,6 +585,7 @@ class SceneBuilder:
             shadow={"kind": "none", "opacity": 0.0}, role=role, thickness=th, light=L,
             bbox=(-1.0, -1.0, 1.0, 1.0), inflate=0.0, emission=0.0,
             preview_color=paint.get("color", (0.9, 0.9, 0.9)), eevee_backdrop=backdrop_wp, obj_scale=grow,
+            cm=getattr(self, "_cm", "neutral"), plate=True,
         )
         mat = materials.ensure("BIS Mat Plate", spec)
         _set_material(ob, mat)
@@ -706,7 +728,12 @@ class SceneBuilder:
             else:       # a missing PNG would render Cycles' magenta "missing texture" colour
                 self.warnings.append(f"layer {lid}: raster image not found: {im['path']}")
         pieces = []        # (piece id, splines, z offset, opacity, rgb, raster image | None)
-        if Lr.get("mode") == "combined":
+        if Lr.get("mode") == "combined" or touching_opaque(g, images):
+            # touching opaque pieces of one layer (Gmail's M + its shading wedges, DJI's facets, CRD's chevron)
+            # are one body painted by the layer texture: bevelled one by one, every shared edge became a
+            # V-groove that showed the plate as a white sliver with a rim highlight (QA round 3 #5)
+            if Lr.get("mode") != "combined":
+                stats["mergedLayers"] = stats.get("mergedLayers", 0) + 1
             pieces.append(("sil", g["silhouette"], 0.0, layer_opacity, (1.0, 1.0, 1.0), None))
         else:
             for i, r in enumerate(g["regions"]):
@@ -717,9 +744,16 @@ class SceneBuilder:
         region_ids = {r["elementId"] for r in g["regions"]}
         cards = [im for eid, im in images.items() if eid not in region_ids]
         # raster regions are extruded along their alpha-traced contour, which cuts off soft alpha (a neon
-        # tube's glow halo, a soft shadow disc): such images also get a flat halo card under the piece
-        cards += [im for eid, im in images.items() if eid in region_ids and not im.get("opaque")
-                  and soft_alpha_fraction(im["path"]) > HALO_SOFT_MIN]
+        # tube's glow halo, a soft shadow disc): such images also get a flat halo card under the piece. A
+        # region that is mostly soft (Vanced Neon's glow layer: 55 % of its pixels) is a glow, not an object:
+        # extruded, its traced band became a second glass ring around the tube (QA round 3 #4) - card only.
+        soft = {eid: soft_alpha_fraction(im["path"]) for eid, im in images.items()
+                if eid in region_ids and not im.get("opaque")}
+        cards += [images[eid] for eid, f in soft.items() if f > HALO_SOFT_MIN]
+        glow_ids = {eid for eid, f in soft.items() if f > GLOW_SOFT_MIN}
+        if glow_ids and Lr.get("mode") != "combined":
+            pieces = [p for p, r in zip(pieces, g["regions"]) if r["elementId"] not in glow_ids]
+            stats["glowCards"] = stats.get("glowCards", 0) + len(glow_ids)
 
         # ---- material ----------------------------------------------------------------------------------
         bbox = tuple(g.get("bbox") or (-1, -1, 1, 1))
@@ -734,7 +768,7 @@ class SceneBuilder:
             edge_dark=float(env.get("edgeDark", 0.0) or 0.0),
             shadow=dict(Lr.get("shadow") or {}), role=role, thickness=th_local, light=L, bbox=bbox,
             inflate=float(dp.get("inflate", 0.0)), emission=boost, lit=getattr(self, "_lit", 1.0),
-            preview_color=pieces[0][4] if pieces else (0.8, 0.8, 0.8),
+            preview_color=pieces[0][4] if pieces else (0.8, 0.8, 0.8), cm=getattr(self, "_cm", "neutral"),
         )
         if preset == "tinted_glass" and spec["shadow"].get("kind") == "neutral":
             spec["shadow"]["kind"] = "chromatic"
@@ -810,7 +844,8 @@ class SceneBuilder:
             cpaint = {"kind": "texture", "image": im["path"], "uv": image_uv(im, bbox), "has_alpha": True}
             cspec = materials.make_spec("flat", {}, cpaint, mono=env.get("mono"), alpha=True,
                                         shadow=dict(Lr.get("shadow") or {}), role="opaque",
-                                        thickness=CARD_THICKNESS / S, light=L, bbox=tuple(bb))
+                                        thickness=CARD_THICKNESS / S, light=L, bbox=tuple(bb),
+                                        cm=getattr(self, "_cm", "neutral"))
             cname = f"BIS Mat {lid} img{k}"
             cmat = materials.ensure(cname, cspec)
             _set_material(ob, cmat)

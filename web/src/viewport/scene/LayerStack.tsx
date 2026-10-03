@@ -241,6 +241,8 @@ interface LayerBodyProps {
   presets: Presets | null
   /** Liquid Glass self-illumination (worker `lit`). */
   lit: number
+  /** Colour mode 'neutral': paints pre-compensated for Khronos PBR Neutral (worker display_paint). */
+  displayPaint: boolean
 }
 
 export const LayerBody = memo(function LayerBody(p: LayerBodyProps) {
@@ -275,6 +277,7 @@ export const LayerBody = memo(function LayerBody(p: LayerBodyProps) {
       milkRange: [y0, y1],
       opacity: layer.opacity * paint.opacity,
       lit: p.lit,
+      displayPaint: p.displayPaint,
     }
   }, [
     paint,
@@ -287,6 +290,7 @@ export const LayerBody = memo(function LayerBody(p: LayerBodyProps) {
     p.rimDir,
     p.rimColor,
     p.lit,
+    p.displayPaint,
     layer.depth.inflate,
     layer.opacity,
     lg.bbox,
@@ -491,6 +495,7 @@ export const LayerBody = memo(function LayerBody(p: LayerBodyProps) {
           presets={p.presets}
           rimDir={p.rimDir}
           lumRange={p.intentLum}
+          displayPaint={p.displayPaint}
           order={BLENDED_RENDER_ORDER.layer + entry.level + 0.95}
           route={entry.routeBlended}
         />
@@ -697,6 +702,7 @@ function RasterCardMesh({
   presets,
   rimDir,
   lumRange,
+  displayPaint,
   order,
   route,
 }: {
@@ -710,6 +716,7 @@ function RasterCardMesh({
   presets: Presets | null
   rimDir: THREE.Vector3
   lumRange: [number, number]
+  displayPaint: boolean
   order: number
   /** Opaque-pass routing (StackEntry.routeBlended). */
   route: boolean
@@ -734,6 +741,7 @@ function RasterCardMesh({
       rimDir,
       opacity: ready ? opacity * (card.opacity ?? 1) : 0,
       paintAlpha: true,
+      displayPaint,
     })
     material.transparent = true
     material.depthWrite = false
@@ -745,7 +753,7 @@ function RasterCardMesh({
       material.needsUpdate = true
     }
     invalidate()
-  }, [material, spec, asset, ready, placement, lumRange, rimDir, opacity, card.opacity, route, invalidate])
+  }, [material, spec, asset, ready, placement, lumRange, rimDir, opacity, card.opacity, route, displayPaint, invalidate])
   const show = !halo || assetSoftAlpha(ready ? asset : null) > HALO_SOFT_MIN
   useLayoutEffect(() => {
     const m = meshRef.current

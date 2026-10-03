@@ -34,6 +34,7 @@ TIERS = {
               "bounces": (32, 32, 32, 8, 4)},
 }
 MAX_SIZE = 4096
+BLOOM_THRESHOLD = 0.35
 ProgressFn = Callable[[float, str], None]
 
 
@@ -175,12 +176,12 @@ def configure_compositor(scene: bpy.types.Scene, bloom: float, transparent: bool
         if transparent:
             bw = ng.nodes.new("CompositorNodeRGBToBW")
             sub = ng.nodes.new("ShaderNodeMath")        # drop the faint far haze (no veil over the frame)
+            sub.name = "BIS Haze"
             sub.operation = "SUBTRACT"
-            sub.inputs[1].default_value = 0.05
             mul = ng.nodes.new("ShaderNodeMath")
+            mul.name = "BIS Haze Gain"
             mul.operation = "MULTIPLY"
             mul.use_clamp = True
-            mul.inputs[1].default_value = 2.0
             mx = ng.nodes.new("ShaderNodeMath")
             mx.operation = "MAXIMUM"
             sa = ng.nodes.new("CompositorNodeSetAlpha")
@@ -198,10 +199,15 @@ def configure_compositor(scene: bpy.types.Scene, bloom: float, transparent: bool
             ng.links.new(add.outputs[2], out.inputs[0])
         for i, n in enumerate(chain + [out]):
             n.location = (i * 220, 0)
+    # icon framing (QA round 3 #8): the glow hugs the tubes instead of spilling far past the plate — only the
+    # bright cores bloom (threshold), over a short reach (size), and the faint far haze is not folded into alpha
     gl = ng.nodes["BIS Glare"]
-    gl.inputs["Threshold"].default_value = 0.15
-    gl.inputs["Strength"].default_value = 0.4 + 1.2 * bloom
-    gl.inputs["Size"].default_value = 0.45 + 0.4 * bloom
+    gl.inputs["Threshold"].default_value = BLOOM_THRESHOLD
+    gl.inputs["Strength"].default_value = 0.3 + 0.9 * bloom
+    gl.inputs["Size"].default_value = 0.2 + 0.3 * bloom
+    if "BIS Haze" in ng.nodes:
+        ng.nodes["BIS Haze"].inputs[1].default_value = 0.1
+        ng.nodes["BIS Haze Gain"].inputs[1].default_value = 1.6
     if scene.compositing_node_group != ng:
         scene.compositing_node_group = ng
     scene.render.use_compositing = True

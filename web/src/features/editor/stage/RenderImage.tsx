@@ -3,7 +3,24 @@ import { useEffect, useState } from 'react'
 import { ImageOff } from 'lucide-react'
 import { cn } from '../../../lib/format'
 
-export function RenderImage({ url, className, onError, alt = 'Blender render' }: { url: string | null | undefined; className?: string; onError?: () => void; alt?: string }) {
+export function RenderImage({
+  url,
+  className,
+  onError,
+  alt = 'Blender render',
+  pixelExact = false,
+}: {
+  url: string | null | undefined
+  className?: string
+  onError?: () => void
+  alt?: string
+  /**
+   * The box shows the current image at one image pixel per device pixel (Render / Compare at 1:1). Sampled
+   * nearest-neighbour then: at fractional device-pixel ratios (125 %, 150 %) the box cannot be exactly N device px
+   * wide (CSS layout rounds to 1/64 px), and smooth sampling of a 255.98 px box re-filters the whole render.
+   */
+  pixelExact?: boolean
+}) {
   const [layers, setLayers] = useState<{ url: string; key: number }[]>([])
   const [failed, setFailed] = useState<string | null>(null)
 
@@ -51,7 +68,11 @@ export function RenderImage({ url, className, onError, alt = 'Blender render' }:
             draggable={false}
             onAnimationEnd={() => top && setLayers((ls) => ls.slice(-1))}
             className="absolute inset-0 h-full w-full select-none object-contain"
-            style={top && layers.length > 1 ? { animation: 'crossfade-in 300ms cubic-bezier(0.16,1,0.3,1) both' } : undefined}
+            style={{
+              ...(top && layers.length > 1 ? { animation: 'crossfade-in 300ms cubic-bezier(0.16,1,0.3,1) both' } : null),
+              // only the image the 1:1 scale was computed for (an outgoing render of another size keeps smooth sampling)
+              ...(pixelExact && l.url === url ? { imageRendering: 'pixelated' as const } : null),
+            }}
           />
         )
       })}

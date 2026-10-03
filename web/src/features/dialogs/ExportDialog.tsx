@@ -5,6 +5,7 @@ import { errorMessage, jobsApi, projectsApi } from '../../api'
 import { cn, formatSeconds } from '../../lib/format'
 import { APPEARANCE_IDS } from '../../lib/projectOps'
 import { APPEARANCE_VISUAL, EXPORT_TARGETS } from '../../lib/meta'
+import { appearanceLabel } from '../../lib/labels'
 import { safeStorage } from '../../lib/hooks'
 import { useAppStore } from '../../store/app'
 import { useEditor } from '../../store/editor'
@@ -144,7 +145,7 @@ export function ExportDialog() {
             <div>
               <Label>Appearances</Label>
               <AppearanceToggles value={prefs.appearances} onChange={(appearances) => setPrefs((p) => ({ ...p, appearances }))} />
-              <p className="mt-1.5 text-3xs text-fg-4">Platforms only receive the appearances they support (watchOS: light only).</p>
+              <p className="mt-1.5 text-3xs text-fg-4">Platforms only receive the appearances they support (watchOS: Default only).</p>
             </div>
             <div>
               <Label>Quality</Label>
@@ -244,7 +245,7 @@ export function AppearanceToggles({
     <div className="flex flex-wrap gap-1.5" role={single ? 'radiogroup' : 'group'}>
       {APPEARANCE_IDS.map((a) => {
         const on = value.includes(a)
-        const label = presets?.appearances[a]?.label ?? a
+        const label = appearanceLabel(a, presets)
         return (
           <button
             key={a}

@@ -25,6 +25,12 @@ K_BASE = 350.0            # W, key energy at distance 6 (tuned for a ±1 icon)
 # reads ≈ its SVG colour; the grazing rim strips (edge highlights on glass) keep their energy.
 DIFFUSE_CAL = 0.85
 WORLD_CAL = 0.65
+# Per-engine calibration (round 4): the same rig lit a face-on satin plate at 1.04 x its albedo in Cycles but
+# 0.95 x in EEVEE (world probe + light falloff differ), so drafts read ~10 % darker than previews. The lights
+# are scaled per engine so a face-on diffuse surface reads ~1.0 x albedo (+ a small coat reflection) in both;
+# materials.py pre-compensates paint colours against that response (DIFFUSE_A/B). The world is left alone
+# (changing it makes EEVEE re-bake its probes on every draft <-> preview switch).
+ENGINE_CAL = {"CYCLES": 0.95, "BLENDER_EEVEE": 1.075}
 RIG = (
     # name, angle offset, elevation (None = lighting.elevation), distance, shape, size, size_y, energy factor
     ("BIS Key", 0.0, None, 6.0, "DISK", 4.0, 4.0, 1.0),
@@ -68,10 +74,17 @@ def _look_rotation(d: Vector) -> "Matrix":
     return (-d).to_track_quat("-Z", "Y").to_matrix().to_4x4()
 
 
-def update_lights(scene: bpy.types.Scene, collection: bpy.types.Collection, rig: dict) -> list:
-    """Create / update the 4-light rig (in place: no datablock churn while dragging the angle dial)."""
+def engine_cal(engine: Optional[str]) -> float:
+    return ENGINE_CAL.get(str(engine or "CYCLES"), 1.0)
+
+
+def update_lights(scene: bpy.types.Scene, collection: bpy.types.Collection, rig: dict,
+                  engine: Optional[str] = None) -> list:
+    """Create / update the 4-light rig (in place: no datablock churn while dragging the angle dial).
+    ``engine`` (render engine id) selects the per-engine exposure calibration (ENGINE_CAL)."""
     objs = []
     soft = 0.3 + 1.4 * rig["softness"]
+    cal = engine_cal(engine)
     for i, (name, d_angle, elev, dist, shape, size, size_y, efac) in enumerate(RIG):
         e = rig["elevation"] if elev is None else elev
         d = Vector(light_dir(rig["angle"] + d_angle, e))
@@ -100,7 +113,9 @@ def update_lights(scene: bpy.types.Scene, collection: bpy.types.Collection, rig:
             col = (1.0, 1.0, 1.0)
             if rig["rimColors"]:
                 col = rig["rimColors"][min(i - 1, len(rig["rimColors"]) - 1)]
-        ld.energy = max(0.0, energy)
+        energy *= cal
+        if abs(ld.energy - max(0.0, energy)) > 1e-6:
+            ld.energy = max(0.0, energy)
         ld.color = col
         ld.use_shadow = True
         try:
@@ -146,7 +161,10 @@ def _world_graph(g: Graph, rig: dict, backdrop: tuple, strength_scale: float = 1
     g.link(mix, out.inputs["Surface"])
 
 
-def update_world(scene: bpy.types.Scene, rig: dict, backdrop_rgb: tuple = (0.05, 0.05, 0.06)) -> bpy.types.World:
+def update_world(scene: bpy.types.Scene, rig: dict, backdrop_rgb: tuple = (0.05, 0.05, 0.06),
+                 engine: Optional[str] = None) -> bpy.types.World:
+    """Procedural studio world. Not engine-calibrated (``engine`` is accepted for symmetry): a world change
+    makes EEVEE re-bake its probes, ~50 ms on every draft <-> preview switch; the lights carry ENGINE_CAL."""
     world = bpy.data.worlds.get("BIS World")
     fresh = world is None
     if fresh:

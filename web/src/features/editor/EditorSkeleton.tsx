@@ -1,5 +1,8 @@
 import { Skeleton } from '../../components/ui'
 import { Logo } from '../../components/icons'
+import { stageBackgroundStyle } from '../../lib/stageBackdrop'
+
+const STAGE_BG = stageBackgroundStyle()
 
 /** Placeholder layout while the editor bundle / project loads. */
 export function EditorSkeleton({ label = 'Loading editor…' }: { label?: string }) {
@@ -24,7 +27,7 @@ export function EditorSkeleton({ label = 'Loading editor…' }: { label?: string
             </div>
           ))}
         </div>
-        <div className="relative flex flex-1 items-center justify-center stage-backdrop">
+        <div className="relative flex flex-1 items-center justify-center" style={STAGE_BG}>
           <div className="flex flex-col items-center gap-4">
             <Skeleton className="h-[260px] w-[260px] rounded-[22%]" />
             <span className="text-2xs text-fg-4">{label}</span>

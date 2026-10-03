@@ -5,7 +5,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { useThree } from '@react-three/fiber'
 import * as THREE from 'three'
-import { COOL, DIFFUSE_CAL, WARM, lightDir, type Rig } from './rig'
+import { COOL, DIFFUSE_CAL, LIVE_CAL, WARM, lightDir, type Rig } from './rig'
 import { StudioEnvironment } from './studioEnvironment'
 
 interface Props {
@@ -65,7 +65,8 @@ export function StudioLighting({ rig, shadowStrength, shadows }: Props) {
   // The light angle rotates the environment about the view axis (0 = top, clockwise positive).
   useLayoutEffect(() => {
     scene.environmentRotation.set(0, 0, -THREE.MathUtils.degToRad(rig.angle))
-    scene.environmentIntensity = 1
+    // Worker ENGINE_CAL: the world is scaled with the lights (rig.ts LIVE_CAL).
+    scene.environmentIntensity = LIVE_CAL
     invalidate()
   }, [scene, rig.angle, invalidate])
 
@@ -110,7 +111,7 @@ export function StudioLighting({ rig, shadowStrength, shadows }: Props) {
       <spotLight
         ref={keyRef}
         position={[keyDir.x * KEY_DISTANCE, keyDir.y * KEY_DISTANCE, keyDir.z * KEY_DISTANCE]}
-        intensity={KEY_POWER * DIFFUSE_CAL * rig.key}
+        intensity={KEY_POWER * DIFFUSE_CAL * LIVE_CAL * rig.key}
         color={keyColor}
         angle={KEY_ANGLE}
         penumbra={1}
@@ -120,7 +121,7 @@ export function StudioLighting({ rig, shadowStrength, shadows }: Props) {
       />
       <directionalLight
         position={[fillDir.x * 10, fillDir.y * 10, fillDir.z * 10]}
-        intensity={0.35 * DIFFUSE_CAL * rig.fill}
+        intensity={0.35 * DIFFUSE_CAL * LIVE_CAL * rig.fill}
         color={fillColor}
       />
     </>

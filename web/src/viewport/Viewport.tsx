@@ -21,6 +21,12 @@ export interface ViewportProps {
   view: 'front' | 'orbit'
   /** Apple-style icon grid overlay. */
   showGrid?: boolean
+  /**
+   * The element around the viewport whose background is lib/stageBackdrop's stage CSS (the editor stage). With the
+   * transparent backdrop the canvas then repaints exactly that background under its faded checkerboard, so the live
+   * view blends into the page; without it the checker fades into the stage's flat base colour.
+   */
+  stageElement?: () => HTMLElement | null
   className?: string
 }
 
@@ -34,7 +40,7 @@ const INNER_STYLE: CSSProperties = {
   minWidth: 0,
   minHeight: 0,
   overflow: 'hidden',
-  background: '#121216',
+  background: 'transparent', // until the first frame; the backdrop then repaints the stage behind the canvas
   touchAction: 'none',
 }
 
@@ -123,6 +129,7 @@ export function Viewport(p: ViewportProps): JSX.Element {
               explode={p.explode}
               view={p.view}
               showGrid={!!p.showGrid}
+              stage={p.stageElement}
             />
           </StoreContext.Provider>
         </Canvas>

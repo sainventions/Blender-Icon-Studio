@@ -46,6 +46,7 @@ const fillet = await import('../geometry/fillet.ts')
 const flatten = await import('../geometry/flatten.ts')
 const pill = await import('../geometry/pillGeometry.ts')
 const softAlpha = await import('../textures/softAlpha.ts')
+const { neutralToneMap: neutral } = await import('../scene/displayTransform.ts')
 const presets = JSON.parse(read('shared/presets.json'))
 
 // ------------------------------------------------------------------------------------------------ mirrored constants
@@ -93,12 +94,186 @@ test('satin mirrors the worker (Specular IOR Level 0.35, sheen 0.03, coat defaul
   assert.equal(m3d.describeMaterial({ preset: 'satin', params: {} }, null).clearcoat, 0.15)
 })
 
-test('Liquid Glass white fill share mirrors the worker (1.45 − 0.6·transl, ≤ 0.97)', () => {
-  assert.match(read('blender_worker/materials.py'), /clamp\(1\.45 - 0\.6 \* transl, 0\.0, 0\.97\)/)
-  const s = m3d.describeMaterial({ preset: 'liquid_glass', params: { translucency: 0.35 } }, presets)
-  assert.ok(Math.abs(s.lg.fill[1] - 0.97) < 1e-9)
-  const s2 = m3d.describeMaterial({ preset: 'liquid_glass', params: { translucency: 1 } }, presets)
-  assert.ok(Math.abs(s2.lg.fill[1] - 0.85) < 1e-9)
+// ------------------------------------------------------------------------------------------------ round 4: colour fidelity
+test('colour calibration constants mirror the worker (display_paint, _albedo, ENGINE_CAL)', () => {
+  const mat = read('blender_worker/materials.py')
+  const util = read('blender_worker/util.py')
+  assert.equal(m3d.DIFFUSE_A, pyConst(mat, 'DIFFUSE_A'))
+  assert.equal(m3d.DIFFUSE_B, pyConst(mat, 'DIFFUSE_B'))
+  assert.equal(m3d.ALBEDO_MAX, pyConst(mat, 'ALBEDO_MAX'))
+  assert.equal(m3d.LG_COAT_B, pyConst(mat, 'LG_COAT_B'))
+  assert.equal(m3d.PBR_START, pyConst(util, 'PBR_START'))
+  assert.equal(m3d.PBR_DESAT, pyConst(util, 'PBR_DESAT'))
+  const cap = /^NEUTRAL_CAP\s*=\s*\(([-0-9.]+),\s*([-0-9.]+)\)/m.exec(util)
+  assert.deepEqual(m3d.NEUTRAL_CAP, [Number(cap[1]), Number(cap[2])])
+  assert.equal(m3d.NEUTRAL_CAP_POW, pyConst(util, 'NEUTRAL_CAP_POW'))
+  assert.match(util, /sat \*\* NEUTRAL_CAP_POW/)
+  // the B offset each diffuse preset hands to _albedo(display_paint(col), B)
+  const body = (name) => new RegExp(`def ${name}\\([\\s\\S]*?\\n(?=def |# =)`).exec(mat)[0]
+  /** B argument of the preset's `diffuse_paint(c, <paint>[, B])` call (default DIFFUSE_B), by matching parentheses. */
+  const bOf = (src) => {
+    const i = src.indexOf('diffuse_paint(c, ')
+    assert.ok(i >= 0, 'no diffuse_paint(...) call')
+    const args = ['']
+    for (let k = i + 'diffuse_paint('.length, depth = 1; depth > 0; k++) {
+      const ch = src[k]
+      depth += ch === '(' ? 1 : ch === ')' ? -1 : 0
+      if (depth === 1 && ch === ',') args.push('')
+      else if (depth > 0) args[args.length - 1] += ch
+    }
+    return args.length > 2 ? Number(args[2].trim()) : m3d.DIFFUSE_B
+  }
+  assert.match(body('diffuse_paint'), /return _albedo\(c, display_paint\(c, col, DIFFUSE_PEAK\), b\)/)
+  assert.match(mat, /^DIFFUSE_PEAK = 1\.0 - \(1\.0 - PBR_START\) \*\* 2 \/ \(ALBEDO_MAX \+ DIFFUSE_B - \(2 \* PBR_START - 1\.0\)\)/m)
+  assert.ok(Math.abs(m3d.DIFFUSE_PEAK - (1 - (1 - m3d.PBR_START) ** 2 / (m3d.ALBEDO_MAX + m3d.DIFFUSE_B - (2 * m3d.PBR_START - 1)))) < 1e-15)
+  // a white target capped at DIFFUSE_PEAK un-compresses to the offset peak ALBEDO_MAX + B (+ the 0.04 toe offset)
+  assert.ok(Math.abs(m3d.displayPaint([1, 1, 1], m3d.DIFFUSE_PEAK)[0] - 0.04 - (m3d.ALBEDO_MAX + m3d.DIFFUSE_B)) < 1e-9)
+  // b_satin: hue-tinted specular + the tinted reflection (DIFFUSE_B) taken off the albedo
+  const satin = body('b_satin')
+  assert.match(satin, /rad = display_paint\(c, col, DIFFUSE_PEAK\)/)
+  assert.match(satin, /tint = g\.vmath\("SCALE", rad, None, scale=g\.math\("DIVIDE", 1\.0, g\.math\("MAXIMUM", mx, 1e-4\)\)\)/)
+  assert.match(satin, /_albedo\(c, g\.vmath\("SUBTRACT", rad, g\.vmath\("SCALE", tint, None, scale=DIFFUSE_B\)\), 0\.0\)/)
+  assert.match(satin, /"Specular Tint": tint/)
+  assert.equal(m3d.ALBEDO_B.satin, m3d.DIFFUSE_B)
+  assert.equal(m3d.describeMaterial({ preset: 'satin', params: {} }, presets).specularTint, true)
+  const files = m3d.satinPaint([0.807, 0.279, 0]) // Files #e89000-like: the zero channel stays zero
+  assert.equal(files.albedo[2], 0)
+  assert.ok(Math.abs(Math.max(...files.specularTint) - 1) < 1e-12 && files.specularTint[2] === 0)
+  assert.equal(m3d.ALBEDO_B.glossy_plastic, bOf(body('b_glossy_plastic')))
+  assert.equal(m3d.ALBEDO_B.candy, bOf(body('b_candy')))
+  assert.equal(m3d.ALBEDO_B.gummy, bOf(body('_gummy')))
+  assert.equal(m3d.ALBEDO_B.matte_clay, bOf(body('b_matte_clay')))
+  assert.match(body('b_flat'), /paint_radiance\(c, col\)/)
+  // paint_radiance: translucent pieces use paint + 0.04 (peak ≤ 1) instead of the exact inverse
+  assert.match(body('paint_radiance'), /return _albedo\(c, col, -0\.04, 1\.0\)/)
+  assert.deepEqual(m3d.paintRadiance([0.5, 0.2, 0], true).map((v) => +v.toFixed(6)), [0.54, 0.24, 0.04])
+  assert.deepEqual(m3d.paintRadiance([0.5, 0.2, 0], false), m3d.displayPaint([0.5, 0.2, 0]))
+  assert.deepEqual(m3d.paintRadiance([0.5, 0.2, 0], false, false), [0.5, 0.2, 0])
+  for (const id of Object.keys(m3d.ALBEDO_B)) assert.equal(m3d.describeMaterial({ preset: id, params: {} }, presets).albedoB, m3d.ALBEDO_B[id])
+  assert.equal(m3d.describeMaterial({ preset: 'flat', params: {} }, presets).displayEmission, true)
+  // ENGINE_CAL calibrates Blender's rigs to the DIFFUSE_A · albedo + DIFFUSE_B response the paints are compensated for;
+  // the live rig is calibrated to the same target by LIVE_CAL (rig.ts), applied to every light and the environment.
+  assert.match(read('blender_worker/lighting.py'), /^ENGINE_CAL\s*=\s*\{"CYCLES":/m)
+  assert.ok(rig.LIVE_CAL > 0.9 && rig.LIVE_CAL < 1.3)
+  const studio = read('web/src/viewport/scene/StudioLighting.tsx')
+  assert.match(studio, /scene\.environmentIntensity = LIVE_CAL/)
+  assert.equal((studio.match(/DIFFUSE_CAL \* LIVE_CAL \* rig\./g) ?? []).length, 2) // key + fill
+})
+
+test('displayPaint is util.pbr_neutral_inverse: Khronos PBR Neutral shows the paint (peaks capped by saturation)', () => {
+  const disp = (c) => neutral(m3d.displayPaint(c))
+  // reference values from blender_worker/util.pbr_neutral_inverse (round 4)
+  const ref = [
+    [[1, 1, 1], [2.864, 2.864, 2.864]],
+    [[0.8, 0.8, 0.8], [0.848, 0.848, 0.848]],
+    [[0.215, 0.215, 0.215], [0.255, 0.255, 0.255]],
+    [[0.046, 0.046, 0.046], [0.086, 0.086, 0.086]],
+    [[0.807, 0.065, 0.019], [0.854061, 0.100245, 0.053512]],
+    [[0.024, 0.125, 0.708], [0.061968, 0.162968, 0.745968]],
+    [[0.964, 0.5, 0.0015], [0.937782, 0.481279, 0]],
+  ]
+  for (const [c, want] of ref) m3d.displayPaint(c).forEach((v, i) => assert.ok(Math.abs(v - want[i]) < 2e-6, `${c}: ${v} vs ${want[i]}`))
+  // below the caps the round trip is exact; white is shown at the neutral cap (≈ 252/255)
+  for (const c of [[0.5, 0.5, 0.5], [0.215, 0.215, 0.215], [0.6, 0.2, 0.05], [0.05, 0.3, 0.7]]) {
+    disp(c).forEach((v, i) => assert.ok(Math.abs(v - c[i]) < 1e-6, `${c} → ${disp(c)}`))
+  }
+  disp([1, 1, 1]).forEach((v) => assert.ok(Math.abs(v - m3d.NEUTRAL_CAP[0]) < 1e-6))
+  // display_paint's max_peak (diffuse presets: DIFFUSE_PEAK) caps the target below the saturation cap
+  const w = m3d.displayPaint([1, 1, 1], m3d.DIFFUSE_PEAK)
+  assert.ok(Math.abs(neutral(w)[0] - m3d.DIFFUSE_PEAK) < 1e-6)
+  assert.ok(Math.abs(Math.max(...m3d.diffusePaint([1, 1, 1])) - m3d.ALBEDO_MAX) < 1e-6) // white plate: albedo 1.3
+  // diffuse presets: the albedo the rig (DIFFUSE_A · albedo + B) lights to the radiance, hue kept at ALBEDO_MAX
+  assert.deepEqual(m3d.diffuseAlbedo([0.5, 0.25, 0.017], 0.017).map((v) => +v.toFixed(6)), [0.483, 0.233, 0])
+  const capped = m3d.diffuseAlbedo([2.48, 1.24, 0.62], 0.017)
+  assert.ok(Math.abs(Math.max(...capped) - m3d.ALBEDO_MAX) < 1e-9 && Math.abs(capped[0] / capped[1] - 2.463 / 1.223) < 1e-3)
+})
+
+test('Liquid Glass round-4 model mirrors the worker (clear share, body radiance, edge thinning, clear tint)', () => {
+  const src = read('blender_worker/materials.py')
+  const lg = /def b_liquid_glass[\s\S]*?return cyc, ev, None/.exec(src)[0]
+  assert.match(lg, /t_cap = min\(0\.6, LG_CAP_CLEAR \* \(max\(0\.0, transl\) \/ 0\.75\) \*\* 4\)/)
+  assert.equal(m3d.LG_CAP_CLEAR, pyConst(src, 'LG_CAP_CLEAR'))
+  assert.match(lg, /g\.map_range\(white, 0\.0, 1\.0, t_cap, 0\.35 \* t_cap\)/)
+  assert.match(lg, /g\.map_range\(v01, 0\.0, 1\.0, 0\.94, 1\.0\)/)
+  assert.match(lg, /g\.map_range\(e, 0\.0, 0\.45, LG_EDGE_BODY, 1\.0, interp="SMOOTHSTEP"\)/)
+  assert.equal(m3d.LG_EDGE_BODY, pyConst(src, 'LG_EDGE_BODY'))
+  // rim × lightness: dark paints keep only a faint sheen
+  const rimL = /_rim_lg\(c, 5\.0 \* rim_amt, mode\),\s*g\.map_range\(lum, ([0-9.]+), ([0-9.]+), ([0-9.]+), ([0-9.]+), interp="SMOOTHSTEP"\)\)/.exec(lg)
+  assert.ok(rimL, 'rim lightness map_range not found')
+  assert.deepEqual([...m3d.LG_RIM_LIGHTNESS.from, ...m3d.LG_RIM_LIGHTNESS.to], rimL.slice(1, 5).map(Number))
+  // translucent pieces: the clear share is partly untinted (their alpha already shows what lies beneath)
+  assert.match(lg, /if c\.spec\.get\("alpha"\):[\s\S]*?t2 = g\.mix_rgb\(TRANSLUCENT_CLEAR, t2, WHITE\)/)
+  assert.equal(m3d.TRANSLUCENT_CLEAR, pyConst(src, 'TRANSLUCENT_CLEAR'))
+  // clear glass: white paints become frosted "ice" (worker _glass_common white_milk = CLEAR_WHITE_MILK)
+  assert.match(src, /def b_clear_glass[\s\S]*?white_milk=CLEAR_WHITE_MILK\)/)
+  assert.match(src, /elif white_milk > 0:[\s\S]*?wm = g\.math\("MULTIPLY", g\.math\("POWER", _whiteness\(c, col\), 1\.5\), white_milk\)\s*\n\s*milk = g\.math\("MAXIMUM", milk, g\.math\("MULTIPLY", wm, g\.map_range\(fall, 0\.45, 1\.0, 0\.8, 1\.0\)\)\)/)
+  assert.equal(m3d.CLEAR_WHITE_MILK, pyConst(src, 'CLEAR_WHITE_MILK'))
+  const cg = m3d.describeMaterial({ preset: 'clear_glass', params: {} }, presets)
+  assert.equal(cg.whiteMilk, m3d.CLEAR_WHITE_MILK)
+  const mcg = new m3d.IconMaterial()
+  m3d.applyIconMaterial(mcg, cg, ctx())
+  assert.ok('BIS_WHITE_MILK' in mcg.defines)
+  assert.equal(mcg.bis.bisWhiteMilk.value, m3d.CLEAR_WHITE_MILK)
+  const cfs = compile(mcg)
+  assert.deepEqual(cfs.warnings, [])
+  assert.match(cfs.shader.fragmentShader, /m = max\( m, pow\( bisWhiteness\( paint \), 1\.5 \) \* bisWhiteMilk \* mix\( 0\.8, 1\.0, h \) \);/)
+  assert.equal(m3d.describeMaterial({ preset: 'frosted_glass', params: {} }, presets).whiteMilk, 0)
+  assert.match(lg, /g\.map_range\(e, 0\.0, 0\.6, 0\.9, 0\.5\)/) // clear tint gamma per interface ↔ LG_DEEP
+  assert.deepEqual(m3d.LG_DEEP, [0.9, 0.5])
+  assert.match(lg, /mix_shader\(0\.85, pc\.outputs\[0\], fill_em\.outputs\[0\]\)/) // diffuse share 0.15
+  assert.equal(m3d.LG_FILL_DIFFUSE, 0.15)
+  assert.match(lg, /0\.95 \* lit \* face, 1\.04 \* lit \* face/)
+  assert.match(lg, /c\.prm\("tint", 1\.0\)/)
+  assert.match(lg, /rad = paint_radiance\(c, base_m\)/)
+  assert.equal(presets.materials.liquid_glass.params.tint.default, 1)
+  // defaults: LG_CAP_CLEAR clear share at translucency 0.75 (a third of it for white glyphs)
+  const s = m3d.describeMaterial({ preset: 'liquid_glass', params: {} }, presets)
+  const cap = m3d.LG_CAP_CLEAR
+  assert.ok(Math.abs(s.lg.fill[0] - (1 - cap)) < 1e-9 && Math.abs(s.lg.fill[1] - (1 - 0.35 * cap)) < 1e-9)
+  assert.equal(s.paintMix, 1) // tint 1 = the exact paint
+  assert.ok(Math.abs(m3d.liquidGlassClearShare(1) - Math.min(0.6, cap / 0.75 ** 4)) < 1e-12)
+  assert.equal(m3d.liquidGlassClearShare(2), 0.6)
+  // shader: the body emits the displayed paint minus the coat reflection; the clear share is t2^(2γ)
+  const m = new m3d.IconMaterial()
+  m3d.applyIconMaterial(m, s, ctx({ displayPaint: true }))
+  assert.ok('BIS_DISPLAY_PAINT' in m.defines)
+  const { shader, warnings } = compile(m)
+  assert.deepEqual(warnings, [])
+  const fs = shader.fragmentShader
+  assert.match(fs, /bisRad = bisPaintRadiance\( bisPm \);/)
+  assert.match(fs, /max\( bisRad - 0\.01, vec3\( 0\.0 \) \) \* bisFill \* 0\.8500 \* mix\( 0\.95, 1\.04, bisV01 \)/)
+  assert.match(fs, /vec3 bisT2 = min\( bisRad \/ 1\.3, vec3\( 1\.0 \) \);/)
+  assert.ok(fs.includes(`mix( ${m3d.LG_EDGE_BODY}, 1.0, smoothstep( 0.0, 0.45, bisE ) )`))
+  assert.ok(fs.includes(`float bisRimL = mix( ${m3d.LG_RIM_LIGHTNESS.to[0]}, 1.0, smoothstep( ${m3d.LG_RIM_LIGHTNESS.from[0]}, ${m3d.LG_RIM_LIGHTNESS.from[1]}, bisLum ) );`))
+  assert.ok(fs.includes(`bisT2 = mix( bisT2, vec3( 1.0 ), ${m3d.TRANSLUCENT_CLEAR} );`))
+  assert.ok(!/bisT2 = mix\( bisT2/.test(fs.replace(/#ifdef BIS_SRGB_ALPHA[\s\S]*?#endif/, '')), 'alpha untint must be gated')
+  const ma = new m3d.IconMaterial() // a translucent Liquid Glass piece compiles with the untinted clear share
+  m3d.applyIconMaterial(ma, s, ctx({ displayPaint: true, opacity: 0.6 }))
+  assert.ok('BIS_SRGB_ALPHA' in ma.defines)
+  assert.deepEqual(compile(ma).warnings, [])
+  m3d.applyIconMaterial(m, s, ctx({ displayPaint: false }))
+  assert.ok(!('BIS_DISPLAY_PAINT' in m.defines)) // other colour modes: identity (worker cm != 'neutral')
+})
+
+test('diffuse presets take the albedo of the displayed paint; flat emits it', () => {
+  const m = new m3d.IconMaterial()
+  m3d.applyIconMaterial(m, m3d.describeMaterial({ preset: 'satin', params: {} }, presets), ctx({ displayPaint: true }))
+  assert.ok('BIS_ALBEDO' in m.defines && 'BIS_DISPLAY_PAINT' in m.defines && 'BIS_SPEC_TINT' in m.defines)
+  assert.equal(m.bis.bisAlbedoB.value, m3d.DIFFUSE_B)
+  const sfs = compile(m).shader.fragmentShader
+  assert.match(sfs, /diffuseColor\.rgb \*= bisAlbedo\( bisSRad - bisSpecTint \* bisAlbedoB, 0\.0 \);/)
+  assert.match(sfs, /material\.specularColor \*= bisSpecTint;/)
+  const gp = new m3d.IconMaterial()
+  m3d.applyIconMaterial(gp, m3d.describeMaterial({ preset: 'glossy_plastic', params: {} }, presets), ctx({ displayPaint: true }))
+  assert.ok(!('BIS_SPEC_TINT' in gp.defines))
+  assert.match(compile(gp).shader.fragmentShader, /diffuseColor\.rgb \*= bisAlbedo\( bisDisplayPaint\( bisPm, 0\.9277\d* \), bisAlbedoB \);/)
+  const f = new m3d.IconMaterial()
+  m3d.applyIconMaterial(f, m3d.describeMaterial({ preset: 'flat', params: {} }, presets), ctx({ displayPaint: true }))
+  assert.ok('BIS_DISPLAY_EMISSION' in f.defines)
+  assert.deepEqual(compile(f).warnings, [])
+  const c = new m3d.IconMaterial()
+  m3d.applyIconMaterial(c, m3d.describeMaterial({ preset: 'chrome', params: {} }, presets), ctx({ displayPaint: true }))
+  assert.ok(!('BIS_ALBEDO' in c.defines)) // metals keep their paint as-is (worker b_chrome)
 })
 
 // ------------------------------------------------------------------------------------------------ appearances
@@ -198,7 +373,7 @@ test('Liquid Glass: smoked glass for dark paints, edge darkening, transmission t
   const m = new m3d.IconMaterial()
   m3d.applyIconMaterial(m, m3d.describeMaterial({ preset: 'liquid_glass', params: {} }, presets), ctx())
   const fs = compile(m).shader.fragmentShader
-  assert.match(fs, /bisRimL = mix\( 0\.1, 1\.0, smoothstep\( 0\.05, 0\.7, bisLum \) \)/) // subdued rim
+  assert.match(fs, /bisRimL = mix\( 0\.06, 1\.0, smoothstep\( 0\.1, 0\.8, bisLum \) \)/) // subdued rim (worker 11:31)
   assert.match(fs, /mix\( 0\.35, 1\.0, clamp\( bisLum \/ 0\.5, 0\.0, 1\.0 \) \)/) // subdued coat / specular
   assert.match(fs, /mix\( bisPm, vec3\( 1\.0 \), 0\.3 \* bisLum \)/) // glow carries no white for dark paints
   assert.match(fs, /mix\( 1\.0 - bisLgEdgeDark, 1\.0, smoothstep\( 0\.0, 0\.6, bisE \) \)/)

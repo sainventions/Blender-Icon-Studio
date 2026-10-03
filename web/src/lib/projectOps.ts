@@ -153,6 +153,41 @@ export function effectivePlateFill(p: Project, appearance: AppearanceId): Fill {
   return (bucket && p.appearances[bucket]?.plateFill) || p.canvas.plate.fill
 }
 
+/**
+ * Element tally for the UI: `layered` = SVG elements that belong to a layer (what the layer rows' "N el" add up to);
+ * `plate` = elements in no layer that are the detected source plate (and its outline) — they became `canvas.plate`
+ * (D9 maps the source plate exactly onto −1..1, so their canvas bbox spans the plate), shown under "Canvas & plate";
+ * `unused` = any other element in no layer (e.g. left behind by deleted layers) — never counted as the plate.
+ */
+export function elementCounts(
+  p: Pick<Project, 'elements' | 'layers'> & { canvas?: Pick<Project['canvas'], 'art'>; source?: Pick<Project['source'], 'plateDetected'> },
+): { layered: number; plate: number; unused: number } {
+  const known = new Set(p.elements.map((e) => e.id))
+  const inLayers = new Set<string>()
+  for (const l of p.layers) for (const id of l.elementIds) if (known.has(id)) inLayers.add(id)
+  let plate = 0
+  let unused = 0
+  const seen = new Set<string>()
+  for (const e of p.elements) {
+    if (inLayers.has(e.id) || seen.has(e.id)) continue
+    seen.add(e.id)
+    if (p.source?.plateDetected && spansPlate(e, p.canvas?.art)) plate++
+    else unused++
+  }
+  return { layered: inLayers.size, plate, unused }
+}
+
+/** The element's bbox, mapped to canvas space (canvas = art · scale + offset), covers the plate (−1..1, ±10 %). */
+function spansPlate(e: Pick<SvgElement, 'bbox'>, art: Pick<Project['canvas'], 'art'>['art'] | undefined): boolean {
+  const k = art?.scale ?? 1
+  const [x0, y0, x1, y1] = e.bbox
+  const ox = art?.x ?? 0
+  const oy = art?.y ?? 0
+  const lo = -0.9
+  const hi = 0.9
+  return x0 * k + ox <= lo && y0 * k + oy <= lo && x1 * k + ox >= hi && y1 * k + oy >= hi
+}
+
 /** All overrides of a layer field across buckets (for nested override rows). */
 export function overridesOf(p: Project, layerId: string, field: OverrideField): { bucket: OverrideBucket; value: unknown }[] {
   const out: { bucket: OverrideBucket; value: unknown }[] = []

@@ -27,9 +27,11 @@ interface Props {
   rimDir: THREE.Vector3
   /** Liquid Glass self-illumination (worker `lit`). */
   lit: number
+  /** Colour mode 'neutral': paints pre-compensated for Khronos PBR Neutral (worker display_paint). */
+  displayPaint: boolean
 }
 
-export const Plate = memo(function Plate({ canvas, presets, paint, behind, rimDir, lit }: Props) {
+export const Plate = memo(function Plate({ canvas, presets, paint, behind, rimDir, lit, displayPaint }: Props) {
   const invalidate = useThree((s) => s.invalidate)
   const params = plateParams(canvas.shape, canvas.cornerRadius, canvas.plate)
   const key = plateGeometryKey(params)
@@ -62,6 +64,7 @@ export const Plate = memo(function Plate({ canvas, presets, paint, behind, rimDi
       rimDir,
       opacity: paint.opacity,
       lit,
+      displayPaint,
     })
     // A semi-transparent plate fill must stay in the opaque pass, or glass layers would neither show nor refract it.
     material.blending = THREE.NormalBlending // undo an earlier routing (fill opacity back to 1)
@@ -72,7 +75,7 @@ export const Plate = memo(function Plate({ canvas, presets, paint, behind, rimDi
     }
     if (meshRef.current) meshRef.current.renderOrder = routed ? BLENDED_RENDER_ORDER.plate : 0
     invalidate()
-  }, [material, spec, paint, fake, rimDir, lit, canvas.plate.thickness, invalidate])
+  }, [material, spec, paint, fake, rimDir, lit, displayPaint, canvas.plate.thickness, invalidate])
 
   if (!canvas.plate.visible || canvas.shape === 'none' || paint.none || !geometry) return null
   return (

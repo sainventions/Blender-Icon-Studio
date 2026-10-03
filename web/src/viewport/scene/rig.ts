@@ -25,6 +25,14 @@ export interface Rig {
  */
 export const DIFFUSE_CAL = 0.85
 export const WORLD_CAL = 0.65
+/**
+ * Live-view counterpart of the worker's lighting.ENGINE_CAL (round 4). The worker scales every light and the world per
+ * render engine so a face-on diffuse surface reads DIFFUSE_A · albedo + DIFFUSE_B (materials3d) in Cycles and EEVEE
+ * alike; materials3d pre-compensates paints against exactly that response (displayPaint + diffuseAlbedo). LIVE_CAL
+ * scales every live light and the environment so the three.js rig meets the same target. Measured (headless Edge,
+ * WebGL, satin plates #3d3d3d … #d5d5d5, fit radiance = A · albedo + B): A 0.883 / B 0.015 at 0.96 → 1.0 / 0.017.
+ */
+export const LIVE_CAL = 1.088
 
 /** Linear-light colours used by the worker for warm keys and cool fills. */
 export const WARM = new THREE.Color(1.0, 0.82, 0.64)

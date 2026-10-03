@@ -3,6 +3,7 @@ import { Box, Download, History, Image as ImageIcon, Paintbrush, Play, RotateCcw
 import type { Project, Quality } from '../../../types'
 import { errorMessage, systemApi } from '../../../api'
 import { cn, formatSeconds, relativeTime } from '../../../lib/format'
+import { appearanceLabel, engineLabel } from '../../../lib/labels'
 import { useAppStore } from '../../../store/app'
 import { useEditor } from '../../../store/editor'
 import { useRender } from '../../../store/render'
@@ -162,6 +163,7 @@ export function RenderInspector() {
 }
 
 function RenderHistory() {
+  const presets = useAppStore((s) => s.presets.data)
   const entries = useRender((s) => s.entries)
   const pinned = useRender((s) => s.pinned)
   const pin = useRender((s) => s.pin)
@@ -194,10 +196,10 @@ function RenderHistory() {
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1 text-2xs">
               <span className="font-semibold capitalize text-fg-2">{e.quality}</span>
-              <span className="text-fg-4">· {e.appearance}</span>
+              <span className="text-fg-4">· {appearanceLabel(e.appearance, presets)}</span>
             </div>
             <div className="text-3xs tabular text-fg-4">
-              {e.engine ?? '—'} · {e.width ?? '?'}px · {formatSeconds(e.seconds)} · {relativeTime(new Date(e.finishedAt ?? e.createdAt).toISOString())}
+              {engineLabel(e.engine, e.quality)} · {e.width ?? '?'}px · {formatSeconds(e.seconds)} · {relativeTime(new Date(e.finishedAt ?? e.createdAt).toISOString())}
             </div>
           </div>
           <a

@@ -2,9 +2,9 @@
 silhouettes, safe bevel radius, corner-preserving polyline smoothing, layer SVGs + textures, and
 the hash-cached :class:`GeometryBundle`.
 
-Exported splines are fills: always closed, clipped to the (inset) plate outline when there is a
-plate, and cleaned by :mod:`.hygiene` (no micro debris, spikes, self-intersections or slivers;
->= 3 points each)."""
+Exported splines are fills: always closed, clipped to the plate outline when there is a plate
+(art flush with the plate edge snapped onto it), and cleaned by :mod:`.hygiene` (no micro debris,
+spikes, self-intersections or slivers; >= 3 points each)."""
 from __future__ import annotations
 
 import json
@@ -26,8 +26,8 @@ from shapely import affinity
 from bis.models import GeometryBundle, Layer, LayerGeometry, Project, Region, Spline, SplinePoint
 from .common import PIPELINE_VERSION, atomic_write_bytes, atomic_write_text, sha1
 from .elements import ElementStore, Elem, model_paint
-from .paths import bounds, is_empty, op, shapely_from_path, union_all
-from .plate import PLATE_CLIP_INSET, plate_clip_path
+from .paths import bounds, is_empty, op, shapely_from_path, split_contours, union_all
+from .plate import PLATE_CLIP_INSET, PLATE_SNAP, plate_clip_path, plate_snap_band
 from . import hygiene, raster, textures
 
 # ----------------------------------------------------------------------------------------------
@@ -408,13 +408,77 @@ def _region_levels(regions: List[Tuple[Elem, pathops.Path]], eps_area: float) ->
     return levels
 
 
-def clip_to_plate(paths: List[pathops.Path], clip: Optional[pathops.Path]) -> List[pathops.Path]:
-    """Intersect every path with the (inset) plate outline: art reaching over the plate edge would
-    hang off the plate - and past its bevel - once extruded. Paths entirely outside become empty.
+def snap_to_rim(paths: List[pathops.Path], band: Optional[pathops.Path], snap: float) -> List[pathops.Path]:
+    """Grow every path that reaches into the plate's rim `band` by up to `snap` (SVG units), only
+    inside the band and only into the empty gap, so an art edge lying just inside the plate outline
+    (a frame drawn on the source plate's own outline, which the fitted parametric shape matches to
+    ~0.01) ends exactly ON the outline after clipping instead of leaving a hairline of plate visible
+    around it. Gap that lies within `snap` of two paths of the list (where they meet at the rim)
+    is left to neither: claiming it would leave one of them a thin flag along the other's edge -
+    finer than the spline hygiene's resolution (a pinched contour)."""
+    if band is None or is_empty(band) or snap <= 0:
+        return paths
+    near = [k for k, p in enumerate(paths)
+            if not is_empty(p) and not is_empty(op(p, band, pathops.PathOp.INTERSECTION))]
+    if not near:
+        return paths
+    art = union_all(paths) if len(paths) > 1 else pathops.Path(paths[0])
+    reach = {}                                      # band area within `snap` of each near path
+    for k in near:
+        grown = pathops.Path(paths[k])
+        try:
+            grown.stroke(2.0 * snap, pathops.LineCap.ROUND_CAP, pathops.LineJoin.ROUND_JOIN, 4.0)
+            grown.convertConicsToQuads(snap * 1e-3)
+        except pathops.PathOpsError:
+            continue
+        r = op(op(grown, band, pathops.PathOp.INTERSECTION), art, pathops.PathOp.DIFFERENCE)
+        if not is_empty(r):
+            reach[k] = r
+    out = list(paths)
+    for k, r in reach.items():
+        bb = bounds(r)
+        rivals = [q for j, q in reach.items() if j != k and _bbox_overlap(bb, bounds(q))]
+        grow = op(r, union_all(rivals), pathops.PathOp.DIFFERENCE) if rivals else r
+        grow = _drop_hairlines(grow, SNAP_MIN_WIDTH * snap)
+        if not is_empty(grow):
+            out[k] = op(paths[k], grow, pathops.PathOp.UNION)
+    return out
+
+
+SNAP_MIN_WIDTH = 0.05   # growth pieces thinner than this share of the snap distance are dropped
+
+
+def _drop_hairlines(p: pathops.Path, min_width: float) -> pathops.Path:
+    """`p` without the contours whose mean width (2 area / perimeter) is below `min_width`: where
+    art lies (numerically) ON the plate outline the growth is a zero-width sliver that would pinch
+    the region's contour."""
+    if is_empty(p):
+        return p
+    out = pathops.Path()
+    for c in split_contours(p):
+        g = shapely_from_path(c, min_width)
+        if not g.is_empty and g.length > 0 and 2.0 * g.area / g.length >= min_width:
+            out.addPath(c)
+    if is_empty(out):
+        return out
+    try:
+        out.simplify(fix_winding=True)
+    except pathops.PathOpsError:
+        pass
+    return out
+
+
+def clip_to_plate(paths: List[pathops.Path], clip: Optional[pathops.Path],
+                  band: Optional[pathops.Path] = None, snap: float = 0.0) -> List[pathops.Path]:
+    """Intersect every path with the plate outline: art reaching over the plate edge would hang off
+    the plate - and past its bevel - once extruded. With a rim `band`, art flush with the edge is
+    first snapped onto the outline (:func:`snap_to_rim`). Paths entirely outside become empty.
     No clip (no plate) or clipping that would empty EVERY path (art not on the plate at all, e.g.
     after a user rescale): the paths are returned unchanged."""
     if clip is None or is_empty(clip):
         return paths
+    orig = paths
+    paths = snap_to_rim(paths, band, snap)
     out = []
     for p in paths:
         cb = bounds(clip)
@@ -428,15 +492,60 @@ def clip_to_plate(paths: List[pathops.Path], clip: Optional[pathops.Path]) -> Li
             q = p   # untouched: keep the original contour structure
         out.append(q)
     if all(is_empty(q) for q in out):
-        return paths
+        return orig
     return out
+
+
+def plate_clip(store: ElementStore) -> Tuple[Optional[pathops.Path], Optional[pathops.Path], float]:
+    """(clip outline, snap band, snap distance in SVG units) for :func:`clip_to_plate`."""
+    return plate_clip_path(store), plate_snap_band(store), PLATE_SNAP / (store.art.k or 1.0)
 
 
 def layer_regions(store: ElementStore, members: Sequence[Elem]) -> List[Tuple[Elem, pathops.Path]]:
     """Occlusion-cut regions clipped to the plate (empty pieces dropped)."""
     regions = occlusion_regions(members)
-    clipped = clip_to_plate([p for _m, p in regions], plate_clip_path(store))
+    clipped = clip_to_plate([p for _m, p in regions], *plate_clip(store))
     return [(m, p) for (m, _p), p in zip(regions, clipped) if not is_empty(p)]
+
+
+FUSE_GAP = 1e-4   # art units: pieces closer than 2x this are fused in the silhouette (rounding gaps)
+
+
+def silhouette_path(store: ElementStore, members: Sequence[Elem]) -> pathops.Path:
+    """Union of the members, with the hairline gaps between pieces that only numerically butt
+    against each other (Illustrator's 3-decimal coordinates leave 0.001-unit slits between Drive's
+    sections) bridged: a 'combined' body built from this silhouette must be ONE body, not two
+    bodies with a seam between them."""
+    u = union_all([m.path for m in members])
+    if len(members) < 2:
+        return u
+    r = FUSE_GAP / (store.art.k or 1.0)
+    idx = store.index
+    pos = [idx[m.id] for m in members]
+    bridges = []
+    dil = {}
+
+    def dilated(m):
+        if m.id not in dil:
+            d = pathops.Path(m.path)
+            try:
+                d.stroke(2.0 * r, pathops.LineCap.ROUND_CAP, pathops.LineJoin.ROUND_JOIN, 4.0)
+                d.convertConicsToQuads(r * 1e-2)
+                dil[m.id] = op(d, m.path, pathops.PathOp.UNION)
+            except pathops.PathOpsError:
+                dil[m.id] = None
+        return dil[m.id]
+
+    for a in range(len(members)):
+        for b in range(a + 1, len(members)):
+            g = store.gaps[pos[a], pos[b]] if store.gaps.shape[0] > max(pos[a], pos[b]) else np.inf
+            if 0.0 < g <= 2.0 * r:
+                da, db = dilated(members[a]), dilated(members[b])
+                if da is not None and db is not None:
+                    bridges.append(op(da, db, pathops.PathOp.INTERSECTION))
+    if not bridges:
+        return u
+    return union_all([u] + bridges)
 
 
 def layer_safe_radius(store: ElementStore, element_ids: Sequence[str], mode: str = "individual") -> float:
@@ -446,7 +555,7 @@ def layer_safe_radius(store: ElementStore, element_ids: Sequence[str], mode: str
     art = store.art
     tol = store.tolerance
     if mode == "combined":
-        paths = clip_to_plate([union_all([m.path for m in members])], plate_clip_path(store))
+        paths = clip_to_plate([silhouette_path(store, members)], *plate_clip(store))
     else:
         paths = [p for _m, p in layer_regions(store, members)]
     return safe_radius([_art_scale_geom(shapely_from_path(p, tol), art.k) for p in paths])
@@ -463,12 +572,12 @@ def layer_hash(store: ElementStore, layer: Layer, texture_size: int) -> str:
     members = members_of(store, layer.elementIds)
     grads = sorted({m.paint.get("id") for m in members if m.paint.get("id")})
     plate = store.plate or {}
-    clip = [plate.get(k) for k in ("bbox", "shape", "cornerRadius")] + [PLATE_CLIP_INSET] if plate else None
+    clip = [plate.get(k) for k in ("bbox", "shape", "cornerRadius")] + [PLATE_CLIP_INSET, PLATE_SNAP] if plate else None
     return sha1(PIPELINE_VERSION, list(store.view_box), [m.content_hash for m in members],
                 [store.gradients.get(g, "") for g in grads], layer.mode, SMOOTH_POLYLINES,
                 SMOOTH_MIN_SEGMENTS, SMOOTH_STRAIGHT_FRAC, SMOOTH_CORNER_DEG, SMOOTH_MAX_BULGE, SAFE_RADIUS_AREA_TOL,
                 SMOOTH_TRACED_MIN_SEGMENTS, SMOOTH_TRACED_CORNER_DEG,
-                hygiene.MICRO, hygiene.MIN_AREA, clip, texture_size)[:20]
+                hygiene.MICRO, hygiene.MIN_AREA, clip, FUSE_GAP, SNAP_MIN_WIDTH, texture_size)[:20]
 
 
 def _build_layer_entry(store: ElementStore, layer: Layer, h: str, cache: Path, project_dir: Path,
@@ -477,7 +586,7 @@ def _build_layer_entry(store: ElementStore, layer: Layer, h: str, cache: Path, p
     art = store.art
     M = art.matrix
     members = members_of(store, layer.elementIds)
-    clip = plate_clip_path(store)
+    clip = plate_clip(store)
     regions = layer_regions(store, members)
     eps_area = art.area * 1e-6
     levels = _region_levels(regions, eps_area)
@@ -490,7 +599,7 @@ def _build_layer_entry(store: ElementStore, layer: Layer, h: str, cache: Path, p
         region_out.append({"elementId": m.id, "paint": model_paint(m.paint, art).model_dump(),
                            "opacity": round(m.total_opacity, 6), "zSub": round(lvl * REGION_Z_STEP, 6),
                            "splines": spl})
-    sil = clip_to_plate([union_all([m.path for m in members])], clip)[0]
+    sil = clip_to_plate([silhouette_path(store, members)], *clip)[0]
     sil.convertConicsToQuads(0.001)
     sil_spl = path_to_splines(sil, M, traced=bool(members) and all(m.image for m in members))
     annotate_holes(sil_spl)

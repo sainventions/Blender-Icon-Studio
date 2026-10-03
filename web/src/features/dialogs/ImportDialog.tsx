@@ -11,6 +11,7 @@ import { useAppStore } from '../../store/app'
 import { toast } from '../../store/toasts'
 import { useUi } from '../../store/ui'
 import { Badge, Button, Dialog } from '../../components/ui'
+import { SourcePlateBadge } from '../../components/SourcePlateBadge'
 import { isSvgFile } from '../home/useFileDrop'
 
 export function ImportDialog() {
@@ -235,7 +236,7 @@ export function ImportDialog() {
             <div className="animate-fade-in">
               <div className="mb-2 flex items-center gap-2">
                 <span className="text-3xs font-semibold uppercase tracking-[0.09em] text-fg-4">Layers (top → bottom)</span>
-                {project.source.plateDetected && <Badge tone="ok">Plate detected</Badge>}
+                {(project.source.plateDetected || project.source.fullBleed) && <SourcePlateBadge source={project.source} />}
                 {project.layers.length > 4 && <Badge tone="warn" tip="Apple Icon Composer allows at most 4 groups">{project.layers.length} &gt; 4 groups</Badge>}
               </div>
               <div className="max-h-[220px] space-y-1 overflow-y-auto pr-1">

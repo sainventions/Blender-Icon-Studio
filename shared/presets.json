@@ -18,8 +18,8 @@
           "min": 0,
           "max": 1,
           "step": 0.01,
-          "default": 0.5,
-          "help": "How strongly the layer colour tints the glass."
+          "default": 1.0,
+          "help": "How strongly the layer colour tints the glass (1 = the exact SVG colour)."
         },
         "frost": {
           "label": "Frost / Blur",
@@ -1004,11 +1004,11 @@
           "preset": "darkfield",
           "angle": -45,
           "elevation": 50,
-          "intensity": 1,
-          "rim": 1,
-          "fill": 1,
-          "environment": 1,
-          "shadowSoftness": 0.5
+          "intensity": 1.8,
+          "rim": 0.7,
+          "fill": 3,
+          "environment": 3,
+          "shadowSoftness": 0.45
         },
         "zGap": 0.15
       }

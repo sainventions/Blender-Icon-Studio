@@ -239,12 +239,8 @@
   }
 }
 
-@utility stage-backdrop {
-  background-color: #0b0b0f;
-  background-image: radial-gradient(ellipse 80% 70% at 50% 42%, rgb(143 125 255 / 0.07), transparent 70%),
-    radial-gradient(circle at 50% 50%, rgb(255 255 255 / 0.035) 1px, transparent 1.2px);
-  background-size: 100% 100%, 22px 22px;
-}
+/* The editor stage background lives in src/lib/stageBackdrop.ts (stageBackgroundStyle): the live viewport repaints
+   the same pixels in its backdrop shader, so it must not be defined twice. */
 
 /* ------------------------------------------------------------------------------------------------ components */
 @layer components {

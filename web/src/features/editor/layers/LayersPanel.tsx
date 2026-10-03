@@ -35,7 +35,7 @@ import type { GeometryBundle, Layer, Presets, Project, SvgElement } from '../../
 import { useEvent } from '../../../lib/hooks'
 import { projectsApi } from '../../../api'
 import { cn, hashString } from '../../../lib/format'
-import { effectivePlateFill } from '../../../lib/projectOps'
+import { effectivePlateFill, elementCounts } from '../../../lib/projectOps'
 import { fillToCss } from '../../../lib/color'
 import { MATERIAL_CSS, STRATEGIES } from '../../../lib/meta'
 import { useAppStore } from '../../../store/app'
@@ -542,6 +542,8 @@ function CanvasRow({ project }: { project: Project }) {
   const tab = useUi((s) => s.inspectorTab)
   const active = tab === 'document' && selection.layerIds.length === 0
   const plateFill = effectivePlateFill(project, project.appearance)
+  const plateEls = elementCounts(project).plate
+  const fullBleed = !!project.source.fullBleed
   return (
     <div className="mx-1 mt-1 border-t border-line pt-1">
       <div
@@ -569,6 +571,22 @@ function CanvasRow({ project }: { project: Project }) {
             <span className="capitalize">{project.canvas.shape}</span>
             <span>·</span>
             <span className="uppercase">{project.canvas.platform}</span>
+            {plateEls > 0 && (
+              <>
+                <span>·</span>
+                <span className="shrink-0" data-tip={`${plateEls} SVG element${plateEls === 1 ? '' : 's'} of the source plate (now the parametric plate)`}>
+                  {plateEls} el
+                </span>
+              </>
+            )}
+            {fullBleed && !plateEls && (
+              <>
+                <span>·</span>
+                <span className="shrink-0" data-tip="Full-bleed: the artwork itself is the icon shape (no separate plate in the source)">
+                  full-bleed
+                </span>
+              </>
+            )}
           </div>
         </div>
         <SquareDashedMousePointer className="h-3.5 w-3.5 text-fg-4" />

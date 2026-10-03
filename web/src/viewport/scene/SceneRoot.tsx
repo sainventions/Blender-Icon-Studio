@@ -6,8 +6,9 @@ import type { AppearanceId, Fill, GeometryBundle, LayerTransform, Presets, Proje
 import { appearanceWallpaper, isDarkAppearance } from '../../lib/appearance'
 import { plateOutline } from '../../lib/shapes'
 import { liquidGlassLit, type FakeGlassBinding } from '../../lib/materials3d'
-import { Backdrop, useBackdropBinding, useWallpaperBehind, type BackdropSpec } from './Backdrop'
+import { Backdrop, useBackdropBinding, useWallpaperBehind, type BackdropSpec, type StageElementGetter } from './Backdrop'
 import { CameraRig } from './CameraRig'
+import { displayTransformFor } from './displayTransform'
 import { Effects } from './Effects'
 import { GridOverlay } from './GridOverlay'
 import { LayerBody, buildStack, iconLumRange, stackFramePoints, stackTop, type PlateFrame } from './LayerStack'
@@ -29,6 +30,8 @@ export interface SceneRootProps {
   explode: number
   view: 'front' | 'orbit'
   showGrid: boolean
+  /** Element whose CSS background the transparent (checker) backdrop continues — see Backdrop.tsx. */
+  stage?: StageElementGetter
 }
 
 function ExplodeDriver({ target }: { target: number }) {
@@ -83,7 +86,10 @@ export function SceneRoot(p: SceneRootProps) {
 
   // Backdrop + plate paint (shared: the plate fill is what lower "fake glass" layers show through themselves).
   const bspec = backdropSpec(project, p.appearance)
-  const backdrop = useBackdropBinding(bspec)
+  const display = useMemo(() => displayTransformFor(project.render.colorMode), [project.render.colorMode])
+  // Worker display_paint: in the 'neutral' colour mode paints are pre-compensated for Khronos PBR Neutral.
+  const displayPaint = (project.render.colorMode ?? 'neutral') === 'neutral'
+  const backdrop = useBackdropBinding(bspec, display)
   const rawPlateFill = canvas.plate.fill
   const plateFill = useMemo<Fill>(
     () => (rawPlateFill.type === 'auto' ? { type: 'solid', color: '#ffffff', opacity: 1 } : rawPlateFill),
@@ -139,7 +145,7 @@ export function SceneRoot(p: SceneRootProps) {
   return (
     <>
       <ExplodeDriver target={p.explode} />
-      <Backdrop binding={backdrop} zoom={project.camera.zoom || 1} />
+      <Backdrop binding={backdrop} zoom={project.camera.zoom || 1} display={display} stage={p.stage} />
       <StudioLighting rig={rig} shadowStrength={shadowStrength} shadows={shadowStrength > 0} />
       <CameraRig
         view={p.view}
@@ -156,6 +162,7 @@ export function SceneRoot(p: SceneRootProps) {
             behind={plateBackdrop}
             rimDir={rimDir}
             lit={lit}
+            displayPaint={displayPaint}
           />
         )}
         {stack.map((entry) => (
@@ -173,6 +180,7 @@ export function SceneRoot(p: SceneRootProps) {
             intentLum={intentLum}
             presets={presets}
             lit={lit}
+            displayPaint={displayPaint}
           />
         ))}
       </group>

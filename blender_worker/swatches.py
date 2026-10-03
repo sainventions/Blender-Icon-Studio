@@ -135,7 +135,7 @@ def render_swatches(builder, out_dir: str, size: int = 192, quality: str = "prev
     scene = bpy.context.scene
     for i, preset in enumerate(ids):
         project, bundle = swatch_scene(preset)
-        info = builder.build(project, bundle, "light")
+        info = builder.build(project, bundle, "light", engine=R.tier(quality)["engine"])
         R.configure(scene, quality, size, transparent=True, color_mode="neutral",
                     max_frost=info["maxFrost"], volume=info["volume"])
         R.configure_compositor(scene, info["neonBloom"], True)

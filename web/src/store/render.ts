@@ -5,6 +5,8 @@ import type { AppearanceId, Job, JobState, Quality, RenderRequest } from '../typ
 import { errorMessage, jobsApi, projectsApi } from '../api'
 import { APPEARANCE_IDS, renderSig } from '../lib/projectOps'
 import { formatSeconds } from '../lib/format'
+import { appearanceLabel, engineLabel } from '../lib/labels'
+import { keepsSharperRender } from '../lib/renderPick'
 import { onJobUpdate, useAppStore } from './app'
 import { useEditor } from './editor'
 import { toast } from './toasts'
@@ -155,7 +157,8 @@ export const useRender = create<RenderState>((set, get) => ({
       width: typeof r.width === 'number' ? r.width : undefined,
       height: typeof r.height === 'number' ? r.height : undefined,
       seconds: typeof r.seconds === 'number' ? r.seconds : undefined,
-      engine: typeof r.engine === 'string' ? r.engine : undefined,
+      // 'Cycles' / 'EEVEE' (the server reports 'cycles' / 'eevee'): every chip, tooltip and toast shows this.
+      engine: typeof r.engine === 'string' ? engineLabel(r.engine, quality) : undefined,
       device: typeof r.device === 'string' ? r.device : undefined,
       error: job.error,
       sig,
@@ -167,7 +170,8 @@ export const useRender = create<RenderState>((set, get) => ({
         const c = cur ? s.entries[cur] : undefined
         return !c || c.createdAt <= entry.createdAt
       }
-      if (newer(s.latest[appearance])) patch.latest = { ...s.latest, [appearance]: job.id }
+      const shown = s.latest[appearance] ? s.entries[s.latest[appearance]!] : undefined
+      if (newer(s.latest[appearance]) && !keepsSharperRender(shown, entry)) patch.latest = { ...s.latest, [appearance]: job.id }
       if (purpose === 'rendition' && newer(s.renditions[appearance]))
         patch.renditions = { ...s.renditions, [appearance]: job.id }
       const ld = s.lastDone ? s.entries[s.lastDone] : undefined
@@ -235,7 +239,7 @@ export const useRender = create<RenderState>((set, get) => ({
     let tid: string | undefined
     if (purpose === 'manual') {
       tid = toast.progress(`${QUALITY_LABEL[quality]} render · queued`, {
-        description: `${appearance} · ${opts.size ?? useAppStore.getState().presets.data?.quality[quality]?.size ?? ''} px`,
+        description: `${appearanceLabel(appearance, useAppStore.getState().presets.data)} · ${opts.size ?? useAppStore.getState().presets.data?.quality[quality]?.size ?? ''} px`,
       })
     }
     try {

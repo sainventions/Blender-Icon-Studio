@@ -7,8 +7,9 @@ final layer order is a topological sort. Non-overlapping elements impose no cons
 same-colour / same-group merges jump over unrelated elements.
 
 Strategies: ``element`` (forced units only), ``group`` (top-level groups after unwrapping shared
-wrappers), ``color`` (same paint), ``smart`` (same-paint touching/sibling merges, then cost-based
-agglomeration to the layer budget, then connected-component split of a lone glyph) and ``single``.
+wrappers), ``color`` (same paint), ``smart`` (tiles of one shape - :mod:`.tiling` - and same-paint
+touching/sibling merges, then cost-based agglomeration to the layer budget, then connected-component
+split of a lone glyph) and ``single``.
 """
 from __future__ import annotations
 
@@ -41,6 +42,7 @@ class SplitParams:
     tiny_bias: float = 0.65              # cost x (1 - tiny_bias*(1 - sqrt(area share))): small bits merge first
     auto_merge_cost: float = 0.25        # merge even under budget when the cost is this low
     lone_merge_cost: float = 0.45        # phase C: merge similar-sized parts of a lone cluster below this
+    debris_share: float = 2e-4           # phase B2: a cluster with less of the art's area is debris
 
 
 # ----------------------------------------------------------------------------------------------
@@ -89,9 +91,12 @@ class Analysis:
     element, ...) from the 'inside' relation."""
 
     def __init__(self, elems: Sequence[Elem], gaps: np.ndarray, edges: Sequence[Tuple[int, int]],
-                 idxs: Sequence[int], view_box, inside: Sequence[Tuple[int, int]] = ()):
+                 idxs: Sequence[int], view_box, inside: Sequence[Tuple[int, int]] = (),
+                 tiles: Sequence[Tuple[int, int, float]] = ()):
         self.idxs = list(idxs)
         self.local = {g: k for k, g in enumerate(self.idxs)}
+        # pieces that tile one shape (store index pairs from tiling.tile_pairs), longest cut first
+        self.tiles = [(self.local[i], self.local[j], s) for i, j, s in tiles if i in self.local and j in self.local]
         self.els = [elems[i] for i in self.idxs]
         ix = np.asarray(self.idxs, dtype=int)
         self.gap = gaps[np.ix_(ix, ix)] if len(ix) else np.zeros((0, 0))
@@ -520,6 +525,12 @@ def _smart(an: Analysis, assign: List[int], params: SplitParams, adj: float) -> 
     n = len(els)
     info: dict = {}
     st = ClusterState(an, assign, params)
+    # phase A0: the coloured sections of one shape (Home's house, the Maps pin) share a layer - built
+    # as one 'combined' body there is no seam between them (where legal; longest cut first)
+    for i, j, _len in an.tiles:
+        a, b = st.assign[i], st.assign[j]
+        if a != b and st.try_merge(min(a, b), max(a, b)):
+            info["tiles"] = info.get("tiles", 0) + 1
     # phase A: same paint & touching / overlapping, closest pairs first
     pairs = sorted((an.gap[i][j], i, j) for i in range(n) for j in range(i + 1, n)
                    if an.gap[i][j] <= adj and same_paint(els[i], els[j], params))
@@ -553,6 +564,14 @@ def _smart(an: Analysis, assign: List[int], params: SplitParams, adj: float) -> 
                 if c != a:
                     lo, hi = min(a, c), max(a, c)
                     heapq.heappush(heap, (st.cost(lo, hi), lo, hi, st.ver[lo], st.ver[hi]))
+    # phase B2: debris (zero-area slivers, specks) never gets a layer of its own - merge it into the
+    # cheapest legal neighbour (a multi-colour tile cluster can be too costly for phase B)
+    for c in sorted(st.members, key=lambda c: st.w[c]):
+        if c not in st.members or len(st.members) < 2 or st.w[c] > params.debris_share * st.total_w:
+            continue
+        for _cost, o in sorted((st.cost(min(c, o), max(c, o)), o) for o in st.members if o != c):
+            if st.try_merge(min(c, o), max(c, o)):
+                break
     if len(st.members) > max_fg:
         info["note"] = "layer budget not reachable without breaking the z-order"
     assign = st.assign

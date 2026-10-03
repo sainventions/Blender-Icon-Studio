@@ -2,6 +2,8 @@ import { useRef } from 'react'
 import { Activity, Cpu, Gauge, Keyboard, ListOrdered, RotateCcw, Shapes, Thermometer, Timer, Wifi, WifiOff } from 'lucide-react'
 import { errorMessage, systemApi } from '../../api'
 import { cn, formatMB, formatSeconds, shortGpuName } from '../../lib/format'
+import { appearanceLabel, engineLabel } from '../../lib/labels'
+import { elementCounts } from '../../lib/projectOps'
 import { useAppStore } from '../../store/app'
 import { useEditor } from '../../store/editor'
 import { useRender } from '../../store/render'
@@ -14,12 +16,18 @@ const WORKER_LABEL = { stopped: 'Worker stopped', starting: 'Worker starting…'
 export function StatusBar() {
   const system = useAppStore((s) => s.system)
   const systemError = useAppStore((s) => s.systemError)
+  const presets = useAppStore((s) => s.presets.data)
   const ws = useAppStore((s) => s.ws)
   const lastDone = useRender((s) => (s.lastDone ? s.entries[s.lastDone] : null))
   const geometryLoading = useEditor((s) => s.geometryLoading)
   const geometryError = useEditor((s) => s.geometryError)
   const layerCount = useEditor((s) => s.project?.layers.length ?? 0)
-  const elementCount = useEditor((s) => s.project?.elements.length ?? 0)
+  // Elements in layers (matches the layer rows' "N el"); the detected plate is listed under Canvas & plate.
+  const counts = useEditor((s) => {
+    const c = s.project ? elementCounts(s.project) : { layered: 0, plate: 0, unused: 0 }
+    return `${c.layered}|${c.plate}|${c.unused}`
+  })
+  const [elementCount, plateCount, unusedCount] = counts.split('|').map(Number)
   const busy = useEditor((s) => s.busy)
   const menu = useAnchor<HTMLButtonElement>()
   const workerRef = useRef<HTMLButtonElement>(null)
@@ -114,17 +122,24 @@ export function StatusBar() {
           <Shapes className="h-3 w-3" /> Geometry error
         </span>
       ) : (
-        <span className="hidden items-center gap-1 xl:flex" data-tip="Layers · SVG elements">
-          <Shapes className="h-3 w-3" /> {layerCount} layers · {elementCount} elements
+        <span
+          className="hidden items-center gap-1 xl:flex"
+          data-tip={
+            `Layers · SVG elements in them` +
+            (plateCount ? ` — ${plateCount} more ${plateCount === 1 ? 'is' : 'are'} the plate (Canvas & plate)` : '') +
+            (unusedCount ? ` — ${unusedCount} ${unusedCount === 1 ? 'is' : 'are'} in no layer (deleted layers)` : '')
+          }
+        >
+          <Shapes className="h-3 w-3" /> {layerCount} {layerCount === 1 ? 'layer' : 'layers'} · {elementCount} {elementCount === 1 ? 'element' : 'elements'}
         </span>
       )}
       {lastDone && (
         <>
           <Sep />
-          <span className="flex items-center gap-1" data-tip={`Last render · ${lastDone.appearance} · ${lastDone.width ?? ''}px`}>
+          <span className="flex items-center gap-1" data-tip={`Last render · ${appearanceLabel(lastDone.appearance, presets)} · ${lastDone.width ?? ''}px`}>
             <Timer className="h-3 w-3" />
             <span className="tabular text-fg-2">{formatSeconds(lastDone.seconds)}</span>
-            <span className="text-fg-4">· {lastDone.engine ?? (lastDone.quality === 'draft' ? 'EEVEE' : 'Cycles')} {lastDone.quality}</span>
+            <span className="text-fg-4">· {engineLabel(lastDone.engine, lastDone.quality)} {lastDone.quality}</span>
           </span>
         </>
       )}

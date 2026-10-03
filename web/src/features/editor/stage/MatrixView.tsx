@@ -4,6 +4,7 @@ import type { AppearanceId } from '../../../types'
 import { cn, formatSeconds } from '../../../lib/format'
 import { APPEARANCE_IDS } from '../../../lib/projectOps'
 import { APPEARANCE_VISUAL } from '../../../lib/meta'
+import { appearanceLabel, engineLabel } from '../../../lib/labels'
 import { useAppStore } from '../../../store/app'
 import { useEditor } from '../../../store/editor'
 import { useRender } from '../../../store/render'
@@ -60,7 +61,7 @@ export function MatrixView() {
         <div className="mt-8">
           <div className="mb-3 flex items-baseline gap-2">
             <h3 className="text-sm font-semibold text-fg">Size waterfall</h3>
-            <span className="text-2xs text-fg-4">{presets?.appearances[appearance]?.label} · actual pixels — check legibility at small sizes</span>
+            <span className="text-2xs text-fg-4">{appearanceLabel(appearance, presets)} · actual pixels — check legibility at small sizes</span>
           </div>
           <div className="flex items-end gap-6 overflow-x-auto rounded-2xl border border-line px-6 pb-4 pt-6" style={{ background: APPEARANCE_VISUAL[appearance].bg }}>
             {WATERFALL.map((px) => (
@@ -113,13 +114,13 @@ function MatrixTile({ appearance, index, active, supported, sig }: { appearance:
         </div>
       )}
       <div className="absolute inset-x-2 bottom-2 flex items-center gap-1.5 rounded-lg bg-black/45 px-2 py-1 backdrop-blur">
-        <span className="text-2xs font-semibold text-white">{presets?.appearances[appearance]?.label ?? appearance}</span>
+        <span className="text-2xs font-semibold text-white">{appearanceLabel(appearance, presets)}</span>
         <span className="text-3xs text-white/50">{index + 1}</span>
         <div className="flex-1" />
         {!supported && <Badge>unused</Badge>}
         {stale && !running && <Badge tone="warn" tip="Rendered before your latest edits">outdated</Badge>}
         {entry && (
-          <span className="text-3xs tabular text-white/70">
+          <span className="text-3xs tabular text-white/70" data-tip={`${engineLabel(entry.engine, entry.quality)} · ${entry.width ?? '?'} px`}>
             {entry.quality} · {formatSeconds(entry.seconds)}
           </span>
         )}

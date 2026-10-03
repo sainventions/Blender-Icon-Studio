@@ -187,10 +187,15 @@ def test_default_layer_stack(import_icon):
 def test_thin_features_clamp_bevel(import_icon):
     res, project, pdir = import_icon(corpus("Ti84"))
     bundle = svg.build_geometry(pdir, project, "/files/projects/p", texture_size=128)
-    srs = [lg.safeRadius for lg in bundle.layers.values()]
-    assert min(srs) < 0.02  # display text / graph lines
-    for L in res.layers:
+    for L in res.layers:   # every default bevel fits its layer's (mode-dependent) safe radius
         assert L.depth.bevel <= 0.9 * bundle.layers[L.id].safeRadius + 1e-4
+    # built piece by piece, the thin display text / graph lines clamp the bevel hard ('combined'
+    # layers - Ti84's tiled screen + keypad face since round 4 - are built from their silhouette)
+    for L in project.layers:
+        L.mode = "individual"
+    bundle = svg.build_geometry(pdir, project, "/files/projects/p", texture_size=128)
+    srs = [lg.safeRadius for lg in bundle.layers.values()]
+    assert min(srs) < 0.02
 
 
 # ----------------------------------------------------------------------------------------------

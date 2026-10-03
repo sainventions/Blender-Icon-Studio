@@ -163,7 +163,8 @@ def test_split_single_shape_layer_raises(import_icon):
 
 
 def test_geometry_cache_hit_is_fast_and_per_layer(import_icon):
-    res, project, pdir = import_icon(CORPUS_DIR / "Maps.svg")
+    # (Maps used to be 4 layers; since round 4 its tiled pin is one 'combined' layer)
+    res, project, pdir = import_icon(CORPUS_DIR / "Photos.svg")
     b1 = svg.build_geometry(pdir, project, "/files/projects/p", texture_size=256)
     t = time.perf_counter()
     for _ in range(10):
@@ -196,11 +197,11 @@ def test_geometry_cache_hit_is_fast_and_per_layer(import_icon):
 
 
 def test_auto_names_follow_membership(import_icon):
-    res, project, pdir = import_icon(CORPUS_DIR / "Maps.svg")
+    res, project, pdir = import_icon(CORPUS_DIR / "Photos.svg")
     names = [L.name for L in project.layers]
-    assert names == ["Blue", "Red", "Yellow", "Green"]
+    assert names == ["Blue", "Green", "Yellow", "Red"]
     layers = svg.merge_layers(pdir, project, [project.layers[1].id, project.layers[2].id])
-    assert layers[1].name in ("Red & Yellow", "Yellow & Red")
+    assert layers[1].name in ("Green & Yellow", "Yellow & Green")
     # a user-renamed layer keeps its name
     project.layers[1].name = "My red"
     layers = svg.merge_layers(pdir, project, [project.layers[1].id, project.layers[2].id])

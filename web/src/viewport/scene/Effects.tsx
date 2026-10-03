@@ -15,6 +15,7 @@ import {
 import { BlendFunction, KernelSize, SelectiveBloomEffect, ToneMappingMode } from 'postprocessing'
 import { HalfFloatType, type Object3D } from 'three'
 import type { RenderSettings } from '../../types'
+import { AGX_PUNCHY_SATURATION } from './displayTransform'
 import { useViewportStore } from './store'
 
 interface Props {
@@ -90,7 +91,7 @@ export function Effects({ colorMode, selectedId, bloom, bloomIds, multisampling 
       <Bloom mipmapBlur intensity={0.1} luminanceThreshold={6} luminanceSmoothing={0.25} radius={0.55} />
       <ToneMapping mode={mode} />
       <HueSaturation
-        saturation={colorMode === 'agx-punchy' ? 0.14 : 0}
+        saturation={colorMode === 'agx-punchy' ? AGX_PUNCHY_SATURATION : 0}
         blendFunction={colorMode === 'agx-punchy' ? BlendFunction.SRC : BlendFunction.SKIP}
       />
       <Outline

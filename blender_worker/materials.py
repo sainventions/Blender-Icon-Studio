@@ -25,6 +25,14 @@ Spec keys::
     obj_scale float                  object scale (object coords -> world XY for the backdrop lookup)
     lit      float                   key-light level (1 = studio): scales Liquid Glass' self-lit fill
     edge_dark float                  clear-light: transmission darkened toward the outline (0 = off)
+    cm       str                     colour mode (render.colorMode): 'neutral' pre-compensates paints for the
+                                     Khronos PBR Neutral view transform (display_paint)
+    plate    bool                    the icon plate (not a layer piece): no white-ice body (_white_ice)
+
+Colour fidelity (round 4): paint colours are turned into the *radiance* the view transform displays as the
+SVG colour (``display_paint``: inverse Khronos PBR Neutral in the 'neutral' mode, identity otherwise). Self-lit
+fills (Liquid Glass body, flat) emit that radiance; diffuse presets get the albedo that the calibrated rig
+(lighting.ENGINE_CAL: face-on radiance = DIFFUSE_A · albedo + DIFFUSE_B in both engines) lights to it.
 """
 from __future__ import annotations
 
@@ -35,7 +43,7 @@ import bpy
 
 from . import presets as P
 from .nodes import Graph, TopologyMismatch, auto_layout
-from .util import clamp, log
+from .util import NEUTRAL_CAP, NEUTRAL_CAP_POW, PBR_DESAT, PBR_START, clamp, log
 
 WHITE = (1.0, 1.0, 1.0, 1.0)
 SILVER = (0.92, 0.93, 0.95)
@@ -48,6 +56,20 @@ CYCLES_TRANSMISSIVE = GLASS | {"jelly"}
 VOLUME_PRESETS = {"jelly"}
 UNLIT = {"flat"}
 MONO_MIN_RANGE = 0.55
+# face-on response of a diffuse (satin) surface under the calibrated studio rig, both engines:
+# radiance = DIFFUSE_A · albedo + DIFFUSE_B (coat / specular reflection of the studio world)
+DIFFUSE_A = 1.0
+DIFFUSE_B = 0.017
+ALBEDO_MAX = 1.3            # brightest diffuse albedo used to reach a paint (white plates display ~246/255)
+CLEAR_WHITE_MILK = 0.6     # clear glass: frosted share of a white paint's body (readable white glyphs)
+WHITE_ICE = 0.6            # frosted glass: the same for white paints (prism uses CLEAR_WHITE_MILK; _white_ice)
+# brightest displayed peak a diffuse surface can reach: PBR Neutral's pre-image of that peak = ALBEDO_MAX + B
+DIFFUSE_PEAK = 1.0 - (1.0 - PBR_START) ** 2 / (ALBEDO_MAX + DIFFUSE_B - (2 * PBR_START - 1.0))
+LG_CAP_CLEAR = 0.16         # Liquid Glass: clear (see-through) share of the flat cap at the default translucency
+LG_EDGE_BODY = 0.35         # ... body share left at the silhouette (the bevel lenses what lies beneath)
+TRANSLUCENT_CLEAR = 0.3     # ... translucent pieces: how untinted their clear share is (their alpha tints already)
+LG_COAT_B = 0.01            # Liquid Glass cap: radiance its coat reflects of the studio world (off the fill)
+EEVEE_FILL_GAIN = 1.2       # EEVEE: body share vs Cycles (its slab refraction of the plate reads ~30 % darker)
 
 
 def is_glass(preset: str) -> bool:
@@ -71,12 +93,14 @@ def topology_key(spec: dict) -> str:
     pr = spec.get("params", {})
     paint = spec["paint"]
     flags = [
-        "v5", spec["preset"], paint["kind"], bool(paint.get("has_alpha")), bool(paint.get("uv")),
+        "v6", spec["preset"], paint["kind"], bool(paint.get("has_alpha")), bool(paint.get("uv")),
+        spec.get("cm", "neutral") == "neutral",
         paint["kind"] == "radial" and radial_focal(paint) is not None,
         spec.get("mono") is not None, bool(spec.get("mono") and spec["mono"].get("tint") is not None),
         bool(spec.get("clear")), bool(spec.get("alpha")), spec.get("role", "opaque"),
         float(spec.get("inflate") or 0) > 0, float(spec.get("edge_dark") or 0) > 0,
         len((spec.get("eevee_backdrop") or {}).get("blobs") or []) if spec.get("eevee_backdrop") else -1,
+        bool(spec.get("plate")),
     ]
     if spec["preset"] == "tinted_glass":
         flags.append(float(pr.get("absorption", 0) or 0) > 0)
@@ -138,6 +162,13 @@ def _settings(mat: bpy.types.Material, spec: dict) -> None:
     _set_if(mat, "thickness_mode", "SLAB")
     _set_if(mat, "use_transparent_shadow", True)
     _set_if(mat, "use_backface_culling", False)
+    # Cycles: self-lit fills / rims are display-calibrated colour, not light sources — no next-event estimation
+    # toward their triangles (each glyph was a light in the light tree: slower and noisier previews, and a
+    # white glyph lit the plate around it). Neon tubes keep lighting their surroundings.
+    try:
+        _set_if(mat.cycles, "emission_sampling", "AUTO" if spec["preset"] == "neon" else "NONE")
+    except (AttributeError, TypeError):  # pragma: no cover - older builds
+        pass
     pc = tuple(spec.get("preview_color", (0.8, 0.8, 0.8)))[:3]
     _set_if(mat, "diffuse_color", (*pc, 1.0))
     if mat.get("bis_preset") != spec["preset"]:
@@ -342,6 +373,136 @@ def _mono(c: _Ctx, col):
     return out, st
 
 
+def _max3(g: Graph, v):
+    s = g.separate(v)
+    return g.math("MAXIMUM", s.outputs[0], g.math("MAXIMUM", s.outputs[1], s.outputs[2])), s
+
+
+# Shared node groups: built once per session (and rebuilt when their key changes), so each material carries a
+# single group node instead of ~45 math nodes — building / updating materials in Python is the draft's cost.
+GROUP_KEY = "g2"
+
+
+def _node_group(name: str, key: str, inputs: list, build) -> bpy.types.NodeTree:
+    ng = bpy.data.node_groups.get(name)
+    if ng is not None and ng.get("bis_key") == key and ng.bl_idname == "ShaderNodeTree":
+        return ng
+    if ng is None or ng.bl_idname != "ShaderNodeTree":
+        ng = bpy.data.node_groups.new(name, "ShaderNodeTree")
+    ng.nodes.clear()
+    ng.interface.clear()
+    for nm, typ, default in inputs:
+        sock = ng.interface.new_socket(nm, in_out="INPUT", socket_type=typ)
+        if default is not None:
+            sock.default_value = default
+    ng.interface.new_socket("Color", in_out="OUTPUT", socket_type="NodeSocketColor")
+    g = Graph(ng, prefix="g")
+    gi = g.node("NodeGroupInput")
+    go = g.node("NodeGroupOutput")
+    g.link(build(g, gi), go.inputs[0])
+    ng["bis_key"] = key
+    try:
+        auto_layout(ng)
+    except Exception:  # cosmetic only
+        pass
+    return ng
+
+
+def _display_graph(g: Graph, gi) -> "bpy.types.NodeSocket":
+    """Inverse Khronos PBR Neutral (util.pbr_neutral_inverse), as a node graph on ``gi.outputs[0]``."""
+    y0 = g.vmath("MAXIMUM", gi.outputs[0], (0.0, 0.0, 0.0))
+    mx, s0 = _max3(g, y0)
+    mn = g.math("MINIMUM", s0.outputs[0], g.math("MINIMUM", s0.outputs[1], s0.outputs[2]))
+    mxs = g.math("MAXIMUM", mx, 1e-5)
+    sat = g.math("SUBTRACT", 1.0, g.math("DIVIDE", mn, mxs), clamp=True)
+    cap = g.math("ADD", NEUTRAL_CAP[0], g.math("MULTIPLY", g.math("POWER", sat, NEUTRAL_CAP_POW), NEUTRAL_CAP[1] - NEUTRAL_CAP[0]))
+    npk = g.math("MINIMUM", mx, g.math("MINIMUM", cap, gi.outputs["Max Peak"]))
+    y = g.vmath("SCALE", y0, None, scale=g.math("DIVIDE", npk, mxs))
+    d = 1.0 - PBR_START
+    peak = g.math("ADD", PBR_START - d, g.math("DIVIDE", d * d, g.math("SUBTRACT", 1.0, npk)))
+    inv = g.math("ADD", g.math("MULTIPLY", g.math("SUBTRACT", peak, npk), PBR_DESAT), 1.0)
+    gnp = g.math("MULTIPLY", g.math("SUBTRACT", 1.0, g.math("DIVIDE", 1.0, inv)), npk)
+    x2 = g.vmath("MAXIMUM", g.vmath("SCALE", g.vmath("SUBTRACT", y, g.combine(gnp, gnp, gnp)), None, scale=inv),
+                 (0.0, 0.0, 0.0))
+    x1h = g.vmath("SCALE", x2, None, scale=g.math("DIVIDE", peak, g.math("MAXIMUM", npk, 1e-5)))
+    x1 = g.mix_rgb(g.math("GREATER_THAN", npk, PBR_START), y, x1h)
+    s1 = g.separate(x1)
+    m1 = g.math("MINIMUM", s1.outputs[0], g.math("MINIMUM", s1.outputs[1], s1.outputs[2]))
+    lo = g.math("SUBTRACT", g.math("MULTIPLY", g.math("SQRT", g.math("MAXIMUM", m1, 0.0)), 0.4), m1)
+    off = g.mix_float(g.math("GREATER_THAN", m1, 0.04), lo, 0.04)
+    return g.vmath("ADD", x1, g.combine(off, off, off))
+
+
+def _albedo_graph(g: Graph, gi) -> "bpy.types.NodeSocket":
+    """max(radiance − B, 0) / DIFFUSE_A, scaled down (hue kept) so its peak stays ≤ Lim."""
+    b = gi.outputs["B"]
+    x = g.vmath("MAXIMUM", g.vmath("SUBTRACT", gi.outputs["Radiance"], g.combine(b, b, b)), (0.0, 0.0, 0.0))
+    if abs(DIFFUSE_A - 1.0) > 1e-6:
+        x = g.vmath("SCALE", x, None, scale=1.0 / DIFFUSE_A)
+    mx, _ = _max3(g, x)
+    k = g.math("MINIMUM", g.math("DIVIDE", gi.outputs["Lim"], g.math("MAXIMUM", mx, 1e-5)), 1.0)
+    return g.vmath("SCALE", x, None, scale=k)
+
+
+def display_paint(c: _Ctx, col, max_peak: float = NEUTRAL_CAP[0]):
+    """Radiance the colour mode's view transform displays as the paint colour ``col`` (linear sRGB).
+
+    'neutral' (Khronos PBR Neutral) subtracts a 0.04 offset (toe: #3d3d3d displayed as 31) and compresses
+    and desaturates every peak above 0.76 (white -> 240, #e84a27 -> (229, 64, 10)): its inverse is applied
+    here, with the target peak capped by saturation (util.NEUTRAL_CAP) and by ``max_peak`` (diffuse
+    surfaces: DIFFUSE_PEAK, so the albedo stays reachable). util.pbr_neutral_inverse is the reference
+    implementation. Other colour modes: identity."""
+    if c.spec.get("cm", "neutral") != "neutral":
+        return col
+    key = f"{GROUP_KEY}|{NEUTRAL_CAP}|{NEUTRAL_CAP_POW}|{PBR_START}|{PBR_DESAT}"
+    ng = _node_group("BIS Display Paint", key, [("Color", "NodeSocketColor", None),
+                                                ("Max Peak", "NodeSocketFloat", NEUTRAL_CAP[0])], _display_graph)
+    n = c.g.node("ShaderNodeGroup", node_tree=ng)
+    if n.node_tree != ng:
+        n.node_tree = ng
+    c.g.set(n.inputs[0], col)
+    c.g.set(n.inputs["Max Peak"], float(max_peak))
+    return n.outputs[0]
+
+
+def diffuse_paint(c: _Ctx, col, b: float = DIFFUSE_B):
+    """Albedo the calibrated rig lights to the displayed paint (peak capped at DIFFUSE_PEAK: a brighter target
+    would exceed ALBEDO_MAX and the whole colour would be scaled darker)."""
+    return _albedo(c, display_paint(c, col, DIFFUSE_PEAK), b)
+
+
+def _albedo(c: _Ctx, rad, b: float = DIFFUSE_B, lim: float = ALBEDO_MAX):
+    """Diffuse albedo that the calibrated rig lights to radiance ``rad`` (hue kept when capped at lim)."""
+    ng = _node_group("BIS Albedo", f"{GROUP_KEY}|{DIFFUSE_A}",
+                     [("Radiance", "NodeSocketColor", None), ("B", "NodeSocketFloat", 0.0),
+                      ("Lim", "NodeSocketFloat", 1.0)], _albedo_graph)
+    n = c.g.node("ShaderNodeGroup", node_tree=ng)
+    if n.node_tree != ng:
+        n.node_tree = ng
+    c.g.set(n.inputs["Radiance"], rad)
+    c.g.set(n.inputs["B"], float(b))
+    c.g.set(n.inputs["Lim"], float(lim))
+    return n.outputs[0]
+
+
+def paint_radiance(c: _Ctx, col):
+    """display_paint for opaque pieces. Translucent pieces (opacity / alpha paint) are blended with what lies
+    beneath IN RADIANCE, so they use the transform's mid-tone approximation instead: paint + 0.04 (its
+    offset), peak ≤ 1 — a linear blend of such radiances is then the (linear-light) blend of the displayed
+    colours that _alpha corrects to SVG's sRGB blending. With the exact inverse a white overlay (2.5x) washed
+    out what lay beneath and a black one (R = 0, no offset) darkened it ~20 % too much."""
+    if not c.spec.get("alpha") or c.spec.get("cm", "neutral") != "neutral":
+        return display_paint(c, col)
+    return _albedo(c, col, -0.04, 1.0)
+
+
+def _no_bounce(c: _Ctx):
+    """1 for camera / glossy / transmission rays, 0 for diffuse bounces (Cycles): self-lit fills are display-
+    calibrated colour, not light sources — a white glyph emitting 2.5x lit the dark plate around it."""
+    lp = c.g.node("ShaderNodeLightPath")
+    return c.g.math("SUBTRACT", 1.0, lp.outputs["Is Diffuse Ray"])
+
+
 def _alpha(c: _Ctx, paint_alpha, col=None):
     """Per-SURFACE alpha of a translucent piece, so the piece composites like the SVG.
 
@@ -423,7 +584,9 @@ def _shadow_color(c: _Ctx, paint_col, alpha):
     g.link(hsv.outputs[1], comb.inputs[1])
     g.set(comb.inputs[2], 0.72)
     target = g.mix_rgb(1.0 if kind == "chromatic" else 0.0, neutral, comb.outputs[0])
-    amount = g.math("MULTIPLY", alpha, op) if alpha is not None else op
+    # a translucent piece (SVG opacity) is a film the SVG composites without any shadow: seen through it, its
+    # own shadow on the plate darkened it twice (Calculator's 44 % black ÷: preview ΔE 11) — alpha² falloff
+    amount = g.math("MULTIPLY", g.math("MULTIPLY", alpha, alpha), op) if alpha is not None else op
     tcol = g.mix_rgb(amount, WHITE, target)
     gam = g.node("ShaderNodeGamma")
     g.set(gam.inputs["Color"], tcol)
@@ -481,6 +644,31 @@ def _fake_glass(c: _Ctx, base, rim, normal, frost: float):
     }, normal).outputs[0]
 
 
+def _white_ice(c: _Ctx, col, normal, cyc, ev, amount: float, frost: float):
+    """White paints in the colourless glass presets (frosted, prism) tint nothing: such a glyph took the colour
+    of the plate it refracts and vanished (frosted / prism looks: Discord, Spotify, Settings, Brave — the
+    crystal look's QA round 3 #8, which _glass_common's white_milk fixes for clear glass). A frosted-white
+    body share (whiteness^1.5 × amount, a touch denser at the top) keeps it a white glyph; coloured paints
+    (whiteness ≈ 0), the plate and the clear appearances are unchanged. -> (cycles, eevee) surfaces."""
+    if amount <= 0 or c.spec.get("plate") or c.spec.get("clear"):
+        return cyc, ev
+    g = c.g
+    bx = c.spec.get("bbox") or (-1, -1, 1, 1)
+    y = g.separate(c.tc.outputs["Object"]).outputs["Y"]
+    wm = g.math("MULTIPLY", g.math("MULTIPLY", g.math("POWER", _whiteness(c, col), 1.5), amount),
+                g.map_range(y, bx[1], bx[3], 0.8, 1.0))
+    ice = _principled(c, {"Base Color": col, "Roughness": max(0.3, frost), "Coat Weight": 1.0,
+                          "Coat Roughness": 0.03, "Specular IOR Level": 0.5}, normal)
+    cyc = g.mix_shader(wm, cyc, ice.outputs[0])
+    # EEVEE: a diffuse + refraction mix renders grainy - the milky share is a soft paint-coloured emission
+    # (as _glass_common's milk_em)
+    em = g.node("ShaderNodeEmission")
+    g.set(em.inputs["Color"], col)
+    g.set(em.inputs["Strength"], 1.3)
+    ev = g.mix_shader(g.math("MULTIPLY", wm, 1.3, clamp=True), ev, em.outputs[0])
+    return cyc, ev
+
+
 def _spec_weights(mode: str):
     return {"off": (0.0, 0.0, 0.0), "auto": (1.0, 0.0, 0.0), "inside": (0.25, 1.0, 0.0),
             "outside": (0.25, 0.0, 1.0)}.get(mode, (1.0, 0.0, 0.0))
@@ -520,7 +708,7 @@ def glass_colors(c: "_Ctx", col, tint: float):
 
 def _glass_common(c: _Ctx, col, normal, tint: float, frost: float, ior: float, transl: float,
                   rim_strength: float, spec_mode: str, glow: float, coat: float = 1.0, coat_rough: float = 0.02,
-                  milk_gain: float = 1.6):
+                  milk_gain: float = 1.6, white_milk: float = 0.0):
     """Glass body = clear transmission lobe (tinted with sqrt(paint) so the two interfaces give back the
     paint colour) mixed with a milky, paint-coloured diffuse lobe. The milk fraction follows Icon
     Composer's translucency: transparent at the bottom, retains colour at the top."""
@@ -534,6 +722,12 @@ def _glass_common(c: _Ctx, col, normal, tint: float, frost: float, ior: float, t
     milk = g.math("MULTIPLY", fall, (1.0 - transl) * milk_gain, clamp=True)
     if c.spec.get("clear") and c.spec.get("_lum") is not None:
         milk = g.math("MULTIPLY", g.math("MULTIPLY", c.spec["_lum"], 1.3), milk, clamp=True)
+    elif white_milk > 0 and not c.spec.get("plate"):
+        # white paint tints nothing: as water-clear glass a white glyph vanished into the plate it lenses
+        # (crystal look: Discord, Calculator, Spotify). White paints become frosted crystal ("ice") instead.
+        # Not on the plate: a clear-glass plate over a white fill stays clear glass
+        wm = g.math("MULTIPLY", g.math("POWER", _whiteness(c, col), 1.5), white_milk)
+        milk = g.math("MAXIMUM", milk, g.math("MULTIPLY", wm, g.map_range(fall, 0.45, 1.0, 0.8, 1.0)))
     common = {"Roughness": frost, "IOR": ior, "Coat Weight": coat_w, "Coat Roughness": coat_rough,
               "Coat IOR": 1.5, "Specular IOR Level": 0.6, "Emission Color": WHITE, "Emission Strength": rim}
     pt = _principled(c, {**common, "Base Color": base_t, "Transmission Weight": 1.0}, normal)
@@ -637,42 +831,46 @@ def _coat_only(c: _Ctx, normal, rim, coat_w):
 def b_liquid_glass(c: _Ctx, col, normal):
     """Apple iOS 26-style Liquid Glass (art-directed; both engines share the structure).
 
-    * Face: the brand colour as backlit, self-lit glass ("lit from within", slightly brighter at the top)
-      mixed with clear transmission; ``fill`` follows Translucency, the paint's whiteness (white glyphs stay
-      frosted white over colour) and Icon Composer's vertical falloff. Self-lit, so the layer's own drop
-      shadow and the view transform's highlight desaturation never wash the brand colour out.
-    * Pill edge: clear glass, so what lies beneath is lensed into the rounded edge, with a deeper colour
-      (longer paths, Beer-Lambert-like) and tamed grazing reflections (else the bright plate mirrors in as
-      a pale outline).
+    * Body: the layer colour carried IN the glass, for light, mid and dark paints alike — a self-lit fill
+      emitting exactly the radiance the view transform displays as the paint (display_paint), with a little
+      diffuse response under a glossy coat. Translucency only *reveals* what lies beneath: a small clear
+      share on the flat cap (16 % at the default 0.75, less for white glyphs) whose transmission is tinted so
+      that over a white plate it, too, shows the paint. Interior colour = SVG paint within a few ΔE.
+    * Pill edge: the body thins toward the outline (35 % at the silhouette) so the round bevel lenses what is
+      beneath with a deeper colour (longer paths) — thin rings, bars and wedges keep their colour instead of
+      reading as empty clear capsules.
     * A crisp light-locked specular rim + faint counter-rim just inside the outline, a glossy coat, and a
       soft paint-tinted inner glow where the light exits (opposite the key).
     EEVEE: the same mix with a single refraction closure (diffuse + refraction mixes render grainy)."""
     g = c.g
-    tint, frost, ior = c.prm("tint", 0.5), c.prm("frost", 0.06), c.prm("ior", 1.5)
-    transl, rim_amt, glow = c.prm("translucency", 0.5), c.prm("rim", 1.0), c.prm("glow", 0.35)
+    tint, frost, ior = c.prm("tint", 1.0), c.prm("frost", 0.06), c.prm("ior", 1.5)
+    transl, rim_amt, glow = c.prm("translucency", 0.75), c.prm("rim", 1.0), c.prm("glow", 0.35)
     mode = str(c.params.get("specular", "auto"))
     lit = float(c.spec.get("lit", 1.0))
-    base_t, base_m = glass_colors(c, col, tint)
+    # body colour: paint (mixed toward white below tint 1, perceptually) -> displayed radiance
+    _, base_m = glass_colors(c, col, tint)
+    rad = paint_radiance(c, base_m)
     # paint lightness (perceptual): dark paints read as dark smoked glass — the light-locked rim is subdued
     # and the inner glow carries no white (black axes / dark blades rendered as pale, bright-edged glass)
     lum = _lightness(c, col)
+    # (Notion's #3d3d3d faces read as a wireframe of white rims: dark paints keep only a faint sheen)
     rim = g.math("MULTIPLY", _rim_lg(c, 5.0 * rim_amt, mode),
-                 g.map_range(lum, 0.05, 0.7, 0.1, 1.0, interp="SMOOTHSTEP"))
+                 g.map_range(lum, 0.1, 0.8, 0.06, 1.0, interp="SMOOTHSTEP"))
     coat_w = 0.0 if mode == "off" else 1.0
     e, nrm = _edge(c)
-    # fill share
     bx = c.spec.get("bbox") or (-1, -1, 1, 1)
     y = g.separate(c.tc.outputs["Object"]).outputs["Y"]
     v01 = g.map_range(y, bx[1], bx[3], 0.0, 1.0)
     white = g.math("POWER", _whiteness(c, col), 1.5)
-    # white glyphs: a dense frosted-white body (QA #12: on saturated plates the lensed plate tinted them and
-    # they lost contrast); the vertical falloff is gentler for white
-    f_col, f_white = clamp(1.2 - 0.9 * transl, 0.0, 1.0), clamp(1.45 - 0.6 * transl, 0.0, 0.97)
-    fill = g.math("MULTIPLY", g.map_range(white, 0.0, 1.0, f_col, f_white),
-                  g.map_range(v01, 0.0, 1.0, g.math("ADD", 0.8, g.math("MULTIPLY", white, 0.12)), 1.0))
+    # clear share of the flat cap: 16 % at the default translucency (0.75), ~50 % at 1; white glyphs
+    # stay a dense frosted white (a third of it)
+    t_cap = min(0.6, LG_CAP_CLEAR * (max(0.0, transl) / 0.75) ** 4)
+    fill = g.math("SUBTRACT", 1.0, g.map_range(white, 0.0, 1.0, t_cap, 0.35 * t_cap))
+    # Icon Composer's vertical falloff (a touch clearer at the bottom) and the clear pill edge
+    fill = g.math("MULTIPLY", fill, g.map_range(v01, 0.0, 1.0, 0.94, 1.0))
     if c.spec.get("clear") and c.spec.get("_lum") is not None:
         fill = g.math("MULTIPLY", fill, g.math("MULTIPLY", c.spec["_lum"], 1.15), clamp=True)
-    fill = g.math("MULTIPLY", fill, g.map_range(e, 0.3, 0.8, 0.12, 1.0, interp="SMOOTHSTEP"), clamp=True)
+    fill = g.math("MULTIPLY", fill, g.map_range(e, 0.0, 0.45, LG_EDGE_BODY, 1.0, interp="SMOOTHSTEP"), clamp=True)
     # dark smoked glass: the grazing coat / specular sheen of the bright studio world outlined every dark
     # piece in white (DJI's near-black blades, Ti84's body) - subdued for dark paints
     dk = g.map_range(lum, 0.0, 0.5, 0.35, 1.0)
@@ -680,11 +878,17 @@ def b_liquid_glass(c: _Ctx, col, normal):
     spec_b = g.math("MULTIPLY", g.map_range(e, 0.08, 0.6, 0.0, 0.4), dk)
     common = {"IOR": ior, "Coat Weight": coat_b, "Coat Roughness": 0.02, "Coat IOR": 1.5,
               "Specular IOR Level": spec_b, "Emission Color": WHITE, "Emission Strength": rim}
-    # glass colour per interface = paint (the studio-lit plate beneath is brighter than 1.0: a sqrt tint
-    # would be washed out to pastel by the view transform); deeper toward the outline; white stays clear
+    # clear share: per-interface tint sqrt(radiance / white plate), so over a white plate the two interfaces
+    # give back the paint; deeper toward the outline (longer paths); white stays clear
+    t2_body = t2 = g.vmath("MINIMUM", g.vmath("SCALE", rad, None, scale=1.0 / ALBEDO_MAX), (1.0, 1.0, 1.0))
+    if c.spec.get("alpha"):
+        # translucent piece (SVG opacity): its alpha already lets what lies beneath through; a fully tinted
+        # clear share darkened it a second time in Cycles (Calculator's ÷, Notes' curl: preview ΔE 9-11) —
+        # partly untinted. EEVEE's fake glass (alpha pieces never refract there) keeps the body colour.
+        t2 = g.mix_rgb(TRANSLUCENT_CLEAR, t2, WHITE)
     deep = g.node("ShaderNodeGamma")
-    g.set(deep.inputs["Color"], base_t)
-    g.set(deep.inputs["Gamma"], g.map_range(e, 0.0, 0.8, 4.0, 2.0))
+    g.set(deep.inputs["Color"], t2)
+    g.set(deep.inputs["Gamma"], g.map_range(e, 0.0, 0.6, 0.9, 0.5))
     deep_col = deep.outputs[0]
     edge_dark = float(c.spec.get("edge_dark") or 0.0)
     if edge_dark > 0:
@@ -694,16 +898,18 @@ def b_liquid_glass(c: _Ctx, col, normal):
         deep_col = g.mix_rgb(1.0, deep_col, g.combine(k, k, k), blend="MULTIPLY")
     pt = _principled(c, {**common, "Base Color": deep_col, "Roughness": frost, "Transmission Weight": 1.0},
                      normal)
-    # self-lit fill: emission (brighter at the top) + a little diffuse response, under the coat
+    # self-lit fill: emission (a touch brighter at the top) + a little diffuse response, under the coat whose
+    # reflection of the studio world (LG_COAT_B) is taken off the emitted radiance
+    face = 1.0 + 0.45 * edge_dark       # clear-light: the frosted-white glyph face is lifted above the plate
+    body = g.vmath("MAXIMUM", g.vmath("SUBTRACT", rad, (LG_COAT_B,) * 3), (0.0, 0.0, 0.0))
     fill_em = g.node("ShaderNodeEmission")
-    g.set(fill_em.inputs["Color"], base_m)
-    # (clear-light: the frosted-white glyph face is lifted above the pale frosted plate)
-    face = 1.0 + 0.45 * float(c.spec.get("edge_dark") or 0.0)
-    g.set(fill_em.inputs["Strength"], g.math("MULTIPLY", g.map_range(v01, 0.0, 1.0, 0.8 * lit * face, 1.04 * lit * face),
-                                             g.math("ADD", 1.0, g.math("MULTIPLY", white, 0.2))))
-    pc = _principled(c, {"Base Color": base_m, "Roughness": 0.35, "Specular IOR Level": 0.0}, normal)
+    g.set(fill_em.inputs["Color"], body)
+    g.set(fill_em.inputs["Strength"], g.math("MULTIPLY", _no_bounce(c),
+                                             g.map_range(v01, 0.0, 1.0, 0.95 * lit * face, 1.04 * lit * face)))
+    pc = _principled(c, {"Base Color": _albedo(c, body, 0.0), "Roughness": 0.35, "Specular IOR Level": 0.0},
+                     normal)
     coat = _coat_only(c, normal, rim, coat_b)
-    filled = g.add_shader(g.mix_shader(0.82, pc.outputs[0], fill_em.outputs[0]), coat)
+    filled = g.add_shader(g.mix_shader(0.85, pc.outputs[0], fill_em.outputs[0]), coat)
     # inner glow where the light leaves the glass (opposite the key), paint-tinted
     gband = _band(c, e, 0.3, 0.45, 0.8, 0.95)
     gdir = g.math("ADD", 0.08, g.math("MULTIPLY", _light_side(c, nrm, -1.0), 0.92))
@@ -713,14 +919,21 @@ def b_liquid_glass(c: _Ctx, col, normal):
     cyc = g.add_shader(g.mix_shader(fill, pt.outputs[0], filled), glow_em.outputs[0])
     role = c.spec.get("role", "refract")
     # under other glass (role 'fake') the clear part becomes EEVEE's non-refractive fake glass
-    clear = _fake_glass(c, deep_col, rim, normal, frost) if role == "fake" else pt.outputs[0]
-    ev = g.add_shader(g.mix_shader(fill, clear, g.add_shader(fill_em.outputs[0], coat)), glow_em.outputs[0])
+    if role == "fake":
+        clear = _fake_glass(c, _albedo(c, g.vmath("SCALE", t2_body, None, scale=ALBEDO_MAX)), rim, normal, frost)
+    else:
+        # EEVEE's slab refraction tints once (Cycles: once per interface)
+        pte = _principled(c, {**common, "Base Color": deep_col,
+                              "Roughness": frost, "Transmission Weight": 1.0}, normal)
+        clear = pte.outputs[0]
+    fill_ev = g.math("MINIMUM", g.math("MULTIPLY", fill, EEVEE_FILL_GAIN), 1.0)
+    ev = g.add_shader(g.mix_shader(fill_ev, clear, g.add_shader(fill_em.outputs[0], coat)), glow_em.outputs[0])
     return cyc, ev, None
 
 
 def b_clear_glass(c: _Ctx, col, normal):
     return _glass_common(c, col, normal, c.prm("tint", 0.1), c.prm("frost", 0.0), c.prm("ior", 1.5), 1.0,
-                         1.2, "auto", 0.0, coat=1.0, coat_rough=0.01)
+                         1.2, "auto", 0.0, coat=1.0, coat_rough=0.01, white_milk=CLEAR_WHITE_MILK)
 
 
 def b_frosted_glass(c: _Ctx, col, normal):
@@ -748,7 +961,8 @@ def b_frosted_glass(c: _Ctx, col, normal):
         ev = _fake_glass(c, base_m, rim, normal, frost)
     else:
         ev = p.outputs[0]
-    return p.outputs[0], ev, None
+    cyc, ev = _white_ice(c, col, normal, p.outputs[0], ev, WHITE_ICE, frost)
+    return cyc, ev, None
 
 
 def b_dispersive_crystal(c: _Ctx, col, normal):
@@ -782,6 +996,7 @@ def b_dispersive_crystal(c: _Ctx, col, normal):
         ev = _principled(c, {"Base Color": base, "Roughness": frost, "IOR": ior, "Transmission Weight": 1.0,
                              "Coat Weight": 1.0, "Coat Roughness": 0.01, "Emission Color": WHITE,
                              "Emission Strength": rim}, normal).outputs[0]
+    cyc, ev = _white_ice(c, col, normal, cyc, ev, CLEAR_WHITE_MILK, frost)
     return cyc, ev, None
 
 
@@ -799,7 +1014,8 @@ def b_tinted_glass(c: _Ctx, col, normal):
 
 
 def b_glossy_plastic(c: _Ctx, col, normal):
-    s = _principled(c, {"Base Color": col, "Roughness": c.prm("roughness", 0.35), "Coat Weight": c.prm("coat", 1.0),
+    base = diffuse_paint(c, col, 0.03)
+    s = _principled(c, {"Base Color": base, "Roughness": c.prm("roughness", 0.35), "Coat Weight": c.prm("coat", 1.0),
                         "Coat Roughness": c.prm("coatRoughness", 0.03), "Specular IOR Level": 0.5,
                         "Emission Color": WHITE, "Emission Strength": _rim(c, 0.35)}, normal).outputs[0]
     return s, s, None
@@ -807,15 +1023,24 @@ def b_glossy_plastic(c: _Ctx, col, normal):
 
 def b_satin(c: _Ctx, col, normal):
     # specular / sheen kept low: every face-on surface mirrors the bright studio world, and that white wash
-    # desaturated saturated plates (QA #12); the coat (presets.json default 0.15) carries the gloss
-    s = _principled(c, {"Base Color": col, "Roughness": c.prm("roughness", 0.45), "Coat Weight": c.prm("coat", 0.15),
-                        "Coat Roughness": 0.06, "Specular IOR Level": 0.35, "Sheen Weight": 0.03,
-                        "Sheen Roughness": 0.5}, normal).outputs[0]
+    # desaturated saturated plates (QA #12); the coat (presets.json default 0.15) carries the gloss. The
+    # albedo is the one the calibrated rig lights to the displayed paint (white, mid and dark plates alike)
+    # the face-on specular takes the paint's hue: an untinted one mirrored ~0.02 of the grey studio into every
+    # channel, a white floor that desaturated zero-channel brand colours (Files #e89000: blue 0 -> 20); the
+    # reflection taken off the albedo (DIFFUSE_B) is tinted alike
+    g = c.g
+    rad = display_paint(c, col, DIFFUSE_PEAK)
+    mx, _ = _max3(g, rad)
+    tint = g.vmath("SCALE", rad, None, scale=g.math("DIVIDE", 1.0, g.math("MAXIMUM", mx, 1e-4)))
+    base = _albedo(c, g.vmath("SUBTRACT", rad, g.vmath("SCALE", tint, None, scale=DIFFUSE_B)), 0.0)
+    s = _principled(c, {"Base Color": base, "Roughness": c.prm("roughness", 0.45), "Coat Weight": c.prm("coat", 0.15),
+                        "Coat Roughness": 0.06, "Specular IOR Level": 0.35, "Specular Tint": tint,
+                        "Sheen Weight": 0.03, "Sheen Roughness": 0.5}, normal).outputs[0]
     return s, s, None
 
 
 def b_candy(c: _Ctx, col, normal):
-    s = _principled(c, {"Base Color": col, "Roughness": c.prm("roughness", 0.15),
+    s = _principled(c, {"Base Color": diffuse_paint(c, col, 0.03), "Roughness": c.prm("roughness", 0.15),
                         "Subsurface Weight": c.prm("subsurface", 1.0), "Subsurface Radius": col,
                         "Subsurface Scale": 0.08, "Transmission Weight": c.prm("transmission", 0.0),
                         "Coat Weight": c.prm("coat", 1.0), "Coat Roughness": 0.02, "IOR": 1.5,
@@ -824,7 +1049,8 @@ def b_candy(c: _Ctx, col, normal):
 
 
 def _gummy(c: _Ctx, col, normal, rough: float, softness: float, coat: float):
-    return _principled(c, {"Base Color": col, "Roughness": rough, "Subsurface Weight": 1.0,
+    return _principled(c, {"Base Color": diffuse_paint(c, col, 0.02), "Roughness": rough,
+                           "Subsurface Weight": 1.0,
                            "Subsurface Radius": col, "Subsurface Scale": 0.02 + softness * 0.25,
                            "Coat Weight": coat, "Coat Roughness": 0.05, "Emission Color": WHITE,
                            "Emission Strength": _rim(c, 0.4)}, normal).outputs[0]
@@ -892,7 +1118,7 @@ def b_brushed_metal(c: _Ctx, col, normal):
 
 def b_matte_clay(c: _Ctx, col, normal):
     g = c.g
-    base = g.mix_rgb(c.prm("tint", 1.0), CLAY, col)
+    base = diffuse_paint(c, g.mix_rgb(c.prm("tint", 1.0), CLAY, col), 0.01)
     s = _principled(c, {"Base Color": base, "Roughness": c.prm("roughness", 0.9), "Specular IOR Level": 0.3,
                         "Diffuse Roughness": 0.5, "Sheen Weight": c.prm("sheen", 0.15), "Sheen Roughness": 0.5},
                     normal).outputs[0]
@@ -936,9 +1162,10 @@ def b_neon(c: _Ctx, col, normal):
 
 
 def b_flat(c: _Ctx, col, normal):
+    """Unlit, colour-exact: emits the radiance the view transform displays as the paint."""
     em = c.g.node("ShaderNodeEmission")
-    c.g.set(em.inputs["Color"], col)
-    c.g.set(em.inputs["Strength"], 1.0)
+    c.g.set(em.inputs["Color"], paint_radiance(c, col))
+    c.g.set(em.inputs["Strength"], _no_bounce(c))
     return em.outputs[0], em.outputs[0], None
 
 
@@ -1019,7 +1246,7 @@ def make_spec(preset: str, params: Optional[dict], paint: dict, **kw) -> dict:
         "shadow": {"kind": "neutral", "opacity": 0.5},
         "role": "opaque", "thickness": 0.1, "light": (-0.45, 0.45, 0.77), "bbox": (-1, -1, 1, 1),
         "inflate": 0.0, "emission": 0.0, "eevee_backdrop": None, "obj_scale": 1.0, "lit": 1.0,
-        "edge_dark": 0.0,
+        "edge_dark": 0.0, "cm": "neutral",
     }
     spec.update(kw)
     if spec["role"] != "opaque" and spec["preset"] not in GLASS:

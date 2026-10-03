@@ -274,7 +274,7 @@ def _inside_plate(points, canvas, inset):
     s, tx, ty = canvas.art.scale, canvas.art.x, canvas.art.y
     for p in points:
         q = Point(p[0] * s + tx, p[1] * s + ty)
-        if not shape.buffer(-inset * s + 1e-4).contains(q):
+        if not shape.buffer(-inset * s + 3e-4).contains(q):   # 3e-4: cubic quarter-arc error (2.7e-4 r)
             return False
     return True
 

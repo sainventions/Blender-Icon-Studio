@@ -24,7 +24,7 @@ export function MaterialSwatch({ id, preset, className }: { id: string; preset?:
 
 function engineBadge(p: MaterialPreset): { text: string; tone: string; tip: string } | null {
   if (p.engines.eevee === 'fallback')
-    return { text: 'CYCLES', tone: 'bg-warn/90 text-black', tip: p.eeveeNote ?? 'Full effect only in Cycles; EEVEE drafts use a fallback.' }
+    return { text: 'Cycles', tone: 'bg-warn/90 text-black', tip: p.eeveeNote ?? 'Full effect only in Cycles; EEVEE drafts use a fallback.' }
   if (p.eeveeNote) return { text: 'EEVEE≈', tone: 'bg-white/80 text-black', tip: p.eeveeNote }
   return null
 }
@@ -102,7 +102,7 @@ export function MaterialGallery({
                         )}
                       >
                         <MaterialSwatch id={id} preset={m} className="absolute inset-0" />
-                        {b && <span className={cn('absolute right-0.5 top-0.5 rounded-[3px] px-[3px] text-[7px] font-bold leading-[11px]', b.tone)}>{b.text === 'CYCLES' ? 'C' : '≈'}</span>}
+                        {b && <span className={cn('absolute right-0.5 top-0.5 rounded-[3px] px-[3px] text-[7px] font-bold leading-[11px]', b.tone)}>{b.text === 'Cycles' ? 'C' : '≈'}</span>}
                       </span>
                       <span className={cn('w-full truncate text-center text-[9.5px] leading-tight', active ? 'text-fg' : 'text-fg-4 group-hover:text-fg-2')}>{m.label}</span>
                     </button>

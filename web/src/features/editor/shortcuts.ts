@@ -24,7 +24,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { keys: 'Mod+Alt+V', label: 'Paste style onto this project', group: 'General' },
   { keys: 'E', label: 'Export…', group: 'General' },
   { keys: '?', label: 'Keyboard shortcuts', group: 'General' },
-  { keys: '1 – 6', label: 'Switch appearance (Light, Dark, Clear, Clear Dark, Tinted, Tinted Dark)', group: 'View' },
+  { keys: '1 – 6', label: 'Switch appearance (Default, Dark, Clear Light, Clear Dark, Tinted Light, Tinted Dark)', group: 'View' },
   { keys: 'V', label: 'Cycle stage: Viewport → Render → Compare → Matrix', group: 'View' },
   { keys: 'O', label: 'Front / orbit view', group: 'View' },
   { keys: 'X', label: 'Explode layer stack', group: 'View' },
@@ -93,7 +93,7 @@ export function useEditorShortcuts() {
         }
         if (key === ']') return handled(), moveSelectedLayer(1)
         if (key === '[') return handled(), moveSelectedLayer(-1)
-        if (key === '0') return handled(), ui.set({ zoom: 1 })
+        if (key === '0') return ui.stageMode === 'matrix' ? undefined : (handled(), ui.set({ zoom: 1 }))
         return
       }
       if (e.altKey && !key.startsWith('Arrow')) return
@@ -116,8 +116,10 @@ export function useEditorShortcuts() {
         case 'e':
           return handled(), ui.openDialog('export')
         case 'g':
+          if (ui.stageMode === 'matrix') return // no grid in the matrix (finished renders only)
           return handled(), ui.set({ showGrid: !ui.showGrid })
         case 'x':
+          if (ui.stageMode === 'matrix') return
           return handled(), animateExplode()
         case 'o':
           return handled(), ui.set({ view3d: ui.view3d === 'front' ? 'orbit' : 'front' })

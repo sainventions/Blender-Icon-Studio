@@ -6,8 +6,10 @@
       -> picosvg        transforms, shapes -> paths, clip booleans, opacity groups (normalize.py)
       -> elements       simplified paths clipped to the viewBox, raster silhouettes, store
       -> plate          detected background -> Canvas (D9)                     (plate.py)
-      -> split          z-order-consistent layer split                        (split.py, ops.py)
-      -> geometry       splines (art space), regions, silhouettes, safe radius, layer SVGs and
+      -> split          z-order-consistent layer split; tiles of one shape share a layer
+                        built as one 'combined' body                (split.py, ops.py, tiling.py)
+      -> geometry       splines (art space; flush art snapped onto the plate outline), regions,
+                        silhouettes, safe radius, layer SVGs and
                         edge-padded 2048 px textures, hash-cached GeometryBundle (geometry.py)
 
 Public API (PLAN.md §4 A): :func:`import_svg`, :func:`split_layers`, :func:`merge_layers`,
@@ -160,7 +162,9 @@ def import_svg(svg_bytes: bytes, filename: str, project_dir: Path, strategy: Spl
     canvas = make_canvas(plate, {e.id: e for e in elems}, art)
     if not elems:
         warnings = dedupe(warnings + ["no paintable shapes found"])
-    source = SourceInfo(filename=filename, viewBox=tuple(vb), warnings=warnings, plateDetected=plate is not None and not plate.get("fullBleed"))
+    full_bleed = bool(plate and plate.get("fullBleed"))
+    source = SourceInfo(filename=filename, viewBox=tuple(vb), warnings=warnings,
+                        plateDetected=plate is not None and not full_bleed, fullBleed=full_bleed)
     return ImportResult(source=source, elements=[to_model(e, art) for e in elems], layers=layers,
                         canvas=canvas, warnings=warnings)
 

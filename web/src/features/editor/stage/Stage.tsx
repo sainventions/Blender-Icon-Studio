@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import {
   Boxes,
   Columns2,
@@ -16,21 +16,26 @@ import {
 import type { LayerTransform } from '../../../types'
 import { clamp, cn, formatElapsed, formatSeconds } from '../../../lib/format'
 import { renderSig, updateLayer } from '../../../lib/projectOps'
-import { useElementSize, useNow } from '../../../lib/hooks'
+import { useDevicePixelRatio, useElementSize, useNow } from '../../../lib/hooks'
+import { appearanceLabel, engineLabel } from '../../../lib/labels'
+import { checkerOverlayStyle, STAGE_BACKDROP, stageBackgroundStyle } from '../../../lib/stageBackdrop'
 import { useAppStore } from '../../../store/app'
 import { useEditor } from '../../../store/editor'
 import { activeEntry, latestFor, useRender, type RenderEntry } from '../../../store/render'
 import { useUi, type StageMode } from '../../../store/ui'
-import { Button, EmptyState, IconButton, Menu, Popover, ProgressRing, Segmented, Slider, SliderRow, useAnchor } from '../../../components/ui'
+import { Button, EmptyState, IconButton, Menu, Popover, ProgressRing, Segmented, Slider, SliderRow, useAnchor, type MenuItem } from '../../../components/ui'
 import { LightDial, normalizeAngle, Viewport } from '../viewportBridge'
 import { animateExplode } from '../actions'
 import { RenderImage } from './RenderImage'
 import { IconGrid } from './IconGrid'
 import { MatrixView } from './MatrixView'
+import { actualPixelsZoom, frameSide, isOneToOne, pixelScaleLabel } from './frame'
 import { RenditionsStrip } from './RenditionsStrip'
 
 const FRAME_PAD_TOP = 64
 const FRAME_PAD = 40
+const STAGE_BG = stageBackgroundStyle()
+const CHECKER_OVERLAY = checkerOverlayStyle()
 
 /** Ctrl/⌘ + wheel zooms the stage. Needs a native non-passive listener: React registers `wheel` as passive, so
  *  preventDefault() in onWheel is ignored and the browser would zoom the whole app (Edge --app window) too. */
@@ -47,16 +52,26 @@ function wheelZoomRef(el: HTMLDivElement | null) {
   return () => el.removeEventListener('wheel', onStageWheel)
 }
 
+/** Width in image pixels of the render the Render / Compare views show, when known. */
+function useShownNativeWidth(mode: StageMode): number | null {
+  const { entry } = useShownRender()
+  return (mode === 'render' || mode === 'compare') && entry?.url && entry.width ? entry.width : null
+}
+
 export function Stage() {
   const mode = useUi((s) => s.stageMode)
   const zoom = useUi((s) => s.zoom)
   const renditionsOpen = useUi((s) => s.renditionsOpen)
   const [areaRef, area] = useElementSize<HTMLDivElement>()
+  const dpr = useDevicePixelRatio()
+  const native = useShownNativeWidth(mode)
   const fit = Math.max(160, Math.min(area.width - FRAME_PAD * 2, area.height - FRAME_PAD_TOP - FRAME_PAD))
-  const side = Math.round(fit * zoom)
+  const side = frameSide(fit, zoom, dpr, native)
+  const stageRef = useRef<HTMLDivElement>(null)
+  const stageElement = useCallback(() => stageRef.current, [])
 
   return (
-    <div className="relative flex min-w-0 flex-1 flex-col stage-backdrop">
+    <div ref={stageRef} className="relative flex min-w-0 flex-1 flex-col" style={STAGE_BG}>
       <div ref={areaRef} className="relative min-h-0 flex-1 overflow-hidden">
         {mode === 'matrix' ? (
           <MatrixView />
@@ -72,13 +87,15 @@ export function Stage() {
                 paddingTop: FRAME_PAD_TOP - FRAME_PAD,
               }}
             >
-              <div className="relative shrink-0" style={{ width: side, height: side }}>
-                {area.width > 0 && <StageContent mode={mode} side={side} />}
-              </div>
+              <PixelSnapped className="relative shrink-0" style={{ width: side, height: side }}>
+                {area.width > 0 && (
+                  <StageContent mode={mode} side={side} scale={native ? (side * dpr) / native : null} stageElement={stageElement} />
+                )}
+              </PixelSnapped>
             </div>
           </div>
         )}
-        <StageToolbar />
+        <StageToolbar fit={fit} dpr={dpr} native={native} />
         <RenderStatus />
       </div>
       {renditionsOpen ? (
@@ -96,19 +113,30 @@ export function Stage() {
   )
 }
 
-function StageContent({ mode, side }: { mode: StageMode; side: number }) {
+function StageContent({
+  mode,
+  side,
+  scale,
+  stageElement,
+}: {
+  mode: StageMode
+  side: number
+  /** Screen pixels per image pixel of the shown render (null = unknown / no render). */
+  scale: number | null
+  stageElement: () => HTMLElement | null
+}) {
   return (
     <>
-      {(mode === 'viewport' || mode === 'compare') && <LiveViewport />}
-      {mode === 'render' && <RenderPane />}
-      {mode === 'compare' && <CompareOverlay side={side} />}
+      {(mode === 'viewport' || mode === 'compare') && <LiveViewport stageElement={stageElement} />}
+      {mode === 'render' && <RenderPane scale={scale} />}
+      {mode === 'compare' && <CompareOverlay side={side} scale={scale} stageElement={stageElement} />}
       <FrameLabel mode={mode} />
     </>
   )
 }
 
 // ------------------------------------------------------------------------------------------ live three.js
-function LiveViewport() {
+function LiveViewport({ stageElement }: { stageElement: () => HTMLElement | null }) {
   const project = useEditor((s) => s.project)!
   const geometry = useEditor((s) => s.geometry)
   const selected = useEditor((s) => s.selection.primary)
@@ -139,6 +167,7 @@ function LiveViewport() {
       explode={explode}
       view={view}
       showGrid={showGrid}
+      stageElement={stageElement}
       className="absolute inset-0 h-full w-full"
     />
   )
@@ -155,7 +184,7 @@ function useShownRender(): { entry: RenderEntry | null; pinned: boolean; stale: 
   return { entry, pinned: !!pinnedId, stale: !!entry?.sig && entry.sig !== sig && !pinnedId }
 }
 
-function RenderPane() {
+function RenderPane({ scale }: { scale: number | null }) {
   const { entry, pinned, stale } = useShownRender()
   const showGrid = useUi((s) => s.showGrid)
   const appearance = useEditor((s) => s.project!.appearance)
@@ -201,21 +230,62 @@ function RenderPane() {
   }
   return (
     <div className="absolute inset-0">
-      <div className="absolute inset-0 checkerboard opacity-40 [mask-image:radial-gradient(closest-side,black,transparent)]" />
-      <RenderImage url={entry.url} className="absolute inset-0" />
+      <div className="absolute inset-0" style={CHECKER_OVERLAY} />
+      <RenderImage url={entry.url} className="absolute inset-0" pixelExact={isOneToOne(scale)} />
       {showGrid && <IconGrid className="pointer-events-none absolute inset-0 h-full w-full" />}
-      <RenderInfoChip entry={entry} pinned={pinned} stale={stale} />
+      <RenderInfoChip entry={entry} pinned={pinned} stale={stale} scale={scale} />
     </div>
   )
 }
 
-function RenderInfoChip({ entry, pinned, stale }: { entry: RenderEntry; pinned: boolean; stale: boolean }) {
+/**
+ * Keeps its box on whole device pixels (a centred frame can land on a half pixel, which resamples a 1:1 render and
+ * softens it): measures the untransformed position and translates by the sub-pixel remainder.
+ */
+function PixelSnapped({ className, style, children }: { className?: string; style?: CSSProperties; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const dpr = useDevicePixelRatio()
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    let raf = 0
+    const snap = () => {
+      raf = 0
+      el.style.transform = ''
+      const r = el.getBoundingClientRect()
+      const dx = Math.round(r.left * dpr) / dpr - r.left
+      const dy = Math.round(r.top * dpr) / dpr - r.top
+      el.style.transform = Math.abs(dx) > 1e-3 || Math.abs(dy) > 1e-3 ? `translate(${dx}px, ${dy}px)` : ''
+    }
+    const schedule = () => {
+      if (!raf) raf = requestAnimationFrame(snap)
+    }
+    snap()
+    const ro = new ResizeObserver(schedule)
+    ro.observe(el)
+    if (el.parentElement) ro.observe(el.parentElement)
+    window.addEventListener('resize', schedule)
+    return () => {
+      if (raf) cancelAnimationFrame(raf)
+      ro.disconnect()
+      window.removeEventListener('resize', schedule)
+    }
+  }, [dpr])
+  return (
+    <div ref={ref} className={className} style={style}>
+      {children}
+    </div>
+  )
+}
+
+function RenderInfoChip({ entry, pinned, stale, scale }: { entry: RenderEntry; pinned: boolean; stale: boolean; scale: number | null }) {
+  const one = isOneToOne(scale)
   return (
     <div className="absolute -bottom-9 left-1/2 flex -translate-x-1/2 items-center gap-1.5 whitespace-nowrap rounded-full border border-line bg-surface-2/85 px-2.5 py-1 text-3xs text-fg-3 backdrop-blur">
       {pinned && <Pin className="h-3 w-3 text-accent" />}
       <span className="font-semibold capitalize text-fg-2">{entry.quality}</span>
       <span>·</span>
-      <span>{entry.engine ?? (entry.quality === 'draft' ? 'EEVEE' : 'Cycles')}</span>
+      <span>{engineLabel(entry.engine, entry.quality)}</span>
       {entry.width && (
         <>
           <span>·</span>
@@ -228,6 +298,24 @@ function RenderInfoChip({ entry, pinned, stale }: { entry: RenderEntry; pinned: 
           <span className="tabular">{formatSeconds(entry.seconds)}</span>
         </>
       )}
+      {scale != null && (
+        <span
+          data-testid="pixel-scale"
+          data-tip={
+            one
+              ? 'Actual pixels: one render pixel per screen pixel'
+              : scale < 1
+                ? `Shown at ${Math.round(scale * 100)}% of the render's pixels`
+                : `Zoomed past the render's resolution (${Math.round(scale * 100)}%) — render larger for more detail`
+          }
+          className={cn(
+            'ml-0.5 rounded-[4px] px-1 tabular leading-[14px] ring-1 ring-inset',
+            one ? 'text-fg-2 ring-white/15' : scale > 1 ? 'text-warn/90 ring-warn/25' : 'text-fg-4 ring-white/10',
+          )}
+        >
+          {pixelScaleLabel(scale)}
+        </span>
+      )}
       {stale && <span className="ml-1 rounded-full bg-warn/15 px-1.5 text-warn">outdated</span>}
       {pinned && (
         <button type="button" onClick={() => useRender.getState().pin(null)} className="ml-1 rounded-full bg-white/10 px-1.5 text-fg-2 hover:bg-white/20">
@@ -238,7 +326,7 @@ function RenderInfoChip({ entry, pinned, stale }: { entry: RenderEntry; pinned: 
   )
 }
 
-function CompareOverlay({ side }: { side: number }) {
+function CompareOverlay({ side, scale, stageElement }: { side: number; scale: number | null; stageElement: () => HTMLElement | null }) {
   const split = useUi((s) => s.compareSplit)
   const set = useUi((s) => s.set)
   const { entry, stale } = useShownRender()
@@ -250,8 +338,8 @@ function CompareOverlay({ side }: { side: number }) {
     <div className="pointer-events-none absolute inset-0">
       {entry?.url ? (
         <div className="absolute inset-0" style={{ clipPath: `inset(0 0 0 ${x}px)` }}>
-          <div className="absolute inset-0 bg-[#0b0b0f]" />
-          <RenderImage url={entry.url} className="absolute inset-0" />
+          <StageBackdropFill stageElement={stageElement} />
+          <RenderImage url={entry.url} className="absolute inset-0" pixelExact={isOneToOne(scale)} />
         </div>
       ) : (
         <div className="absolute inset-y-0 right-0 flex items-center justify-center bg-black/30 text-2xs text-fg-3 backdrop-blur-sm" style={{ left: x }}>
@@ -296,13 +384,59 @@ function CompareOverlay({ side }: { side: number }) {
   )
 }
 
+/**
+ * Opaque copy of what is behind the frame — the stage background (aligned to the stage element, so its glow and dot
+ * grid line up) under the faded checkerboard — for the render side of Compare: it hides the live view beneath and
+ * matches the live view's own backdrop, so neither half shows a box.
+ */
+function StageBackdropFill({ stageElement }: { stageElement: () => HTMLElement | null }) {
+  const ref = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    let raf = 0
+    const update = () => {
+      raf = 0
+      const st = stageElement()
+      if (!st) return
+      const a = el.getBoundingClientRect()
+      const b = st.getBoundingClientRect()
+      const x = b.left - a.left
+      const y = b.top - a.top
+      el.style.backgroundSize = `${b.width}px ${b.height}px, ${STAGE_BACKDROP.dots.spacing}px ${STAGE_BACKDROP.dots.spacing}px`
+      el.style.backgroundPosition = `${x}px ${y}px, ${x}px ${y}px`
+    }
+    const schedule = () => {
+      if (!raf) raf = requestAnimationFrame(update)
+    }
+    update()
+    const ro = new ResizeObserver(schedule)
+    ro.observe(el)
+    const st = stageElement()
+    if (st) ro.observe(st)
+    window.addEventListener('resize', schedule)
+    document.addEventListener('scroll', schedule, { capture: true, passive: true })
+    return () => {
+      if (raf) cancelAnimationFrame(raf)
+      ro.disconnect()
+      window.removeEventListener('resize', schedule)
+      document.removeEventListener('scroll', schedule, { capture: true })
+    }
+  }, [stageElement])
+  return (
+    <div ref={ref} className="absolute inset-0" style={{ ...STAGE_BG, backgroundRepeat: 'no-repeat, repeat' }}>
+      <div className="absolute inset-0" style={CHECKER_OVERLAY} />
+    </div>
+  )
+}
+
 function FrameLabel({ mode }: { mode: StageMode }) {
   const appearance = useEditor((s) => s.project!.appearance)
   const presets = useAppStore((s) => s.presets.data)
   if (mode === 'render') return null
   return (
     <div className="pointer-events-none absolute -bottom-9 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full border border-line bg-surface-2/85 px-2.5 py-1 text-3xs text-fg-3 backdrop-blur">
-      {mode === 'compare' ? 'Drag the divider to compare' : `Live preview · ${presets?.appearances[appearance]?.label ?? appearance}`}
+      {mode === 'compare' ? 'Drag the divider to compare' : `Live preview · ${appearanceLabel(appearance, presets)}`}
     </div>
   )
 }
@@ -314,7 +448,7 @@ function Centered({ children }: { children: ReactNode }) {
 // ------------------------------------------------------------------------------------------ floating toolbar
 const ZOOMS = [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4]
 
-function StageToolbar() {
+function StageToolbar({ fit, dpr, native }: { fit: number; dpr: number; native: number | null }) {
   const mode = useUi((s) => s.stageMode)
   const explode = useUi((s) => s.explode)
   const showGrid = useUi((s) => s.showGrid)
@@ -325,6 +459,21 @@ function StageToolbar() {
   const lockAngle = useAppStore((s) => s.presets.data?.lighting[lightingPreset]?.lockAngle)
   const zoomMenu = useAnchor<HTMLButtonElement>()
   const zoomRef = useRef<HTMLButtonElement>(null)
+  const actual = native ? +actualPixelsZoom(fit, dpr, native).toFixed(4) : null
+  const zoomItems: MenuItem[] = [
+    ...ZOOMS.map<MenuItem>((z) => ({
+      key: String(z),
+      label: z === 1 ? (native ? 'Fit (100%, max 1:1)' : 'Fit (100%)') : `${z * 100}%`,
+      checked: zoom === z,
+      onSelect: () => set({ zoom: z }),
+    })),
+    ...(actual != null && Math.abs(actual - 1) > 0.001
+      ? ([
+          { type: 'separator', key: 'sep-actual' },
+          { key: 'actual', label: 'Actual pixels (1:1)', checked: Math.abs(zoom - actual) < 0.001, onSelect: () => set({ zoom: actual }) },
+        ] satisfies MenuItem[])
+      : []),
+  ]
 
   const setAngle = (deg: number) => {
     const a = normalizeAngle(deg)
@@ -344,44 +493,49 @@ function StageToolbar() {
           { value: 'matrix', icon: <LayoutGrid />, label: 'Matrix', tip: 'All six renditions + size waterfall', kbd: 'V' },
         ]}
       />
-      <Divider />
-      <div className="flex items-center gap-1.5 pl-0.5 pr-1" data-tip="Explode the layer stack" data-tip-kbd="X">
-        <IconButton label="Explode" kbd="X" size="sm" active={explode > 0.01} onClick={() => animateExplode()}>
-          <Boxes />
-        </IconButton>
-        <Slider value={explode} min={0} max={1} step={0.01} onChange={(v) => set({ explode: v })} className="w-20" ariaLabel="Explode" />
-      </div>
-      <Divider />
-      <IconButton label="Icon grid" kbd="G" active={showGrid} onClick={() => set({ showGrid: !showGrid })}>
-        <Grid3x3 />
-      </IconButton>
-      <div className="flex items-center">
-        <IconButton label="Zoom out" size="sm" onClick={() => set({ zoom: clamp(+(zoom / 1.25).toFixed(2), 0.25, 4) })}>
-          <Minus />
-        </IconButton>
-        <button
-          ref={zoomRef}
-          type="button"
-          onClick={() => zoomRef.current && zoomMenu.toggle(zoomRef.current)}
-          className="h-6 w-11 rounded-md text-2xs tabular text-fg-2 transition-colors hover:bg-white/[0.07]"
-          data-tip="Zoom (Ctrl+wheel)"
-          data-tip-kbd="Mod+0"
-        >
-          {Math.round(zoom * 100)}%
-        </button>
-        <IconButton label="Zoom in" size="sm" onClick={() => set({ zoom: clamp(+(zoom * 1.25).toFixed(2), 0.25, 4) })}>
-          <Plus />
-        </IconButton>
-      </div>
-      <Divider />
-      <LightControl angle={angle} locked={lockAngle != null} onChange={setAngle} />
+      {/* Matrix shows finished renders: zoom, explode, grid and the light dial do nothing there. */}
+      {mode !== 'matrix' && (
+        <>
+          <Divider />
+          <div className="flex items-center gap-1.5 pl-0.5 pr-1" data-tip="Explode the layer stack" data-tip-kbd="X">
+            <IconButton label="Explode" kbd="X" size="sm" active={explode > 0.01} onClick={() => animateExplode()}>
+              <Boxes />
+            </IconButton>
+            <Slider value={explode} min={0} max={1} step={0.01} onChange={(v) => set({ explode: v })} className="w-20" ariaLabel="Explode" />
+          </div>
+          <Divider />
+          <IconButton label="Icon grid" kbd="G" active={showGrid} onClick={() => set({ showGrid: !showGrid })}>
+            <Grid3x3 />
+          </IconButton>
+          <div className="flex items-center">
+            <IconButton label="Zoom out" size="sm" onClick={() => set({ zoom: clamp(+(zoom / 1.25).toFixed(2), 0.25, 4) })}>
+              <Minus />
+            </IconButton>
+            <button
+              ref={zoomRef}
+              type="button"
+              onClick={() => zoomRef.current && zoomMenu.toggle(zoomRef.current)}
+              className="h-6 w-11 rounded-md text-2xs tabular text-fg-2 transition-colors hover:bg-white/[0.07]"
+              data-tip="Zoom (Ctrl+wheel)"
+              data-tip-kbd="Mod+0"
+            >
+              {Math.round(zoom * 100)}%
+            </button>
+            <IconButton label="Zoom in" size="sm" onClick={() => set({ zoom: clamp(+(zoom * 1.25).toFixed(2), 0.25, 4) })}>
+              <Plus />
+            </IconButton>
+          </div>
+          <Divider />
+          <LightControl angle={angle} locked={lockAngle != null} onChange={setAngle} />
+        </>
+      )}
       <Menu
-        open={zoomMenu.open}
+        open={zoomMenu.open && mode !== 'matrix'}
         onClose={zoomMenu.close}
         anchor={zoomMenu.anchor}
         placement="bottom"
-        width={140}
-        items={ZOOMS.map((z) => ({ key: String(z), label: z === 1 ? 'Fit (100%)' : `${z * 100}%`, checked: zoom === z, onSelect: () => set({ zoom: z }) }))}
+        width={176}
+        items={zoomItems}
       />
     </div>
   )
@@ -438,6 +592,7 @@ function Divider() {
 // ------------------------------------------------------------------------------------------ render progress
 function RenderStatus() {
   const active = useRender((s) => activeEntry(s))
+  const presets = useAppStore((s) => s.presets.data)
   const cancel = useRender((s) => s.cancel)
   const now = useNow(!!active, 100)
   if (!active) return null
@@ -450,7 +605,7 @@ function RenderStatus() {
           {active.quality} {active.state === 'queued' ? '· queued' : ''}
         </div>
         <div className="max-w-[160px] truncate text-3xs text-fg-3">
-          {active.state === 'running' ? formatElapsed(now - started) : active.appearance}
+          {active.state === 'running' ? formatElapsed(now - started) : appearanceLabel(active.appearance, presets)}
           {active.message && active.state === 'running' ? ` · ${active.message}` : ''}
         </div>
       </div>

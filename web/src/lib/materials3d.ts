@@ -11,6 +11,9 @@
 //                       · neon hot core, per-pixel Beer–Lambert attenuation colour, front-face "inflate" dome
 //                       · "fake glass" for glass layers covered by other glass (PLAN D7): opaque, shows the plate
 //                         (or backdrop) through itself so the top glass can still refract it
+//                       · colour fidelity (worker round 4): in the 'neutral' colour mode paints are pre-compensated
+//                         for Khronos PBR Neutral (displayPaint), diffuse presets get the albedo the calibrated rig
+//                         lights to that radiance (diffuseAlbedo), Liquid Glass / flat emit it
 // applyIconMaterial() pushes a spec + context into an IconMaterial in place (recompiles only on topology change).
 import * as THREE from 'three'
 import type { MaterialSpec, Presets } from '../types'
@@ -73,6 +76,20 @@ export interface IconMaterialSpec {
   attenuationDistanceScale: number
   /** Self-illumination of the paint colour (emission presets: strength). */
   emissive: number
+  /** Worker _glass_common(white_milk): white paints get at least this frosted (milky) share (clear glass). */
+  whiteMilk: number
+  /**
+   * Worker _albedo(display_paint(col), B): diffuse presets take the albedo that the calibrated rig lights to the
+   * displayed paint (radiance = DIFFUSE_A · albedo + B face-on). null = the paint is used as-is.
+   */
+  albedoB: number | null
+  /** Worker b_flat: the emission is the radiance the view transform displays as the paint (display_paint). */
+  displayEmission: boolean
+  /**
+   * Worker b_satin: the face-on specular takes the paint's hue (Specular Tint = rad / max(rad)) and the reflection
+   * taken off the albedo (B) is tinted alike, so zero-channel brand colours keep their zero channel.
+   */
+  specularTint: boolean
   /** Neon hot core: mix toward white where the tube faces the camera. */
   core: number
   rim: { key: number; back: number; glow: number }
@@ -87,23 +104,26 @@ export interface IconMaterialSpec {
 const WHITE: RGB = [1, 1, 1]
 
 /**
- * Worker b_liquid_glass (art-directed Icon Composer look), mirrored term by term in the shader (BIS_LG). With
- * w = whiteness(paint)^1.5 and L = perceptual lightness of the paint (luminance^(1/2.2); dark paints → smoked glass):
- *  · face = mix(clear glass, self-lit fill, fill) with fill = mix(fCol, fWhite, w) · ((0.8 + 0.12 w) → 1.0 bottom →
- *    top) [· clamp(1.15 · mono lum) in clear renditions] · (0.12 → 1 smoothstep over e 0.3 → 0.8), where
- *    e = 1 − |N.xy| (0 = silhouette, 1 = cap), fCol = clamp(1.2 − 0.9·transl), fWhite = clamp(1.45 − 0.6·transl, ≤ 0.97);
- *  · self-lit fill = 0.18 · diffuse(body) + 0.82 · emission(body · (0.8 → 1.04 bottom → top) · lit · face · (1 + 0.2 w))
- *    under the coat, face = 1 + 0.45 · edgeDark;
- *  · clear glass tinted body^k, k = 4 → 2 per interface over e 0 → 0.8 (deeper toward the outline; three.js tints a
- *    path once: LG_DEEP) [× (1 − edgeDark → 1, smoothstep over e 0 → 0.6) in clear-light], specular level 0.4 and coat
+ * Worker b_liquid_glass (art-directed Icon Composer look, round-4 colour fidelity), mirrored term by term in the shader
+ * (BIS_LG). With w = whiteness(paint)^1.5, L = perceptual lightness of the paint (luminance^(1/2.2); dark paints →
+ * smoked glass), rad = displayPaint(body) (the radiance the view transform shows as the paint):
+ *  · face = mix(clear glass, self-lit fill, fill) with fill = mix(1 − tCap, 1 − 0.35 tCap, w) · (0.94 → 1.0 bottom →
+ *    top) [· clamp(1.15 · mono lum) in clear renditions] · (LG_EDGE_BODY → 1 smoothstep over e 0 → 0.45), where
+ *    e = 1 − |N.xy| (0 = silhouette, 1 = cap) and tCap = liquidGlassClearShare(transl) (16 % at the default 0.75);
+ *  · self-lit fill = 0.15 · diffuse(albedo(rad − LG_COAT_B)) + 0.85 · emission((rad − LG_COAT_B) · (0.95 → 1.04
+ *    bottom → top) · lit · face) under the coat, face = 1 + 0.45 · edgeDark;
+ *  · clear glass tinted t2^(2γ), t2 = min(rad / ALBEDO_MAX, 1), γ = 0.9 → 0.5 per interface over e 0 → 0.6 (Cycles
+ *    tints at both interfaces, three.js once: the exponent is doubled; translucent pieces: untinted, t2 = 1) [× (1 −
+ *    edgeDark → 1, smoothstep over e 0 → 0.6) in clear-light]; fake glass (under other glass) shows albedo(rad);
+ *    specular level 0.4 and coat
  *    both faded out toward the silhouette (e 0.08 → 0.6) and × dk = (0.35 → 1 over L 0 → 0.5) for dark paints;
- *  · rim = 5 · rim · (key² + 0.16 · back²) · band(e, RIM_BANDS[specular]) · (0.1 → 1, smoothstep over L 0.05 → 0.7),
+ *  · rim = 5 · rim · (key² + 0.16 · back²) · band(e, RIM_BANDS[specular]) · (0.06 → 1, smoothstep over L 0.1 → 0.8),
  *    key/back = ±dot(N.xy, L.xy) normalised;
  *  · glow = mix(body, white, 0.3 L) · band(e, 0.3, 0.45, 0.8, 0.95) · (0.08 + 0.92 · back) · 1.4 · glow · lit;
  *  · lit = clamp(0.55 + 0.45 · key light, 0.4, 1.4) (MaterialContext.lit).
  */
 export interface LiquidGlassModel {
-  /** Fill share for saturated (x) / white (y) paint. */
+  /** Fill share of the flat cap for saturated (x) / white (y) paint: 1 − tCap, 1 − 0.35 · tCap. */
   fill: [number, number]
   /** Rim emission strength (5 · rim; 0 when specular is off). */
   rim: number
@@ -121,10 +141,110 @@ export const LG_RIM_BANDS: Record<string, [number, number, number, number]> = {
   inside: [0.3, 0.42, 0.6, 0.78],
   outside: [0.0, 0.005, 0.06, 0.14],
 }
-/** Worker Liquid Glass: diffuse share of the self-lit fill (the rest is emission). */
-export const LG_FILL_DIFFUSE = 0.18
-/** Liquid Glass clear-glass tint exponent at the silhouette / on the face (see PAINT_APPLY). */
-export const LG_DEEP: [number, number] = [2.0, 1.6]
+/** Worker Liquid Glass: diffuse share of the self-lit fill (the rest is emission): mix_shader(0.85, diffuse, emission). */
+export const LG_FILL_DIFFUSE = 0.15
+/** Worker Liquid Glass clear tint: per-interface gamma of t2 at the silhouette / on the cap (e 0 → 0.6). */
+export const LG_DEEP: [number, number] = [0.9, 0.5]
+
+// ---------------------------------------------------------------- worker round-4 colour calibration (mirrored)
+/** materials.py: face-on radiance of a diffuse surface under the calibrated rig = DIFFUSE_A · albedo + DIFFUSE_B. */
+export const DIFFUSE_A = 1.0
+export const DIFFUSE_B = 0.017
+/** materials.py: brightest diffuse albedo used to reach a paint (hue kept when capped). */
+export const ALBEDO_MAX = 1.3
+/** materials.py: radiance the Liquid Glass coat reflects of the studio world (taken off the emitted fill). */
+export const LG_COAT_B = 0.01
+/** util.py: Khronos PBR Neutral highlight-compression start (0.8 − 0.04) and desaturation. */
+export const PBR_START = 0.76
+export const PBR_DESAT = 0.15
+/** util.py: target-peak caps of display_paint for neutral (x) / fully saturated (y) paints, blended by saturation^POW. */
+export const NEUTRAL_CAP: [number, number] = [0.975, 0.86]
+export const NEUTRAL_CAP_POW = 12
+/**
+ * materials.py: brightest displayed peak a diffuse surface can reach — PBR Neutral's pre-image of that peak is
+ * ALBEDO_MAX + DIFFUSE_B, so diffuse presets cap their display_paint target there (a brighter target would exceed
+ * ALBEDO_MAX and the whole colour would be scaled darker).
+ */
+export const DIFFUSE_PEAK = 1 - (1 - PBR_START) ** 2 / (ALBEDO_MAX + DIFFUSE_B - (2 * PBR_START - 1))
+/** materials.py: the B offset each diffuse preset passes to diffuse_paint (b_satin uses DIFFUSE_B). */
+export const ALBEDO_B: Record<string, number> = {
+  satin: DIFFUSE_B,
+  glossy_plastic: 0.03,
+  candy: 0.03,
+  gummy: 0.02,
+  matte_clay: 0.01,
+}
+
+/** materials.py LG_CAP_CLEAR: Liquid Glass clear (see-through) share of the flat cap at the default translucency. */
+export const LG_CAP_CLEAR = 0.16
+/** materials.py LG_EDGE_BODY: Liquid Glass body share left at the silhouette (the bevel lenses what lies beneath). */
+export const LG_EDGE_BODY = 0.35
+/** materials.py TRANSLUCENT_CLEAR: how untinted a translucent Liquid Glass piece's clear share is. */
+export const TRANSLUCENT_CLEAR = 0.3
+/** materials.py CLEAR_WHITE_MILK: clear glass — frosted share of a white paint's body (readable white glyphs). */
+export const CLEAR_WHITE_MILK = 0.6
+/** materials.py: Liquid Glass rim × (lo → 1, smoothstep over paint lightness L a → b): dark paints keep a faint sheen. */
+export const LG_RIM_LIGHTNESS = { from: [0.1, 0.8] as const, to: [0.06, 1.0] as const }
+
+/** Worker Liquid Glass clear share of the flat cap: LG_CAP_CLEAR (16 %) at the default translucency 0.75, ≤ 60 %. */
+export function liquidGlassClearShare(translucency: number): number {
+  return Math.min(0.6, LG_CAP_CLEAR * (Math.max(0, translucency) / 0.75) ** 4)
+}
+
+/**
+ * Worker display_paint / util.pbr_neutral_inverse ('neutral' colour mode): the scene-linear radiance that Khronos PBR
+ * Neutral displays as the (linear) paint colour — the 0.04 toe offset added back, peaks above 0.76 un-compressed and
+ * re-saturated, the target peak capped by saturation (NEUTRAL_CAP). JS twin of GLSL `bisDisplayPaint`.
+ */
+export function displayPaint(rgb: RGB, maxPeak: number = NEUTRAL_CAP[0]): RGB {
+  const y0 = rgb.map((v) => Math.max(0, v)) as RGB
+  const mx = Math.max(...y0)
+  const mn = Math.min(...y0)
+  const sat = clamp(1 - mn / Math.max(mx, 1e-5), 0, 1)
+  const cap = NEUTRAL_CAP[0] + (NEUTRAL_CAP[1] - NEUTRAL_CAP[0]) * sat ** NEUTRAL_CAP_POW
+  const npk = Math.min(mx, cap, maxPeak)
+  const y = y0.map((v) => (v * npk) / Math.max(mx, 1e-5)) as RGB
+  let x1 = y
+  if (npk > PBR_START) {
+    const d = 1 - PBR_START
+    const peak = PBR_START - d + (d * d) / (1 - npk)
+    const inv = PBR_DESAT * (peak - npk) + 1
+    const g = 1 - 1 / inv
+    x1 = y.map((v) => (Math.max(0, (v - g * npk) * inv) * peak) / Math.max(npk, 1e-5)) as RGB
+  }
+  const m = Math.min(...x1)
+  const off = m >= 0.04 ? 0.04 : 0.4 * Math.sqrt(Math.max(m, 0)) - m
+  return x1.map((v) => v + off) as RGB
+}
+
+/**
+ * Worker paint_radiance: displayPaint for opaque pieces; translucent pieces (opacity / alpha paint) are blended in
+ * radiance, so in the 'neutral' mode they use the transform's mid-tone approximation paint + 0.04, peak ≤ 1.
+ */
+export function paintRadiance(rgb: RGB, translucent: boolean, neutralMode = true): RGB {
+  if (!neutralMode) return rgb
+  return translucent ? diffuseAlbedo(rgb, -0.04, 1) : displayPaint(rgb)
+}
+
+/** Worker b_satin: Specular Tint (paint hue at peak 1) and the albedo of (rad − tint · B) for the paint `rgb`. */
+export function satinPaint(rgb: RGB, neutralMode = true): { albedo: RGB; specularTint: RGB } {
+  const rad = neutralMode ? displayPaint(rgb, DIFFUSE_PEAK) : rgb
+  const mx = Math.max(Math.max(...rad), 1e-4)
+  const tint = rad.map((v) => v / mx) as RGB
+  return { albedo: diffuseAlbedo(rad.map((v, i) => v - tint[i] * DIFFUSE_B) as RGB, 0), specularTint: tint }
+}
+
+/** Worker diffuse_paint: the albedo of a diffuse preset (B = ALBEDO_B[preset]) for the paint `rgb`. */
+export function diffusePaint(rgb: RGB, b: number = DIFFUSE_B, neutralMode = true): RGB {
+  return diffuseAlbedo(neutralMode ? displayPaint(rgb, DIFFUSE_PEAK) : rgb, b)
+}
+
+/** Worker _albedo: the diffuse albedo the calibrated rig lights to radiance `rad` (hue kept when capped at lim). */
+export function diffuseAlbedo(rad: RGB, b: number, lim = ALBEDO_MAX): RGB {
+  const x = rad.map((v) => Math.max(0, v - b) / DIFFUSE_A) as RGB
+  const k = Math.min(lim / Math.max(Math.max(...x), 1e-5), 1)
+  return x.map((v) => v * k) as RGB
+}
 /** Worker Liquid Glass: Specular IOR Level 0.4 on the face (three.js specularIntensity 1 ≙ Blender 0.5). */
 export const LG_SPECULAR = 0.8
 
@@ -204,6 +324,10 @@ function baseSpec(presetId: string, paintMode: PaintMode, intent: MaterialIntent
     attenuationMix: 0,
     attenuationDistanceScale: Infinity,
     emissive: 0,
+    whiteMilk: 0,
+    albedoB: null,
+    displayEmission: false,
+    specularTint: false,
     core: 0,
     rim: { key: 0, back: 0, glow: 0 },
     lg: null,
@@ -239,7 +363,8 @@ export function describeMaterial(spec: MaterialSpec, presets: Presets | null | u
     case 'liquid_glass': {
       const specular = str('specular', 'auto')
       const transl = clamp(num('translucency', 0.75), 0, 1)
-      glassTint(0.5)
+      const tCap = liquidGlassClearShare(transl)
+      glassTint(1.0)
       s.transmission = 1
       s.roughness = num('frost', 0.06)
       s.ior = num('ior', 1.5)
@@ -248,7 +373,7 @@ export function describeMaterial(spec: MaterialSpec, presets: Presets | null | u
       s.clearcoatRoughness = 0.02
       s.specularIntensity = LG_SPECULAR
       s.lg = {
-        fill: [clamp(1.2 - 0.9 * transl, 0, 1), clamp(1.45 - 0.6 * transl, 0, 0.97)],
+        fill: [1 - tCap, 1 - 0.35 * tCap],
         rim: specular === 'off' ? 0 : 5 * num('rim', 1),
         band: LG_RIM_BANDS[specular] ?? LG_RIM_BANDS.auto,
         glow: num('glow', 0.35),
@@ -258,6 +383,7 @@ export function describeMaterial(spec: MaterialSpec, presets: Presets | null | u
     }
     case 'clear_glass':
       glassTint(0.1)
+      s.whiteMilk = CLEAR_WHITE_MILK
       s.transmission = 1
       s.roughness = num('frost', 0)
       s.ior = num('ior', 1.5)
@@ -323,6 +449,7 @@ export function describeMaterial(spec: MaterialSpec, presets: Presets | null | u
     }
     // Rim strengths below mirror the worker's _rim(strength) on the solid presets (≈ strength / 5).
     case 'glossy_plastic':
+      s.albedoB = ALBEDO_B.glossy_plastic
       s.roughness = num('roughness', 0.35)
       s.clearcoat = num('coat', 1)
       s.clearcoatRoughness = num('coatRoughness', 0.03)
@@ -332,6 +459,8 @@ export function describeMaterial(spec: MaterialSpec, presets: Presets | null | u
       // Worker b_satin: Specular IOR Level 0.35 (three.js specularIntensity 1 ≙ Blender 0.5), sheen 0.03 — kept low so
       // the mirrored studio world does not wash saturated plates out; the coat (presets.json default 0.15) carries
       // the gloss.
+      s.albedoB = ALBEDO_B.satin
+      s.specularTint = true
       s.roughness = num('roughness', 0.45)
       s.clearcoat = num('coat', 0.15)
       s.clearcoatRoughness = 0.06
@@ -342,6 +471,7 @@ export function describeMaterial(spec: MaterialSpec, presets: Presets | null | u
     case 'candy': {
       const sss = num('subsurface', 1)
       const trans = num('transmission', 0)
+      s.albedoB = ALBEDO_B.candy
       s.roughness = num('roughness', 0.15)
       s.clearcoat = num('coat', 1)
       s.clearcoatRoughness = 0.02
@@ -361,6 +491,7 @@ export function describeMaterial(spec: MaterialSpec, presets: Presets | null | u
     }
     case 'gummy': {
       const soft = num('subsurfaceScale', 0.3)
+      s.albedoB = ALBEDO_B.gummy
       s.roughness = num('roughness', 0.2)
       s.clearcoat = num('coat', 0.6)
       s.clearcoatRoughness = 0.05
@@ -395,6 +526,7 @@ export function describeMaterial(spec: MaterialSpec, presets: Presets | null | u
       break
     }
     case 'matte_clay':
+      s.albedoB = ALBEDO_B.matte_clay
       s.neutral = [0.8, 0.76, 0.72]
       s.paintMix = num('tint', 1)
       s.roughness = num('roughness', 0.9)
@@ -430,6 +562,7 @@ export function describeMaterial(spec: MaterialSpec, presets: Presets | null | u
       s.specularIntensity = 0
       s.envMapIntensity = 0
       s.emissive = 1
+      s.displayEmission = true
       s.unlit = true
       break
     default:
@@ -518,6 +651,11 @@ export interface MaterialContext {
   opacity: number
   /** Liquid Glass self-illumination factor (liquidGlassLit(rig key)); default 1. */
   lit?: number
+  /**
+   * The project's colour mode is 'neutral' (Khronos PBR Neutral): paints are pre-compensated for it (worker
+   * display_paint; identity in the other modes). Default false.
+   */
+  displayPaint?: boolean
 }
 
 function createUniforms() {
@@ -557,6 +695,8 @@ function createUniforms() {
     bisLgGlow: { value: 0 },
     bisLgLit: { value: 1 },
     bisLgEdgeDark: { value: 0 },
+    bisAlbedoB: { value: 0 },
+    bisWhiteMilk: { value: 0 },
   }
 }
 
@@ -585,6 +725,14 @@ vBisClip = gl_Position;
 #endif
 `
 
+const glslNum = (v: number) => (Number.isInteger(v) ? v.toFixed(1) : String(v))
+const NEUTRAL_CAP_GLSL = NEUTRAL_CAP.map(glslNum)
+const PBR_START_GLSL = glslNum(PBR_START)
+const PBR_DESAT_GLSL = glslNum(PBR_DESAT)
+const DIFFUSE_A_GLSL = glslNum(DIFFUSE_A)
+const ALBEDO_MAX_GLSL = glslNum(ALBEDO_MAX)
+const LG_COAT_B_GLSL = glslNum(LG_COAT_B)
+
 const FRAGMENT_PARS = /* glsl */ `
 uniform vec3 bisPaintColor;
 uniform float bisPaintMix;
@@ -599,6 +747,8 @@ uniform float bisRimBack;
 uniform float bisGlow;
 uniform float bisMilk;
 uniform vec2 bisMilkRange;
+uniform float bisAlbedoB;
+uniform float bisWhiteMilk;
 varying vec2 vBisArt;
 varying vec3 vBisWorld;
 varying vec4 vBisClip;
@@ -634,18 +784,63 @@ varying vec4 vBisClip;
   uniform float bisLgGlow;
   uniform float bisLgLit;
   uniform float bisLgEdgeDark;
+  vec3 bisRad = vec3( 1.0 );
   // Worker _band: smoothstep(a0, a1, e) · (1 − smoothstep(b0, b1, e)).
   float bisBand( vec4 b, float e ) { return smoothstep( b.x, b.y, e ) * ( 1.0 - smoothstep( b.z, b.w, e ) ); }
-  // Worker _whiteness: perceptual HSV value × (1 − saturation).
-  float bisWhiteness( vec3 c ) {
-    float mx = max( max( c.r, c.g ), c.b );
-    float mn = min( min( c.r, c.g ), c.b );
-    float sat = mx > 1e-6 ? ( mx - mn ) / mx : 0.0;
-    return clamp( pow( max( mx, 0.0 ), 1.0 / 2.2 ) * ( 1.0 - sat ), 0.0, 1.0 );
-  }
 #endif
+// Worker _whiteness: perceptual HSV value × (1 − saturation).
+float bisWhiteness( vec3 c ) {
+  float mx = max( max( c.r, c.g ), c.b );
+  float mn = min( min( c.r, c.g ), c.b );
+  float sat = mx > 1e-6 ? ( mx - mn ) / mx : 0.0;
+  return clamp( pow( max( mx, 0.0 ), 1.0 / 2.2 ) * ( 1.0 - sat ), 0.0, 1.0 );
+}
+// Worker display_paint (colour mode 'neutral'): radiance that Khronos PBR Neutral displays as the paint (displayPaint()).
+vec3 bisDisplayPaint( vec3 c, float maxPeak ) {
+  #ifdef BIS_DISPLAY_PAINT
+    vec3 y0 = max( c, vec3( 0.0 ) );
+    float mx = max( max( y0.r, y0.g ), y0.b );
+    float mn = min( min( y0.r, y0.g ), y0.b );
+    float sat = clamp( 1.0 - mn / max( mx, 1e-5 ), 0.0, 1.0 );
+    float cap = ${NEUTRAL_CAP_GLSL[0]} + ( ${NEUTRAL_CAP_GLSL[1]} - ${NEUTRAL_CAP_GLSL[0]} ) * pow( sat, ${glslNum(NEUTRAL_CAP_POW)} );
+    float npk = min( mx, min( cap, maxPeak ) );
+    vec3 y = y0 * ( npk / max( mx, 1e-5 ) );
+    vec3 x1 = y;
+    if ( npk > ${PBR_START_GLSL} ) {
+      float d = 1.0 - ${PBR_START_GLSL};
+      float peak = ${PBR_START_GLSL} - d + d * d / ( 1.0 - npk );
+      float inv = ${PBR_DESAT_GLSL} * ( peak - npk ) + 1.0;
+      float g = 1.0 - 1.0 / inv;
+      x1 = max( ( y - g * npk ) * inv, vec3( 0.0 ) ) * ( peak / max( npk, 1e-5 ) );
+    }
+    float m = min( min( x1.r, x1.g ), x1.b );
+    float off = m > 0.04 ? 0.04 : 0.4 * sqrt( max( m, 0.0 ) ) - m;
+    return x1 + off;
+  #else
+    return c;
+  #endif
+}
+vec3 bisDisplayPaint( vec3 c ) { return bisDisplayPaint( c, ${NEUTRAL_CAP_GLSL[0]} ); }
+// Worker _albedo: the albedo the calibrated rig lights to radiance rad (DIFFUSE_A · albedo + b), hue kept at the cap.
+vec3 bisAlbedoLim( vec3 rad, float b, float lim ) {
+  vec3 x = max( rad - b, vec3( 0.0 ) ) / ${DIFFUSE_A_GLSL};
+  float mx = max( max( x.r, x.g ), x.b );
+  return x * min( lim / max( mx, 1e-5 ), 1.0 );
+}
+vec3 bisAlbedo( vec3 rad, float b ) { return bisAlbedoLim( rad, b, ${ALBEDO_MAX_GLSL} ); }
+// Worker paint_radiance: display_paint for opaque pieces; translucent ones (opacity / alpha paint, BIS_SRGB_ALPHA) blend
+// in radiance, so they take the transform's mid-tone approximation paint + 0.04, peak ≤ 1 (paintRadiance()).
+vec3 bisPaintRadiance( vec3 c ) {
+  #if defined( BIS_DISPLAY_PAINT ) && defined( BIS_SRGB_ALPHA )
+    return bisAlbedoLim( c, -0.04, 1.0 );
+  #else
+    return bisDisplayPaint( c );
+  #endif
+}
 // Stretched mono level of the last paint sample (worker _lum, clear renditions).
 float bisLumSt = 1.0;
+// Worker b_satin Specular Tint (paint hue, peak 1) — applied to the dielectric F0 after lights_physical_fragment.
+vec3 bisSpecTint = vec3( 1.0 );
 // Extra tint of the transmitted (refracted / fake-glass) light on top of the diffuse colour (Liquid Glass: deeper toward
 // the outline, clear-light edge darkening; the diffuse lobe keeps the body colour, like the worker's fill Principled).
 vec3 bisTransTint = vec3( 1.0 );
@@ -683,6 +878,10 @@ float bisMilkAmount( vec3 paint ) {
   float m = mix( 0.45, 1.0, h ) * bisMilk;
   #ifdef BIS_MILK_LUM
     m *= clamp( pow( dot( paint, vec3( 0.2126, 0.7152, 0.0722 ) ), 1.0 / 2.2 ) * 1.3, 0.0, 1.0 );
+  #elif defined( BIS_WHITE_MILK )
+    // Worker _glass_common(white_milk): white paints tint nothing, so as water-clear glass a white glyph vanished
+    // into the plate it lenses — they become frosted ("ice"): milk ≥ whiteness^1.5 · white_milk · (0.8 → 1 up).
+    m = max( m, pow( bisWhiteness( paint ), 1.5 ) * bisWhiteMilk * mix( 0.8, 1.0, h ) );
   #endif
   return clamp( m, 0.0, 1.0 );
 }
@@ -706,24 +905,44 @@ vec3 bisP = bisPaintSample();
   // with a gentler vertical falloff).
   float bisLum = bisLightness( bisP );
   float bisWh = pow( bisWhiteness( bisP ), 1.5 );
-  float bisFill = mix( bisLgFill.x, bisLgFill.y, bisWh ) * mix( 0.8 + 0.12 * bisWh, 1.0, bisV01 );
+  float bisFill = mix( bisLgFill.x, bisLgFill.y, bisWh ) * mix( 0.94, 1.0, bisV01 );
   #if BIS_INTENT == 1
     bisFill = clamp( bisFill * bisLumSt * 1.15, 0.0, 1.0 );
   #endif
-  bisFill = clamp( bisFill * mix( 0.12, 1.0, smoothstep( 0.3, 0.8, bisE ) ), 0.0, 1.0 );
+  bisFill = clamp( bisFill * mix( ${glslNum(LG_EDGE_BODY)}, 1.0, smoothstep( 0.0, 0.45, bisE ) ), 0.0, 1.0 );
   float bisMilkV = bisFill;
 #else
   float bisMilkV = bisMilkAmount( bisP );
 #endif
 #if BIS_PAINT_MODE != 2
   #ifdef BIS_LG
-    // Clear-glass tint deepens toward the outline (worker: body^(4 → 2) per interface over e 0 → 0.8). three.js
-    // tints a transmitted path once; body^(LG_DEEP) over the same range matches the Cycles renders. The diffuse share
-    // of the self-lit fill keeps the plain body colour (worker: fill Principled on base_m).
-    diffuseColor.rgb *= bisPm;
-    bisTransTint = pow( max( bisPm, vec3( 1e-4 ) ), vec3( mix( ${LG_DEEP[0].toFixed(2)}, ${LG_DEEP[1].toFixed(2)}, clamp( bisE / 0.8, 0.0, 1.0 ) ) - 1.0 ) );
+    // Body = the displayed paint radiance (worker rad = display_paint(base_m)); the diffuse share of the self-lit fill
+    // takes the albedo of (rad − coat reflection). The clear share is tinted t2^(2γ), t2 = rad / ALBEDO_MAX (worker:
+    // t2^γ per interface, γ 0.9 → 0.5 over e 0 → 0.6; three.js tints a transmitted path once, hence 2γ), so over a
+    // white plate it, too, shows the paint. bisTransTint is relative to the diffuse colour three.js multiplies in.
+    bisRad = bisPaintRadiance( bisPm );
+    diffuseColor.rgb *= bisAlbedo( max( bisRad - ${LG_COAT_B_GLSL}, vec3( 0.0 ) ), 0.0 );
+    vec3 bisT2 = min( bisRad / ${ALBEDO_MAX_GLSL}, vec3( 1.0 ) );
+    #ifdef BIS_SRGB_ALPHA
+      // Worker (spec alpha): a translucent piece's alpha already lets what lies beneath through — a fully tinted
+      // clear share would darken it a second time, so it is partly untinted (TRANSLUCENT_CLEAR).
+      bisT2 = mix( bisT2, vec3( 1.0 ), ${glslNum(TRANSLUCENT_CLEAR)} );
+    #endif
+    float bisGamma = 2.0 * mix( ${LG_DEEP[0].toFixed(2)}, ${LG_DEEP[1].toFixed(2)}, clamp( bisE / 0.6, 0.0, 1.0 ) );
+    bisTransTint = pow( max( bisT2, vec3( 1e-4 ) ), vec3( bisGamma ) ) / max( diffuseColor.rgb, vec3( 1e-3 ) );
     // Clear-light: the clear rim lenses darker surroundings so the white frosted glyph separates from the pale plate.
     bisTransTint *= mix( 1.0 - bisLgEdgeDark, 1.0, smoothstep( 0.0, 0.6, bisE ) );
+  #elif defined( BIS_ALBEDO )
+    // Worker diffuse_paint(col, B) = _albedo(display_paint(col, DIFFUSE_PEAK), B): diffuse presets reach the displayed
+    // paint under the calibrated rig.
+    #ifdef BIS_SPEC_TINT
+      // Worker b_satin: tint = rad / max(rad); albedo of (rad − tint · B) — the specular reflection is hue-tinted.
+      vec3 bisSRad = bisDisplayPaint( bisPm, ${glslNum(DIFFUSE_PEAK)} );
+      bisSpecTint = bisSRad / max( max( max( bisSRad.r, bisSRad.g ), bisSRad.b ), 1e-4 );
+      diffuseColor.rgb *= bisAlbedo( bisSRad - bisSpecTint * bisAlbedoB, 0.0 );
+    #else
+      diffuseColor.rgb *= bisAlbedo( bisDisplayPaint( bisPm, ${glslNum(DIFFUSE_PEAK)} ), bisAlbedoB );
+    #endif
   #else
     diffuseColor.rgb *= bisPm;
   #endif
@@ -738,7 +957,11 @@ vec3 bisP = bisPaintSample();
   diffuseColor.a = 1.0 - pow( clamp( 1.0 - diffuseColor.a, 0.0, 1.0 ), 2.2 - 1.5 * bisLightness( bisP ) );
 #endif
 #ifdef BIS_FAKE_GLASS
-  vec3 bisGlassColor = diffuseColor.rgb * bisTransTint;
+  #ifdef BIS_LG
+    vec3 bisGlassColor = bisAlbedo( bisRad, 0.0 ); // worker: _fake_glass(_albedo(t2 · ALBEDO_MAX))
+  #else
+    vec3 bisGlassColor = diffuseColor.rgb * bisTransTint;
+  #endif
   #ifdef BIS_BACKDROP_GLASS
     float bisFakeT = 1.0; // black dielectric: everything seen is the (emitted) wallpaper below
   #else
@@ -754,6 +977,9 @@ vec3 bisV = isOrthographic ? vec3( 0.0, 0.0, 1.0 ) : normalize( vViewPosition );
 float bisNV = saturate( dot( normal, bisV ) );
 #if BIS_PAINT_MODE == 2
   vec3 bisHot = mix( bisP, vec3( 1.0 ), bisCore * bisNV * bisNV );
+  #ifdef BIS_DISPLAY_EMISSION
+    bisHot = bisPaintRadiance( bisHot ); // worker b_flat: emits the displayed paint
+  #endif
   totalEmissiveRadiance += bisHot * bisEmissive;
 #else
   totalEmissiveRadiance += bisP * bisEmissive;
@@ -765,10 +991,10 @@ float bisNV = saturate( dot( normal, bisV ) );
   float bisLs = bisNl > 1e-5 ? dot( bisN0.xy / bisNl, bisLxy ) : 0.0;
   float bisBackSide = max( -bisLs, 0.0 );
   // Dark paints: the light-locked rim is subdued and the inner glow carries no white (smoked glass).
-  float bisRimL = mix( 0.1, 1.0, smoothstep( 0.05, 0.7, bisLum ) );
+  float bisRimL = mix( ${glslNum(LG_RIM_LIGHTNESS.to[0])}, ${glslNum(LG_RIM_LIGHTNESS.to[1])}, smoothstep( ${glslNum(LG_RIM_LIGHTNESS.from[0])}, ${glslNum(LG_RIM_LIGHTNESS.from[1])}, bisLum ) );
   totalEmissiveRadiance += bisRimColor * ( pow( max( bisLs, 0.0 ), 2.0 ) + 0.16 * bisBackSide * bisBackSide ) * bisBand( bisLgBand, bisE ) * bisLgRim * bisRimL;
   totalEmissiveRadiance += mix( bisPm, vec3( 1.0 ), 0.3 * bisLum ) * bisBand( vec4( 0.3, 0.45, 0.8, 0.95 ), bisE ) * ( 0.08 + 0.92 * bisBackSide ) * bisLgGlow;
-  totalEmissiveRadiance += bisPm * bisFill * ${(1 - LG_FILL_DIFFUSE).toFixed(4)} * mix( 0.8, 1.04, bisV01 ) * bisLgLit * ( 1.0 + 0.45 * bisLgEdgeDark ) * ( 1.0 + 0.2 * bisWh );
+  totalEmissiveRadiance += max( bisRad - ${LG_COAT_B_GLSL}, vec3( 0.0 ) ) * bisFill * ${(1 - LG_FILL_DIFFUSE).toFixed(4)} * mix( 0.95, 1.04, bisV01 ) * bisLgLit * ( 1.0 + 0.45 * bisLgEdgeDark );
 #else
   // Light-angle-locked rim (glass doc §3.2): (max(N·L,0)^3 + 0.45·max(−N·L,0)^3) × Fresnel
   vec3 bisNW = inverseTransformDirection( normal, viewMatrix );
@@ -806,6 +1032,10 @@ float bisNV = saturate( dot( normal, bisV ) );
 // reflections; the self-lit fill's diffuse share is LG_FILL_DIFFUSE (the rest is emission, added above).
 const LG_LIGHTS = /* glsl */ `
 #include <lights_physical_fragment>
+#ifdef BIS_SPEC_TINT
+  material.specularColor *= bisSpecTint;
+  material.specularColorBlended *= bisSpecTint;
+#endif
 #ifdef BIS_LG
   // Dark smoked glass: the grazing coat / specular sheen of the bright studio world would outline every dark piece in
   // white — subdued by dk = 0.35 → 1 over L 0 → 0.5 (worker).
@@ -890,7 +1120,7 @@ export class IconMaterial extends THREE.MeshPhysicalMaterial {
   }
 
   override customProgramCacheKey(): string {
-    return 'bis-icon-v4'
+    return 'bis-icon-v5'
   }
 }
 
@@ -940,8 +1170,13 @@ export function applyIconMaterial(m: IconMaterial, s: IconMaterialSpec, ctx: Mat
   const inflate = ctx.inflate ?? 0
   if (inflate > 1e-4) defines.BIS_INFLATE = ''
   if (s.milkByLum) defines.BIS_MILK_LUM = ''
+  if (s.whiteMilk > 0 && !s.lg) defines.BIS_WHITE_MILK = ''
   if (s.paintPerceptual) defines.BIS_PAINT_PERCEPTUAL = ''
   if (s.lg) defines.BIS_LG = ''
+  if (ctx.displayPaint) defines.BIS_DISPLAY_PAINT = ''
+  if (s.albedoB != null && !s.lg) defines.BIS_ALBEDO = ''
+  if (s.displayEmission) defines.BIS_DISPLAY_EMISSION = ''
+  if (s.specularTint && s.albedoB != null && !s.lg) defines.BIS_SPEC_TINT = ''
 
   // ---------------------------------------------------------------- physical properties
   m.color.setRGB(s.baseColor[0], s.baseColor[1], s.baseColor[2])
@@ -1020,6 +1255,8 @@ export function applyIconMaterial(m: IconMaterial, s: IconMaterialSpec, ctx: Mat
   u.bisRadius.value = ctx.radius ?? 1
   u.bisInflate.value = inflate
   u.bisMilk.value = Math.max(0, s.milk)
+  u.bisAlbedoB.value = s.albedoB ?? 0
+  u.bisWhiteMilk.value = s.whiteMilk
   u.bisMilkRange.value.set(ctx.milkRange?.[0] ?? -1, ctx.milkRange?.[1] ?? 1)
   if (s.lg) {
     const lit = ctx.lit ?? 1

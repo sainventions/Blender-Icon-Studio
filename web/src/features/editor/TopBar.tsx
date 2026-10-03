@@ -24,6 +24,7 @@ import {
 } from 'lucide-react'
 import type { AppearanceId, Quality } from '../../types'
 import { cn, formatSeconds, relativeTime } from '../../lib/format'
+import { appearanceLabel } from '../../lib/labels'
 import { goHome, goPack } from '../../lib/route'
 import { useCopiedStyle } from '../../lib/looks'
 import { APPEARANCE_IDS } from '../../lib/projectOps'
@@ -211,7 +212,8 @@ function AppearanceSwitcher() {
       {APPEARANCE_IDS.map((a, i) => {
         const active = a === appearance
         const supported = allowed.includes(a)
-        const label = presets?.appearances[a]?.short ?? a
+        const label = appearanceLabel(a, presets, 'short')
+        const long = appearanceLabel(a, presets)
         return (
           <button
             key={a}
@@ -219,8 +221,8 @@ function AppearanceSwitcher() {
             role="radio"
             aria-checked={active}
             onClick={() => setAppearance(a as AppearanceId)}
-            data-tip={`${presets?.appearances[a]?.label ?? a}${supported ? '' : ' — not used on this platform'}`}
-            aria-label={presets?.appearances[a]?.label ?? a}
+            data-tip={`${long}${supported ? '' : ' — not used on this platform'}`}
+            aria-label={long}
             data-tip-kbd={String(i + 1)}
             className={cn(
               'relative flex h-[26px] items-center gap-1.5 rounded-[6px] px-2 text-2xs font-medium transition-[background-color,color,box-shadow] duration-150',

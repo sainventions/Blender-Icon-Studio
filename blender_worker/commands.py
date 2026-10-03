@@ -133,7 +133,7 @@ def _render_one(ctx: Context, project: dict, bundle: dict, args: dict, out: str,
     backdrop = _backdrop(project, args)
     full_bleed = bool(args.get("fullBleed", False))
     info = ctx.builder.build(project, bundle, appearance, camera=args.get("camera"), full_bleed=full_bleed,
-                             backdrop=backdrop, overrides=overrides)
+                             backdrop=backdrop, overrides=overrides, engine=R.tier(quality)["engine"])
     scene = bpy.context.scene
     transparent = info["backdrop"] == "transparent"
     settings = R.configure(scene, quality, args.get("size") or project["render"].get("size"),
@@ -233,8 +233,10 @@ def cmd_save_blend(ctx: Context, args: dict, progress) -> dict:
     backdrop = _backdrop(project, args)
     # editable pieces: live curves (round bevel) / GN modifier stacks instead of the baked render meshes,
     # so bevels, extrusion and modifiers can be tweaked in Blender
+    # lights calibrated for the engine the .blend is saved with (a draft-quality .blend opens in EEVEE)
     info = ctx.builder.build(project, bundle, appearance, camera=args.get("camera"),
-                             full_bleed=bool(args.get("fullBleed", False)), backdrop=backdrop, editable=True)
+                             full_bleed=bool(args.get("fullBleed", False)), backdrop=backdrop, editable=True,
+                             engine=R.tier(quality)["engine"])
     scene = bpy.context.scene
     R.configure(scene, quality, args.get("size"), transparent=info["backdrop"] == "transparent",
                 color_mode=project["render"].get("colorMode", "neutral"), max_frost=info["maxFrost"],
@@ -303,7 +305,10 @@ def cmd_scene_info(ctx: Context, args: dict, progress) -> dict:
                     objs[-1]["check"] = geometry.check_piece(ob.data, geometry.curve_splines(cu),
                                                              float(cu.get("bis_bevel", 0.0) or 0.0),
                                                              json.loads(cu["bis_outline"]))
+    lights = {ob.name: round(float(ob.data.energy), 4) for ob in bpy.data.objects
+              if ob.name.startswith("BIS") and ob.type == "LIGHT" and ob.data is not None}
     return {"materials": mats, "objects": objs, "curves": len(bpy.data.curves), "images": len(bpy.data.images),
+            "lights": lights,
             "engine": bpy.context.scene.render.engine, "info": {k: v for k, v in ctx.builder.info.items()
                                                                 if k in ("appearance", "backdrop", "stats")}}
 

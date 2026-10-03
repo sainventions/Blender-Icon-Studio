@@ -1,5 +1,11 @@
-// What the camera sees behind the icon: a subtle checkerboard (transparent backdrop), a solid colour or the worker's
-// wallpaper (clear / tinted renditions). It is the scene background, so transmissive glass refracts it too.
+// What the camera sees behind the icon: the stage's "transparent" checkerboard, a solid colour or the worker's
+// wallpaper (clear / tinted renditions). It is part of the scene, so transmissive glass refracts it too.
+//
+// Transparent backdrop: a full-screen shader quad repaints the editor stage behind the canvas (lib/stageBackdrop:
+// base colour, accent glow and dot grid, located from the stage element's rect) with the Render view's radially
+// faded checkerboard on top. It is drawn in *scene* colours run through the inverse of the viewport's display
+// transform (displayTransform.ts), so after tone mapping the canvas edge matches the CSS stage pixel for pixel and no
+// box shows around the live view (Khronos PBR Neutral alone turns a #17171c checker into ~#02020c).
 //
 // The wallpaper is defined in world units (like the worker's wallpaper plane behind the plate), so the background
 // texture is framed to match the front camera (ortho_scale 2.24 / zoom on the shorter viewport side), and glass
@@ -8,7 +14,9 @@ import { useEffect, useLayoutEffect, useMemo } from 'react'
 import { useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import type { FakeGlassBinding } from '../../lib/materials3d'
-import { createCheckerTexture, createWallpaperTexture, WALLPAPER_EXTENT } from '../textures/procedural'
+import { checkerOver, STAGE_BACKDROP, type StageBackdropSpec } from '../../lib/stageBackdrop'
+import { createWallpaperTexture, WALLPAPER_EXTENT } from '../textures/procedural'
+import { DISPLAY_INVERSE_GLSL, toScene, type DisplayTransform } from './displayTransform'
 
 export type BackdropSpec =
   { kind: 'checker' } | { kind: 'color'; color: string } | { kind: 'wallpaper'; tone: 'light' | 'dark' }
@@ -21,9 +29,9 @@ export interface BackdropBinding {
   behind: FakeGlassBinding
 }
 
-const CHECKER_A = '#17171c'
-const CHECKER_B = '#1e1e25'
-const CHECKER_CELL = 10 // CSS px
+/** Returns the element whose CSS background (lib/stageBackdrop) the transparent backdrop continues, if any. */
+export type StageElementGetter = () => HTMLElement | null
+
 /** Front framing (must equal CameraRig's FRONT_ORTHO_SCALE). */
 const FRONT_ORTHO_SCALE = 2.24
 
@@ -34,6 +42,23 @@ export function backdropKey(spec: BackdropSpec): string {
 function wallpaperBehind(texture: THREE.Texture, tone: 'light' | 'dark'): FakeGlassBinding {
   const color = new THREE.Color(tone === 'light' ? '#e9eafa' : '#0a1024')
   return { map: texture, color, space: 'canvas', extent: WALLPAPER_EXTENT, tone }
+}
+
+const srgbToLinear = (c: number) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4)
+
+/**
+ * Scene-linear colour of the transparent backdrop around the icon (stage base under the checker at its centre
+ * opacity, both checker colours averaged) — what fake glass shows through itself over the backdrop.
+ */
+export function checkerBehindColor(display: DisplayTransform, spec: StageBackdropSpec = STAGE_BACKDROP): THREE.Color {
+  const base = spec.base.map((v) => v / 255) as [number, number, number]
+  // Two neighbouring cells at the frame centre (full checker opacity there).
+  const c = spec.checker.cell
+  const a = checkerOver(base, 50 * c + 0.5, 50 * c + 0.5, 100 * c, 100 * c, spec)
+  const b = checkerOver(base, 51 * c + 0.5, 50 * c + 0.5, 100 * c, 100 * c, spec)
+  const mid = a.map((v, i) => srgbToLinear((v + b[i]) / 2)) as [number, number, number]
+  const s = toScene(mid, display)
+  return new THREE.Color(s[0], s[1], s[2])
 }
 
 /**
@@ -48,12 +73,13 @@ export function useWallpaperBehind(tone: 'light' | 'dark' | null): FakeGlassBind
 }
 
 /** Creates (and owns) the backdrop texture for `spec`. */
-export function useBackdropBinding(spec: BackdropSpec): BackdropBinding {
+export function useBackdropBinding(spec: BackdropSpec, display: DisplayTransform): BackdropBinding {
   const key = backdropKey(spec)
+  const displayKey = spec.kind === 'checker' ? `${display.mode}:${display.saturation}` : ''
   const binding = useMemo<BackdropBinding>(() => {
     if (spec.kind === 'checker') {
-      const color = new THREE.Color(CHECKER_A).lerp(new THREE.Color(CHECKER_B), 0.5)
-      return { spec, texture: createCheckerTexture(CHECKER_A, CHECKER_B), color, behind: { map: null, color, space: 'screen' } }
+      const color = checkerBehindColor(display)
+      return { spec, texture: null, color, behind: { map: null, color, space: 'screen' } }
     }
     if (spec.kind === 'wallpaper') {
       const color = new THREE.Color(spec.tone === 'light' ? '#e9eafa' : '#0a1024')
@@ -63,45 +89,197 @@ export function useBackdropBinding(spec: BackdropSpec): BackdropBinding {
     const color = new THREE.Color(spec.color)
     return { spec, texture: null, color, behind: { map: null, color, space: 'screen' } }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key])
+  }, [key, displayKey])
   useEffect(() => () => binding.texture?.dispose(), [binding])
   return binding
 }
 
-export function Backdrop({ binding, zoom }: { binding: BackdropBinding; zoom: number }) {
+export function Backdrop({
+  binding,
+  zoom,
+  display,
+  stage,
+}: {
+  binding: BackdropBinding
+  zoom: number
+  display: DisplayTransform
+  stage?: StageElementGetter
+}) {
   const scene = useThree((s) => s.scene)
   const size = useThree((s) => s.size)
   const invalidate = useThree((s) => s.invalidate)
+  const checker = binding.spec.kind === 'checker'
 
   useLayoutEffect(() => {
+    if (checker) return
     scene.background = binding.texture ?? binding.color
     invalidate()
     return () => {
       if (scene.background === binding.texture || scene.background === binding.color) scene.background = null
     }
-  }, [scene, binding, invalidate])
+  }, [scene, binding, checker, invalidate])
 
   useLayoutEffect(() => {
     const t = binding.texture
-    if (!t) return
-    if (binding.spec.kind === 'checker') {
-      t.repeat.set(size.width / (CHECKER_CELL * 2), size.height / (CHECKER_CELL * 2))
-      t.offset.set(0, 0)
-    } else {
-      // Show world ±half (front camera) of a texture that covers world ±WALLPAPER_EXTENT.
-      const half = FRONT_ORTHO_SCALE / 2 / Math.max(0.05, zoom || 1)
-      const w = Math.max(1, size.width)
-      const h = Math.max(1, size.height)
-      const hx = w >= h ? (half * w) / h : half
-      const hy = h > w ? (half * h) / w : half
-      const rx = Math.min(1, hx / WALLPAPER_EXTENT)
-      const ry = Math.min(1, hy / WALLPAPER_EXTENT)
-      t.repeat.set(rx, ry)
-      t.offset.set(0.5 - rx / 2, 0.5 - ry / 2)
-    }
+    if (!t || binding.spec.kind !== 'wallpaper') return
+    // Show world ±half (front camera) of a texture that covers world ±WALLPAPER_EXTENT.
+    const half = FRONT_ORTHO_SCALE / 2 / Math.max(0.05, zoom || 1)
+    const w = Math.max(1, size.width)
+    const h = Math.max(1, size.height)
+    const hx = w >= h ? (half * w) / h : half
+    const hy = h > w ? (half * h) / w : half
+    const rx = Math.min(1, hx / WALLPAPER_EXTENT)
+    const ry = Math.min(1, hy / WALLPAPER_EXTENT)
+    t.repeat.set(rx, ry)
+    t.offset.set(0.5 - rx / 2, 0.5 - ry / 2)
     t.updateMatrix()
     invalidate()
   }, [binding, size.width, size.height, zoom, invalidate])
 
-  return null
+  return checker ? <StageCheckerBackdrop display={display} stage={stage} /> : null
+}
+
+// ------------------------------------------------------------------------------------------ stage checker backdrop
+const VERT = /* glsl */ `
+attribute vec2 bisClip;
+varying vec2 vBisUv;
+void main() {
+  // Full-screen quad straight in clip space. \`position\` is all zeros, so passes that render the scene with an
+  // override material (depth / outline masks) rasterise nothing for this mesh.
+  vBisUv = bisClip * 0.5 + 0.5;
+  gl_Position = vec4(bisClip + position.xy, 0.0, 1.0);
+}
+`
+
+const FRAG = /* glsl */ `
+varying vec2 vBisUv;
+uniform vec2 uCanvas;   // canvas size, CSS px
+uniform vec4 uStage;    // stage box relative to the canvas top-left (x, y, w, h; CSS px); w = 0: no stage
+uniform vec3 uBase;     // sRGB 0..1
+uniform vec4 uGlow;     // rgb (sRGB), alpha
+uniform vec4 uGlowBox;  // cx, cy, rx, ry (fractions of the stage box)
+uniform float uGlowStop;
+uniform vec4 uDots;     // spacing, alpha, inner, outer (CSS px)
+uniform vec3 uCheckA;
+uniform vec3 uCheckB;
+uniform vec2 uCheck;    // cell (CSS px), opacity
+${DISPLAY_INVERSE_GLSL}
+vec3 bisSrgbToLinear(vec3 c) {
+  return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), c));
+}
+void main() {
+  vec2 p = vec2(vBisUv.x, 1.0 - vBisUv.y) * uCanvas; // CSS px from the canvas top-left (y down, like CSS)
+  vec3 col = uBase;
+  if (uStage.z > 0.0) {
+    vec2 s = p - uStage.xy;
+    vec2 m = mod(s, uDots.x) - 0.5 * uDots.x;
+    float aDot = uDots.y * clamp((uDots.w - length(m)) / (uDots.w - uDots.z), 0.0, 1.0);
+    col = mix(col, vec3(1.0), aDot);
+    vec2 q = (s - uGlowBox.xy * uStage.zw) / (uGlowBox.zw * uStage.zw);
+    float aGlow = uGlow.a * clamp(1.0 - length(q) / uGlowStop, 0.0, 1.0);
+    col = mix(col, uGlow.rgb, aGlow);
+  }
+  vec2 cell = floor(p / uCheck.x);
+  vec3 sq = mod(cell.x + cell.y, 2.0) > 0.5 ? uCheckA : uCheckB;
+  vec2 r = (p - 0.5 * uCanvas) / (0.5 * uCanvas);
+  col = mix(col, sq, uCheck.y * clamp(1.0 - length(r), 0.0, 1.0));
+  gl_FragColor = vec4(bisToScene(bisSrgbToLinear(col)), 1.0);
+}
+`
+
+const rgb01 = (c: readonly number[]) => new THREE.Vector3(c[0] / 255, c[1] / 255, c[2] / 255)
+
+function StageCheckerBackdrop({ display, stage }: { display: DisplayTransform; stage?: StageElementGetter }) {
+  const gl = useThree((s) => s.gl)
+  const size = useThree((s) => s.size)
+  const invalidate = useThree((s) => s.invalidate)
+
+  const mesh = useMemo(() => {
+    const spec = STAGE_BACKDROP
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(new Array(12).fill(0), 3))
+    geometry.setAttribute('bisClip', new THREE.Float32BufferAttribute([-1, -1, 1, -1, 1, 1, -1, 1], 2))
+    geometry.setIndex([0, 1, 2, 0, 2, 3])
+    const material = new THREE.ShaderMaterial({
+      name: 'BisStageBackdrop',
+      vertexShader: VERT,
+      fragmentShader: FRAG,
+      depthTest: false,
+      depthWrite: false,
+      toneMapped: false,
+      uniforms: {
+        uCanvas: { value: new THREE.Vector2(1, 1) },
+        uStage: { value: new THREE.Vector4(0, 0, 0, 0) },
+        uBase: { value: rgb01(spec.base) },
+        uGlow: { value: new THREE.Vector4(spec.glow.rgb[0] / 255, spec.glow.rgb[1] / 255, spec.glow.rgb[2] / 255, spec.glow.alpha) },
+        uGlowBox: { value: new THREE.Vector4(spec.glow.cx, spec.glow.cy, spec.glow.rx, spec.glow.ry) },
+        uGlowStop: { value: spec.glow.stop },
+        uDots: { value: new THREE.Vector4(spec.dots.spacing, spec.dots.alpha, spec.dots.inner, spec.dots.outer) },
+        uCheckA: { value: rgb01(spec.checker.a) },
+        uCheckB: { value: rgb01(spec.checker.b) },
+        uCheck: { value: new THREE.Vector2(spec.checker.cell, spec.checker.opacity) },
+        bisToneMode: { value: 1 },
+        bisSaturation: { value: 0 },
+      },
+    })
+    const m = new THREE.Mesh(geometry, material)
+    m.name = 'bis-stage-backdrop'
+    m.frustumCulled = false
+    m.renderOrder = -1e9 // first in the opaque list; no depth, so the icon always draws over it
+    m.matrixAutoUpdate = false
+    m.raycast = () => {}
+    return m
+  }, [])
+  useEffect(
+    () => () => {
+      mesh.geometry.dispose()
+      ;(mesh.material as THREE.Material).dispose()
+    },
+    [mesh],
+  )
+
+  const u = (mesh.material as THREE.ShaderMaterial).uniforms
+  useLayoutEffect(() => {
+    u.bisToneMode.value = display.mode
+    u.bisSaturation.value = display.saturation
+    invalidate()
+  }, [u, display.mode, display.saturation, invalidate])
+
+  // Locate the stage box relative to the canvas; it moves when the stage scrolls (zoomed in) or resizes.
+  useLayoutEffect(() => {
+    const canvas = gl.domElement
+    let raf = 0
+    const update = () => {
+      raf = 0
+      const cr = canvas.getBoundingClientRect()
+      const sr = stage?.()?.getBoundingClientRect()
+      const cw = Math.max(1, cr.width || size.width)
+      const ch = Math.max(1, cr.height || size.height)
+      const next = sr && sr.width > 0 ? [sr.left - cr.left, sr.top - cr.top, sr.width, sr.height] : [0, 0, 0, 0]
+      const s = u.uStage.value as THREE.Vector4
+      const c = u.uCanvas.value as THREE.Vector2
+      if (c.x === cw && c.y === ch && s.x === next[0] && s.y === next[1] && s.z === next[2] && s.w === next[3]) return
+      c.set(cw, ch)
+      s.set(next[0], next[1], next[2], next[3])
+      invalidate()
+    }
+    const schedule = () => {
+      if (!raf) raf = requestAnimationFrame(update)
+    }
+    update()
+    const el = stage?.()
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(schedule) : null
+    ro?.observe(canvas)
+    if (el) ro?.observe(el)
+    window.addEventListener('resize', schedule)
+    document.addEventListener('scroll', schedule, { capture: true, passive: true })
+    return () => {
+      if (raf) cancelAnimationFrame(raf)
+      ro?.disconnect()
+      window.removeEventListener('resize', schedule)
+      document.removeEventListener('scroll', schedule, { capture: true })
+    }
+  }, [gl, stage, u, size.width, size.height, invalidate])
+
+  return <primitive object={mesh} />
 }

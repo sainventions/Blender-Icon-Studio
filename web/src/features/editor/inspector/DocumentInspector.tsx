@@ -8,6 +8,7 @@ import { useAppStore } from '../../../store/app'
 import { useEditor } from '../../../store/editor'
 import { Badge, ColorField, Row, Section, Segmented, Select, SliderRow, Switch, NumberField } from '../../../components/ui'
 import { PlatformIcon, ShapeIcon } from '../../../components/icons'
+import { SourcePlateBadge } from '../../../components/SourcePlateBadge'
 import { LightDial, normalizeAngle } from '../viewportBridge'
 import { PLATFORM_IDS, setPlatform } from '../actions'
 import { FillEditor } from './FillEditor'
@@ -207,7 +208,7 @@ export function DocumentInspector() {
               viewBox {project.source.viewBox.map((v) => formatNumber(v, 1)).join(' ')} · {project.elements.length} elements
             </div>
             <div className="mt-1 flex flex-wrap gap-1">
-              {project.source.plateDetected ? <Badge tone="ok">Plate detected</Badge> : <Badge>No plate</Badge>}
+              <SourcePlateBadge source={project.source} />
               <Badge tip="Split strategy">{project.strategy}</Badge>
             </div>
           </div>

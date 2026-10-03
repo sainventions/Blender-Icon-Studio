@@ -17,6 +17,7 @@ from .layers import (dedupe_names, has_default_stack, layer_name, make_layer, me
 from .paths import clean_d, islands, skia_from_d, bounds
 from .prepass import auto_name
 from .split import Analysis, SplitParams, components, forced_units, split, topo_order, _unit_preserving
+from .tiling import auto_mode, default_mode_kept, layer_defaults, lining_pairs, tile_pairs
 
 
 class ZOrderError(ValueError):
@@ -39,17 +40,31 @@ def foreground_indices(store: ElementStore, active: Optional[Iterable[str]] = No
 
 def fresh_layers(store: ElementStore, strategy: str, params: Optional[SplitParams] = None,
                  active: Optional[Iterable[str]] = None) -> Tuple[List[Layer], dict]:
-    """Default layers for all non-plate (active) elements with the given strategy."""
+    """Default layers for all non-plate (active) elements with the given strategy. The smart split
+    keeps the pieces that tile one shape together; every layer gets its default mode ('combined'
+    for tiled art, :func:`bis.svg.tiling.auto_mode`) and a bevel within that mode's safe radius."""
     fg = foreground_indices(store, active)
-    an = Analysis(store.elems, store.gaps, store.edges, fg, store.view_box, store.inside)
+    tiles = []
+    if strategy == "smart":   # pieces that tile one shape, and edge lines drawn under a piece
+        tiles = (tile_pairs(store.elems, fg, store.gaps, store.tolerance, store.art.k)
+                 + lining_pairs(store.elems, fg, store.edges, store.tolerance, store.art.k))
+    an = Analysis(store.elems, store.gaps, store.edges, fg, store.view_box, store.inside, tiles)
     groups, info = split(an, strategy, params)
     layers: List[Layer] = []
     for i, g in enumerate(groups):
         members = [an.els[k] for k in g]
-        ids = [m.id for m in members]
-        layers.append(make_layer(f"L{i + 1}", members, i, layer_safe_radius(store, ids, "individual")))
+        mode, sr = layer_defaults(store, [m.id for m in members])
+        layers.append(make_layer(f"L{i + 1}", members, i, sr, mode=mode))
+    info["combined"] = [L.id for L in layers if L.mode == "combined"]
     dedupe_names(layers)
     return layers, info
+
+
+def _clamp_bevel(store: ElementStore, L: Layer) -> None:
+    """Keep a layer's bevel within the safe radius of its (possibly new) mode. In place."""
+    sr = layer_safe_radius(store, L.elementIds, L.mode)
+    if sr > 0:
+        L.depth.bevel = round(min(L.depth.bevel, 0.9 * sr), 5)
 
 
 def _assign(store: ElementStore, layers: Sequence[Layer]) -> List[int]:
@@ -152,8 +167,13 @@ def merge(store: ElementStore, project: Project, layer_ids: Sequence[str]) -> Li
     was_default = has_default_stack(layers)
     sel = sorted(ids, key=lambda i: pos[i])
     primary = layers[pos[sel[0]]]
+    # layers still on their default mode -> the merged layer gets the default of its new content
+    # (merging the tiles of one shape makes it 'combined'); a mode the user picked is kept
+    derive = all(default_mode_kept(store, layers[pos[i]].mode, layers[pos[i]].elementIds) for i in sel)
     merged_ids = _sorted_ids(store, [e for i in sel for e in layers[pos[i]].elementIds])
     primary.elementIds = merged_ids
+    if derive:
+        primary.mode = auto_mode(store, merged_ids)
     sr = layer_safe_radius(store, merged_ids, primary.mode)
     if sr > 0:
         primary.depth.bevel = round(min(primary.depth.bevel, 0.9 * sr), 5)
@@ -176,6 +196,8 @@ def move(store: ElementStore, project: Project, element_ids: Sequence[str], to_l
         raise ValueError(f"unknown layer id: {to_layer_id}")
     moving = set(eids)
     origin = next((L for L in layers if moving & set(L.elementIds)), None)
+    touched = {L.id for L in layers if moving & set(L.elementIds)} | ({to_layer_id} if to_layer_id else set())
+    derive = {L.id: default_mode_kept(store, L.mode, L.elementIds) for L in layers if L.id in touched}
     for L in layers:
         L.elementIds = [e for e in L.elementIds if e not in moving]
     prio = {L.id: float(k) for k, L in enumerate(layers)}
@@ -185,13 +207,22 @@ def move(store: ElementStore, project: Project, element_ids: Sequence[str], to_l
     else:
         new_id = next_layer_ids([L.id for L in layers], 1)[0]
         members = members_for(store, eids)
-        sr = layer_safe_radius(store, eids, "individual")
-        new = make_layer(new_id, members, len(layers), sr, template=origin)
+        if origin is None or derive.get(origin.id, True):
+            mode, sr = layer_defaults(store, eids)
+        else:
+            mode, sr = origin.mode, layer_safe_radius(store, eids, origin.mode)
+        new = make_layer(new_id, members, len(layers), sr, template=origin, mode=mode)
         if origin is not None:
             new.depth.bevel = min(new.depth.bevel, round(0.9 * sr, 5)) if sr > 0 else new.depth.bevel
         layers.append(new)
         prio[new_id] = (pos[origin.id] + 0.5) if origin is not None else -0.5
         auto[new_id] = True
+    for L in layers:   # layers that gave or got elements re-derive their default mode
+        if L.elementIds and derive.get(L.id):
+            mode = auto_mode(store, L.elementIds)
+            if mode != L.mode:
+                L.mode = mode
+                _clamp_bevel(store, L)
     keep = [L for L in layers if L.elementIds]
     out = ordered_legal(store, keep, [prio[L.id] for L in keep])
     return _refresh(store, out, auto, was_default)
@@ -208,6 +239,7 @@ def split_layer(store: ElementStore, project: Project, layer_id: str, mode: str,
     auto = _auto_flags(store, layers)
     was_default = has_default_stack(layers)
     src = layers[pos[layer_id]]
+    derive = default_mode_kept(store, src.mode, src.elementIds)
     idx = store.index
     gidx = sorted(idx[e] for e in src.elementIds if e in idx)
     groups: List[List[str]] = []
@@ -247,7 +279,11 @@ def split_layer(store: ElementStore, project: Project, layer_id: str, mode: str,
     base_z = src.depth.z
     for k, (lid, ids) in enumerate(zip(new_ids, groups)):
         members = members_for(store, ids)
-        piece = make_layer(lid, members, 0, layer_safe_radius(store, ids, src.mode), template=src)
+        if derive:   # the source layer had its default mode: so do the pieces
+            mode, sr = layer_defaults(store, ids)
+        else:
+            mode, sr = None, layer_safe_radius(store, ids, src.mode)
+        piece = make_layer(lid, members, 0, sr, template=src, mode=mode)
         piece.depth.z = round(base_z + k * 0.13 / max(1, len(groups)), 6)
         auto[lid] = auto.get(src.id, True) or k > 0
         pieces.append(piece)

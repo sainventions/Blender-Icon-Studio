@@ -39,6 +39,24 @@ export function useElementSize<T extends HTMLElement>(): [RefCallback<T>, { widt
   return [ref, size]
 }
 
+/** window.devicePixelRatio, kept current across browser zoom / moving the window to another screen. */
+export function useDevicePixelRatio(): number {
+  const [dpr, setDpr] = useState(() => (typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1))
+  useEffect(() => {
+    let mq: MediaQueryList | null = null
+    const watch = () => {
+      const v = window.devicePixelRatio || 1
+      setDpr(v)
+      mq?.removeEventListener('change', watch)
+      mq = window.matchMedia(`(resolution: ${v}dppx)`)
+      mq.addEventListener('change', watch)
+    }
+    watch()
+    return () => mq?.removeEventListener('change', watch)
+  }, [])
+  return dpr
+}
+
 /** Debounced value. */
 export function useDebounced<T>(value: T, ms: number): T {
   const [v, setV] = useState(value)

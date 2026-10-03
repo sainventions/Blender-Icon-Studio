@@ -106,11 +106,14 @@ def next_layer_ids(existing: Iterable[str], n: int) -> List[str]:
 
 
 def make_layer(lid: str, members: Sequence[Elem], index: int, safe_r: float,
-               template: Optional[Layer] = None) -> Layer:
+               template: Optional[Layer] = None, mode: Optional[str] = None) -> Layer:
+    """A default layer (or a copy of `template`) holding `members`. `mode` ('individual' /
+    'combined', see :func:`bis.svg.tiling.auto_mode`) overrides the template's; `safe_r` must be
+    the safe radius for the layer's resulting mode."""
     ids = [m.id for m in members]
     name = layer_name(members)
     if template is None:
-        return Layer(id=lid, name=name, elementIds=ids,
+        return Layer(id=lid, name=name, elementIds=ids, mode=mode or "individual",
                      depth=LayerDepth(z=round(index * Z_STEP, 6), thickness=DEFAULT_THICKNESS,
                                       bevel=default_bevel(safe_r)),
                      material=MaterialSpec(preset=DEFAULT_MATERIAL), shadow=shadow_for(members))
@@ -118,6 +121,8 @@ def make_layer(lid: str, members: Sequence[Elem], index: int, safe_r: float,
     lay.id = lid
     lay.name = name
     lay.elementIds = ids
+    if mode is not None:
+        lay.mode = mode
     lay.depth.bevel = round(min(lay.depth.bevel, BEVEL_SAFE_FACTOR * safe_r) if safe_r > 0 else lay.depth.bevel, 5)
     return lay
 

@@ -9,7 +9,9 @@ to canvas coordinates) and ``canvas.art`` maps the source plate exactly onto −
 Full-bleed art (no plate element, but the union of all art IS a plate shape - Earth's waves) is
 framed the same way: the fitted outline maps onto −1..1, the plate takes the art's rim colour and
 every element stays art. With a (detected or full-bleed) plate, extruded art is clipped to the
-fitted plate outline shrunk by PLATE_CLIP_INSET (:func:`plate_clip_path`)."""
+fitted plate outline (:func:`plate_clip_path`); art flush with the plate edge (within PLATE_SNAP -
+a frame drawn on the source plate's own outline, which the fitted shape matches only to ~0.01) is
+first grown onto the outline (:func:`plate_snap_band`), so no sliver of plate shows around it."""
 from __future__ import annotations
 
 import math
@@ -35,9 +37,14 @@ MAX_PLATE_ASPECT = 1.06      # the canvas plate is square (-1..1): wide pills / 
 NO_PLATE_ART_SCALE = 0.78
 FULL_BLEED_MIN_IOU = 0.90    # no plate element, but the art's union IS a plate shape (edge-to-edge art)
 FULL_BLEED_MIN_SIZE = 0.80   # ... spanning >= this fraction of the longer viewBox side
-PLATE_CLIP_INSET = 0.004     # art units: extruded art is clipped to the plate outline shrunk by this
-                             # (~2 px at 1024: art flush with the plate edge shows no plate-coloured rim;
-                             # below ~0.003 the clip runs into the source plate's own outline)
+PLATE_CLIP_INSET = 0.0005    # art units: extruded art is clipped to the plate outline shrunk by this
+                             # (0.1 px: keeps the clip off art lying exactly ON the outline). Round 3
+                             # used 0.004 (below ~0.003 the clip ran into the source plate's own outline:
+                             # a ragged edge) - which left a plate-coloured hairline around art flush
+                             # with the edge (Classroom's / CRD's frames, QA r3 #2). Snapping (PLATE_SNAP)
+                             # makes the near-exact outline safe.
+PLATE_SNAP = 0.012           # art units: art edges within this of the plate outline are snapped onto it
+                             # (the Illustrator template outline strays up to ~0.01 from the fitted shape)
 CLIP_WARN_FRACTION = 0.005   # warn when clipping removes more than this share of the foreground art
 
 
@@ -284,21 +291,27 @@ def _outline_cubics(shape: str, corner: float, center, half: float, inset: float
     return out
 
 
-def plate_clip_path(store) -> Optional[pathops.Path]:
-    """The detected (or full-bleed) plate outline, shrunk by PLATE_CLIP_INSET art units, as an
-    exact cubic pathops path in SVG space - extruded art is clipped to it. None without a plate.
-    Memoised on the store object."""
+def plate_clip_path(store, inset: float = PLATE_CLIP_INSET) -> Optional[pathops.Path]:
+    """The detected (or full-bleed) plate outline, shrunk by `inset` art units, as an exact cubic
+    pathops path in SVG space - extruded art is clipped to it. None without a plate. Memoised on
+    the store object."""
     plate = getattr(store, "plate", None)
     if not plate or plate.get("shape") in (None, "none"):
         return None
-    cached = getattr(store, "_plate_clip", None)
-    key = (tuple(plate.get("bbox") or ()), plate.get("shape"), plate.get("cornerRadius"), PLATE_CLIP_INSET)
-    if cached is not None and cached[0] == key:
-        return cached[1]
+    memo = getattr(store, "_plate_clips", None)
+    if not isinstance(memo, dict):
+        memo = {}
+        try:
+            store._plate_clips = memo
+        except AttributeError:
+            pass
+    key = (tuple(plate.get("bbox") or ()), plate.get("shape"), plate.get("cornerRadius"), round(inset, 9))
+    if key in memo:
+        return memo[key]
     x0, y0, x1, y1 = plate["bbox"]
     half = max(x1 - x0, y1 - y0) / 2
     segs = _outline_cubics(plate["shape"], float(plate.get("cornerRadius") or 0.225),
-                           ((x0 + x1) / 2, (y0 + y1) / 2), half, PLATE_CLIP_INSET)
+                           ((x0 + x1) / 2, (y0 + y1) / 2), half, inset)
     inv = store.art.inverse
 
     def X(p):
@@ -313,17 +326,30 @@ def plate_clip_path(store) -> Optional[pathops.Path]:
         path.simplify(fix_winding=True)
     except pathops.PathOpsError:
         pass
-    try:
-        store._plate_clip = (key, path)
-    except AttributeError:
-        pass
+    memo[key] = path
     return path
+
+
+def plate_snap_band(store) -> Optional[pathops.Path]:
+    """The ring between the clip outline (PLATE_CLIP_INSET) and the outline shrunk by PLATE_SNAP
+    (SVG space): art reaching into it is grown onto the clip outline. None without a plate."""
+    outer = plate_clip_path(store, PLATE_CLIP_INSET)
+    inner = plate_clip_path(store, PLATE_SNAP)
+    if outer is None or inner is None:
+        return None
+    memo = getattr(store, "_plate_clips", {})
+    key = ("band", id(outer), id(inner))
+    if key not in memo:
+        try:
+            memo[key] = pathops.op(outer, inner, pathops.PathOp.DIFFERENCE, fix_winding=True)
+        except pathops.PathOpsError:
+            memo[key] = None
+    return memo[key]
 
 
 def clipped_fraction(elems: Sequence[Elem], plate: dict, art: ArtSpace, tol: float) -> float:
     """Share of the foreground art's area that reaches past the plate outline itself (what the 3D
-    clip removes beyond its thin PLATE_CLIP_INSET band - art merely flush with the edge, like
-    Classroom's frame, does not count)."""
+    clip removes - art merely flush with the edge, like Classroom's frame, does not count)."""
     ids = set(plate.get("elementIds") or ())
     geoms = [e.geom(tol) for e in elems if e.id not in ids and not e.geom(tol).is_empty]
     if not geoms:
