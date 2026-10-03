@@ -15,14 +15,16 @@ import { Badge, Button, Dialog, ProgressBar, Segmented } from '../../components/
 import { continueInToast, isActive, useJob } from './useJob'
 
 const PREFS_KEY = 'bis.export.v1'
-interface Prefs {
+export interface ExportPrefs {
   targets: ExportTarget[]
   appearances: AppearanceId[]
   quality: Quality
 }
+type Prefs = ExportPrefs
 const DEFAULT_PREFS: Prefs = { targets: ['ios', 'macos', 'web'], appearances: ['light', 'dark', 'tinted-dark'], quality: 'final' }
 
-function loadPrefs(): Prefs {
+/** The Export dialog's remembered choices (the Icon Pack page starts from them too). */
+export function loadExportPrefs(): ExportPrefs {
   try {
     return { ...DEFAULT_PREFS, ...JSON.parse(safeStorage.get(PREFS_KEY) ?? '{}') }
   } catch {
@@ -41,7 +43,7 @@ export function ExportDialog() {
   const open = useUi((s) => s.dialog === 'export')
   const project = useEditor((s) => s.project)
   const presets = useAppStore((s) => s.presets.data)
-  const [prefs, setPrefs] = useState<Prefs>(loadPrefs)
+  const [prefs, setPrefs] = useState<Prefs>(loadExportPrefs)
   const [jobId, setJobId] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const job = useJob(jobId)
@@ -56,7 +58,6 @@ export function ExportDialog() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
-  const toggle = <T,>(list: T[], v: T) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v])
   const est = useMemo(() => {
     const per = prefs.quality === 'ultra' ? 40 : prefs.quality === 'final' ? 8 : prefs.quality === 'preview' ? 1.5 : 0.4
     const renders = Math.max(1, prefs.appearances.length) + (prefs.targets.includes('android') ? 2 : 0) + (prefs.targets.includes('watchos') ? 1 : 0) + (prefs.targets.includes('marketing') ? 1 : 0)
@@ -136,62 +137,13 @@ export function ExportDialog() {
         <div className="space-y-5">
           <div>
             <Label>Targets</Label>
-            <div className="grid grid-cols-3 gap-2">
-              {EXPORT_TARGETS.map((t) => {
-                const on = prefs.targets.includes(t.id)
-                return (
-                  <button
-                    key={t.id}
-                    type="button"
-                    onClick={() => setPrefs((p) => ({ ...p, targets: toggle(p.targets, t.id) }))}
-                    className={cn(
-                      'group relative flex items-start gap-2.5 rounded-xl border p-2.5 text-left transition-[border-color,background-color,box-shadow] duration-150',
-                      on ? 'border-accent/55 bg-accent/[0.09] shadow-[0_0_0_1px_rgb(143_125_255/0.25)]' : 'border-line bg-surface-0/40 hover:border-line-2',
-                    )}
-                  >
-                    <span className={cn('mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border transition-colors', on ? 'border-accent/40 bg-accent/20 text-fg' : 'border-line-2 bg-white/[0.03] text-fg-3')}>
-                      <PlatformIcon platform={t.id} className="h-3.5 w-3.5" />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-center gap-1.5 text-xs font-semibold text-fg">
-                        {t.label}
-                        {t.badge && <Badge tone="warn">{t.badge}</Badge>}
-                      </span>
-                      <span className="mt-0.5 block text-3xs leading-snug text-fg-4">{t.description}</span>
-                    </span>
-                    <span className={cn('absolute right-2 top-2 flex h-4 w-4 items-center justify-center rounded-[5px] border transition-colors', on ? 'border-transparent accent-gradient' : 'border-line-3')}>
-                      {on && <Check className="h-3 w-3 text-white" />}
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
+            <ExportTargetGrid value={prefs.targets} onChange={(targets) => setPrefs((p) => ({ ...p, targets }))} />
           </div>
 
           <div className="grid grid-cols-[1fr_auto] gap-6">
             <div>
               <Label>Appearances</Label>
-              <div className="flex flex-wrap gap-1.5">
-                {APPEARANCE_IDS.map((a) => {
-                  const on = prefs.appearances.includes(a)
-                  return (
-                    <button
-                      key={a}
-                      type="button"
-                      onClick={() => setPrefs((p) => ({ ...p, appearances: toggle(p.appearances, a) }))}
-                      className={cn(
-                        'flex h-8 items-center gap-2 rounded-lg border pl-1 pr-2.5 text-2xs font-medium transition-colors',
-                        on ? 'border-accent/55 bg-accent/[0.09] text-fg' : 'border-line text-fg-3 hover:border-line-2',
-                      )}
-                    >
-                      <span className="flex h-6 w-6 items-center justify-center rounded-md border border-white/15" style={{ background: APPEARANCE_VISUAL[a].bg, color: APPEARANCE_VISUAL[a].fg }}>
-                        <AppearanceIcon appearance={a} className="h-3 w-3" />
-                      </span>
-                      {presets?.appearances[a]?.label ?? a}
-                    </button>
-                  )
-                })}
-              </div>
+              <AppearanceToggles value={prefs.appearances} onChange={(appearances) => setPrefs((p) => ({ ...p, appearances }))} />
               <p className="mt-1.5 text-3xs text-fg-4">Platforms only receive the appearances they support (watchOS: light only).</p>
             </div>
             <div>
@@ -208,6 +160,117 @@ export function ExportDialog() {
         </div>
       )}
     </Dialog>
+  )
+}
+
+const toggleIn = <T,>(list: readonly T[], v: T): T[] => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v])
+
+/** Export target checkboxes (shared with the Icon Pack page). `dense` = compact two-line tiles. */
+export function ExportTargetGrid({
+  value,
+  onChange,
+  dense,
+  className,
+}: {
+  value: readonly ExportTarget[]
+  onChange: (targets: ExportTarget[]) => void
+  dense?: boolean
+  className?: string
+}) {
+  return (
+    <div className={cn('grid gap-2', dense ? 'grid-cols-2 gap-1.5' : 'grid-cols-3', className)}>
+      {EXPORT_TARGETS.map((t) => {
+        const on = value.includes(t.id)
+        return (
+          <button
+            key={t.id}
+            type="button"
+            role="checkbox"
+            aria-checked={on}
+            onClick={() => onChange(toggleIn(value, t.id))}
+            data-tip={dense ? t.description : undefined}
+            className={cn(
+              'group relative flex items-start text-left transition-[border-color,background-color,box-shadow] duration-150',
+              dense ? 'items-center gap-2 rounded-lg border px-2 py-1.5' : 'gap-2.5 rounded-xl border p-2.5',
+              on ? 'border-accent/55 bg-accent/[0.09] shadow-[0_0_0_1px_rgb(143_125_255/0.25)]' : 'border-line bg-surface-0/40 hover:border-line-2',
+            )}
+          >
+            <span
+              className={cn(
+                'flex shrink-0 items-center justify-center border transition-colors',
+                dense ? 'h-5 w-5 rounded-md' : 'mt-0.5 h-7 w-7 rounded-lg',
+                on ? 'border-accent/40 bg-accent/20 text-fg' : 'border-line-2 bg-white/[0.03] text-fg-3',
+              )}
+            >
+              <PlatformIcon platform={t.id} className={dense ? 'h-3 w-3' : 'h-3.5 w-3.5'} />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className={cn('flex items-center gap-1.5 font-semibold text-fg', dense ? 'text-2xs' : 'text-xs')}>
+                <span className="truncate">{t.label}</span>
+                {t.badge && <Badge tone="warn">{t.badge}</Badge>}
+              </span>
+              {!dense && <span className="mt-0.5 block text-3xs leading-snug text-fg-4">{t.description}</span>}
+            </span>
+            <span
+              className={cn(
+                'flex h-4 w-4 shrink-0 items-center justify-center rounded-[5px] border transition-colors',
+                !dense && 'absolute right-2 top-2',
+                on ? 'border-transparent accent-gradient' : 'border-line-3',
+              )}
+            >
+              {on && <Check className="h-3 w-3 text-white" />}
+            </span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+/** Appearance chips — multi-select (Export) or single-select (`single`, Icon Pack render appearance). */
+export function AppearanceToggles({
+  value,
+  onChange,
+  single,
+  compact,
+}: {
+  value: readonly AppearanceId[]
+  onChange: (appearances: AppearanceId[]) => void
+  single?: boolean
+  compact?: boolean
+}) {
+  const presets = useAppStore((s) => s.presets.data)
+  return (
+    <div className="flex flex-wrap gap-1.5" role={single ? 'radiogroup' : 'group'}>
+      {APPEARANCE_IDS.map((a) => {
+        const on = value.includes(a)
+        const label = presets?.appearances[a]?.label ?? a
+        return (
+          <button
+            key={a}
+            type="button"
+            role={single ? 'radio' : 'checkbox'}
+            aria-checked={on}
+            aria-label={label}
+            data-tip={compact ? label : undefined}
+            onClick={() => onChange(single ? [a] : toggleIn(value, a))}
+            className={cn(
+              'flex items-center gap-2 rounded-lg border text-2xs font-medium transition-colors',
+              compact ? 'h-7 p-[3px]' : 'h-8 pl-1 pr-2.5',
+              on ? 'border-accent/55 bg-accent/[0.09] text-fg' : 'border-line text-fg-3 hover:border-line-2',
+            )}
+          >
+            <span
+              className={cn('flex items-center justify-center rounded-md border border-white/15', compact ? 'h-5 w-5' : 'h-6 w-6')}
+              style={{ background: APPEARANCE_VISUAL[a].bg, color: APPEARANCE_VISUAL[a].fg }}
+            >
+              <AppearanceIcon appearance={a} className="h-3 w-3" />
+            </span>
+            {!compact && label}
+          </button>
+        )
+      })}
+    </div>
   )
 }
 

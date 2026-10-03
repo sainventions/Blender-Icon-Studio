@@ -59,11 +59,11 @@ async function loadPresets(): Promise<Presets | null> {
   }
 }
 
-async function loadBackend(): Promise<{ project: Project; geometry: GeometryBundle }> {
+async function loadBackend(projectId?: string): Promise<{ project: Project; geometry: GeometryBundle }> {
   const list = await getJson<{ id: string; name: string }[]>('/api/projects')
   if (!list.length) throw new Error('backend has no projects')
   // ?project=<id or name> picks a specific one; default: the most recent.
-  const want = new URLSearchParams(location.search).get('project')?.toLowerCase()
+  const want = (projectId ?? new URLSearchParams(location.search).get('project') ?? undefined)?.toLowerCase()
   const pick = (want && list.find((p) => p.id.toLowerCase() === want || p.name.toLowerCase() === want)) || list[0]
   const id = encodeURIComponent(pick.id)
   const [project, geometry] = await Promise.all([
@@ -224,13 +224,13 @@ function Harness() {
     void loadPresets().then(setPresets)
   }, [])
 
-  const load = useCallback(async (src: Source) => {
+  const load = useCallback(async (src: Source, projectId?: string) => {
     setSource(src)
     try {
       let next: Project
       if (src === 'backend') {
         setStatus('fetching /api/projects…')
-        const { project: p, geometry: g } = await loadBackend()
+        const { project: p, geometry: g } = await loadBackend(projectId)
         next = withQuery(p)
         setProject(next)
         setGeometry(g)
@@ -267,6 +267,28 @@ function Harness() {
     (id: string, t: LayerTransform) => updateLayer(id, (l) => ({ ...l, transform: t })),
     [updateLayer],
   )
+
+  // Dev automation (screenshots / framing checks): window.__bisHarness.{load, set, state}.
+  const stateRef = useRef({ project, explode, view, appearance })
+  stateRef.current = { project, explode, view, appearance }
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    const w = window as unknown as { __bisHarness?: unknown }
+    w.__bisHarness = {
+      load: (id: string) => load('backend', id),
+      set: (o: { explode?: number; view?: 'front' | 'orbit'; appearance?: AppearanceId; grid?: boolean }) => {
+        if (o.explode !== undefined) setExplode(o.explode)
+        if (o.view) setView(o.view)
+        if (o.appearance) setAppearance(o.appearance)
+        if (o.grid !== undefined) setGrid(o.grid)
+      },
+      update: (fn: (p: Project) => Project) => update(fn),
+      state: () => stateRef.current,
+    }
+    return () => {
+      delete w.__bisHarness
+    }
+  }, [load, update])
 
   const layer = useMemo(() => project?.layers.find((l) => l.id === selected) ?? null, [project, selected])
   const materialIds = presets ? Object.keys(presets.materials) : MATERIALS

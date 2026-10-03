@@ -1,7 +1,8 @@
 import { Camera, Eraser, ExternalLink, FileCode2, Frame, ImageIcon, Lightbulb, Palette, SquareStack, TriangleAlert } from 'lucide-react'
-import type { Fill, LightingPreset, PlateShape, Project } from '../../../types'
+import type { Fill, PlateShape, Project } from '../../../types'
 import { projectsApi } from '../../../api'
 import { cn, formatNumber } from '../../../lib/format'
+import { lightingCss } from '../../../lib/meta'
 import { effectivePlateFill, setPlateFillOverride } from '../../../lib/projectOps'
 import { useAppStore } from '../../../store/app'
 import { useEditor } from '../../../store/editor'
@@ -12,18 +13,9 @@ import { PLATFORM_IDS, setPlatform } from '../actions'
 import { FillEditor } from './FillEditor'
 import { MaterialGallery, MaterialParams } from './MaterialGallery'
 import { PlateFillOverrideRows, ScopePicker, useScope } from './scope'
+import { LooksSection } from '../../looks/LooksPanels'
 
 const SHAPES: PlateShape[] = ['squircle', 'circle', 'rounded', 'square', 'none']
-
-/** Little visual for a lighting preset chip. */
-function lightingVisual(id: string, p: LightingPreset): string {
-  if (p.rimColors?.length) return `radial-gradient(circle at 30% 30%, ${p.rimColors[0]}, transparent 60%), radial-gradient(circle at 75% 75%, ${p.rimColors[1] ?? p.rimColors[0]}, transparent 60%), #0b0b12`
-  const warm = p.warmth > 0 ? `rgba(255,170,90,${0.25 + p.warmth * 0.4})` : 'rgba(255,255,255,0.75)'
-  const env = Math.min(1, p.environment / 1.8)
-  const base = `rgb(${Math.round(30 + env * 120)} ${Math.round(30 + env * 120)} ${Math.round(38 + env * 120)})`
-  if (id === 'top' || p.lockAngle === 0) return `radial-gradient(ellipse 80% 55% at 50% 0%, ${warm}, transparent 70%), ${base}`
-  return `radial-gradient(circle at 25% 20%, ${warm}, transparent ${40 + p.key * 15}%), linear-gradient(135deg, transparent 60%, rgba(255,255,255,${Math.min(0.6, p.rim * 0.25)})), ${base}`
-}
 
 export function DocumentInspector() {
   const project = useEditor((s) => s.project)!
@@ -56,6 +48,7 @@ export function DocumentInspector() {
 
   return (
     <div className="pb-6">
+      <LooksSection />
       <Section id="doc.platform" title="Platform & shape" icon={<Frame />}>
         <Row label="Platform">
           <Select
@@ -135,7 +128,7 @@ export function DocumentInspector() {
                   'block aspect-[4/3] w-full rounded-md border transition-[box-shadow,border-color]',
                   lighting.preset === id ? 'border-transparent shadow-[0_0_0_2px_var(--color-accent)]' : 'border-line-2 group-hover:border-line-3',
                 )}
-                style={{ background: lightingVisual(id, lp) }}
+                style={{ background: lightingCss(id, lp) }}
               />
               <span className={cn('w-full truncate text-center text-[9.5px]', lighting.preset === id ? 'text-fg' : 'text-fg-4 group-hover:text-fg-2')}>{lp.label}</span>
             </button>

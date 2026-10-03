@@ -5,6 +5,7 @@ import type { MaterialPreset, MaterialSpec, Presets } from '../../../types'
 import { cn } from '../../../lib/format'
 import { CATEGORY_ORDER, MATERIAL_CSS } from '../../../lib/meta'
 import { isParamModified, paramValue, withParam } from '../../../lib/projectOps'
+import { isReservedParam } from '../../../lib/looks'
 import { useUi } from '../../../store/ui'
 import { ColorField, Row, Segmented, Select, SliderRow, Switch, type ChangePhase } from '../../../components/ui'
 
@@ -136,7 +137,8 @@ export function MaterialParams({
   disabled?: boolean
 }) {
   if (!preset) return null
-  const entries = Object.entries(preset.params)
+  // Reserved `__*` keys are render-time intent flags (lib/appearance.ts) — never user-facing.
+  const entries = Object.entries(preset.params).filter(([k]) => !isReservedParam(k))
   if (!entries.length) return <p className="text-3xs text-fg-4">This material has no adjustable parameters.</p>
   const anyModified = entries.some(([k]) => isParamModified(preset, spec, k))
   return (

@@ -13,6 +13,12 @@ not used.
 
 Curve datablocks are cached by (layer hash, piece, depth params, route) so re-renders after material /
 lighting edits never rebuild geometry.
+
+Baked meshes (:func:`solid_mesh`): the scene renders MESH objects whose data is the curve (or the GN
+route's Fill Curve → Solidify → Bevel stack) evaluated ONCE and cached. A render with persistent data off
+evaluates every object from scratch, so live curve bevels / modifier stacks were re-evaluated on every
+render (a traced raster contour through the GN route: ~6 s per render for two pieces).
+Splines get an adaptive ``resolution_u`` (dense traced contours need no 12× subdivision per segment).
 """
 from __future__ import annotations
 
@@ -268,6 +274,33 @@ def fillet_corners(splines: list, radius: float, min_turn: float = FILLET_MIN_TU
 # ------------------------------------------------------------------------------------------------
 # curve datablocks
 # ------------------------------------------------------------------------------------------------
+RES_MAX = 12          # bezier subdivisions per segment (smooth few-point outlines: petals, circles)
+RES_TOL = 0.0008      # max chord error (local units ≈ 0.2 px at 512 px for a ±1 icon)
+RES_BUDGET = 1024     # max evaluated points per spline (segments × resolution) for pathological dense contours
+
+
+def spline_resolution(points: list, closed: bool = True) -> int:
+    """Subdivisions per segment from Wang's formula (cubic: n = sqrt(0.75·L / tol), L = max second
+    difference of the control points) for the most curved segment (Blender's resolution is per spline).
+    Few-point smooth outlines keep 12; dense traced contours (raster alpha masks: 100-400 nearly straight
+    segments) get 1-3 instead of 12 — 4-10× fewer vertices in every downstream step (bevel, fill, BVH,
+    EEVEE). Not a percentile: a spline with one big arc among many straight segments (Ti84, Play Store,
+    Home) would collapse that arc into 1-2 chords (up to 7 px at 512 px). Corpus cost of the max over
+    the 90th percentile: +15 % vertices."""
+    m = len(points)
+    segs = m if closed else m - 1
+    if segs <= 0:
+        return RES_MAX
+    worst = 0.0
+    for i in range(segs):
+        a, b = points[i], points[(i + 1) % m]
+        p0, c1, c2, p1 = a["co"], a.get("hr") or a["co"], b.get("hl") or b["co"], b["co"]
+        worst = max(worst, math.hypot(p0[0] - 2 * c1[0] + c2[0], p0[1] - 2 * c1[1] + c2[1]),
+                    math.hypot(c1[0] - 2 * c2[0] + p1[0], c1[1] - 2 * c2[1] + p1[1]))
+    n = int(math.ceil(math.sqrt(0.75 * worst / RES_TOL)))
+    return max(1, min(RES_MAX, max(1, RES_BUDGET // segs), n))
+
+
 def _fill_splines(cu: bpy.types.Curve, splines: Iterable[dict]) -> int:
     n = 0
     for s in splines:
@@ -285,7 +318,7 @@ def _fill_splines(cu: bpy.types.Curve, splines: Iterable[dict]) -> int:
             bp.handle_right = (hr[0], hr[1], 0.0)
         sp.use_cyclic_u = bool(s.get("closed", True))
         sp.use_smooth = True
-        sp.resolution_u = 12
+        sp.resolution_u = spline_resolution(pts, bool(s.get("closed", True)))
         n += 1
     return n
 
@@ -397,11 +430,91 @@ def _evict() -> None:
         cu = bpy.data.curves.get(name)
         if cu is not None and cu.users == 0:
             bpy.data.curves.remove(cu)
+    while len(_MESH_CACHE) > CACHE_LIMIT:
+        key, (name, _route) = _MESH_CACHE.popitem(last=False)
+        me = bpy.data.meshes.get(name)
+        if me is not None and me.users == 0:
+            bpy.data.meshes.remove(me)
+
+
+# ------------------------------------------------------------------------------------------------
+# baked meshes: evaluate the curve / GN stack once, render plain meshes
+# ------------------------------------------------------------------------------------------------
+_MESH_CACHE: "OrderedDict[str, tuple[str, str]]" = OrderedDict()   # key -> (mesh name, route)
+BAKE_SCENE = "BIS Bake"
+
+
+def _bake_scene() -> bpy.types.Scene:
+    """A private scene whose depsgraph evaluates only the object being baked (the icon scene's relations
+    are never touched)."""
+    sc = bpy.data.scenes.get(BAKE_SCENE)
+    if sc is None:
+        sc = bpy.data.scenes.new(BAKE_SCENE)
+    return sc
+
+
+def solid_mesh(key_parts: dict, splines: list, thickness: float, bevel: float, route: str, segments: int = 6,
+               gn_bevel: Optional[float] = None) -> tuple[bpy.types.Mesh, str]:
+    """Cached MESH datablock of a piece: the bevelled curve (curve route) or the evaluated GN fallback stack
+    (Fill Curve → Solidify → Bevel with ``gn_bevel``, default ``bevel``). Local units, z centred on 0.
+    Returns ``(mesh, route)`` (the route may switch to 'gn', see :func:`curve_data`)."""
+    gb = bevel if gn_bevel is None else gn_bevel
+    cu, final_route = curve_data(key_parts, splines, thickness, bevel, route, segments)
+    key = stable_hash({"cu": cu.get("bis_key", cu.name), "route": final_route, "gb": round(gb, 6), "s": segments,
+                       "t": round(thickness, 6), "v": "m1"})
+    hit = _MESH_CACHE.get(key)
+    me = bpy.data.meshes.get(hit[0]) if hit else None
+    if me is not None:
+        _MESH_CACHE.move_to_end(key)
+        return me, hit[1]
+    ob = bpy.data.objects.new("BIS~bake", cu)
+    try:
+        if final_route != "gn":
+            # extrude / bevel / offset are curve data: an unlinked original object evaluates just this curve
+            me = bpy.data.meshes.new_from_object(ob)
+        else:
+            sc = _bake_scene()
+            sc.collection.objects.link(ob)
+            apply_route(ob, "gn", thickness, gb, segments, None)
+            with bpy.context.temp_override(scene=sc, view_layer=sc.view_layers[0]):
+                dg = bpy.context.evaluated_depsgraph_get()     # the bake scene's own depsgraph
+                me = bpy.data.meshes.new_from_object(ob.evaluated_get(dg))
+    finally:
+        bpy.data.objects.remove(ob, do_unlink=True)
+        sc = bpy.data.scenes.get(BAKE_SCENE)
+        if sc is not None and sc != bpy.context.scene:     # keep saved .blend files free of it
+            bpy.data.scenes.remove(sc)
+    me.name = f"BIS~{key[:10]}"
+    if len(me.materials) == 0:
+        me.materials.append(None)
+    else:
+        for i in range(len(me.materials)):
+            me.materials[i] = None          # the object-linked slot carries the material
+    me["bis_key"] = key
+    me["bis_route"] = final_route
+    _MESH_CACHE[key] = (me.name, final_route)
+    _evict()
+    return me, final_route
+
+
+def is_cached_mesh(me) -> bool:
+    return me is not None and bool(me.get("bis_key"))
+
+
+def purge_unused_meshes() -> int:
+    cached = {v[0] for v in _MESH_CACHE.values()}
+    n = 0
+    for me in list(bpy.data.meshes):
+        if me.get("bis_key") and me.users == 0 and me.name not in cached:
+            bpy.data.meshes.remove(me)
+            n += 1
+    return n
 
 
 def reset_caches() -> None:
     """Forget cached datablock names (after read_homefile the datablocks are gone)."""
     _CURVE_CACHE.clear()
+    _MESH_CACHE.clear()
     _OCC_CACHE.clear()
 
 

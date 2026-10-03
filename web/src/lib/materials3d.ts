@@ -14,7 +14,7 @@
 // applyIconMaterial() pushes a spec + context into an IconMaterial in place (recompiles only on topology change).
 import * as THREE from 'three'
 import type { MaterialSpec, Presets } from '../types'
-import { readMaterialIntent, type MaterialIntent } from './appearance'
+import { MONO_FLOOR, MONO_MIN_RANGE, readMaterialIntent, type MaterialIntent } from './appearance'
 import { getFilmNoiseTexture, getGrainNormalMap, getRadialAnisotropyMap } from '../viewport/textures/procedural'
 
 export type PaintMode = 'tint' | 'base' | 'emission'
@@ -76,6 +76,8 @@ export interface IconMaterialSpec {
   /** Neon hot core: mix toward white where the tube faces the camera. */
   core: number
   rim: { key: number; back: number; glow: number }
+  /** Liquid Glass shading model (worker b_liquid_glass); null for every other preset. */
+  lg: LiquidGlassModel | null
   /** Requested compositor bloom (neon). */
   bloom: number
   unlit: boolean
@@ -84,6 +86,47 @@ export interface IconMaterialSpec {
 
 const WHITE: RGB = [1, 1, 1]
 
+/**
+ * Worker b_liquid_glass (art-directed Icon Composer look), mirrored term by term in the shader (BIS_LG):
+ *  · face = mix(clear glass, self-lit fill, fill) with fill = mix(fCol, fWhite, whiteness^1.5) · (0.8 → 1.0 bottom →
+ *    top) [· clamp(1.15 · mono lum) in clear renditions] · (0.12 → 1 smoothstep over e 0.3 → 0.8), where
+ *    e = 1 − |N.xy| (0 = silhouette, 1 = cap), fCol = clamp(1.2 − 0.9·transl), fWhite = clamp(1.35 − 0.6·transl, ≤ 0.94);
+ *  · self-lit fill = 0.18 · diffuse(body) + 0.82 · emission(body · (0.8 → 1.04 bottom → top) · lit) under the coat;
+ *  · clear glass tinted body^k, k = 4 → 2 per interface over e 0 → 0.8 (deeper toward the outline; three.js tints a
+ *    path once: LG_DEEP), specular level 0.4 and coat both faded out toward the silhouette (e 0.08 → 0.6);
+ *  · rim = 5 · rim · (key² + 0.16 · back²) · band(e, RIM_BANDS[specular]), key/back = ±dot(N.xy, L.xy) normalised;
+ *  · glow = mix(body, white, 0.3) · band(e, 0.3, 0.45, 0.8, 0.95) · (0.08 + 0.92 · back) · 1.4 · glow · lit;
+ *  · lit = clamp(0.55 + 0.45 · key light, 0.4, 1.4) (MaterialContext.lit).
+ */
+export interface LiquidGlassModel {
+  /** Fill share for saturated (x) / white (y) paint. */
+  fill: [number, number]
+  /** Rim emission strength (5 · rim; 0 when specular is off). */
+  rim: number
+  /** Rim band over e: smoothstep(a0, a1) · (1 − smoothstep(b0, b1)). */
+  band: [number, number, number, number]
+  /** Inner glow amount (preset `glow`). */
+  glow: number
+}
+
+/** Worker RIM_BANDS (specular placement of the Liquid Glass rim over e = 1 − |N.xy|). */
+export const LG_RIM_BANDS: Record<string, [number, number, number, number]> = {
+  auto: [0.015, 0.06, 0.24, 0.4],
+  inside: [0.3, 0.42, 0.6, 0.78],
+  outside: [0.0, 0.005, 0.06, 0.14],
+}
+/** Worker Liquid Glass: diffuse share of the self-lit fill (the rest is emission). */
+export const LG_FILL_DIFFUSE = 0.18
+/** Liquid Glass clear-glass tint exponent at the silhouette / on the face (see PAINT_APPLY). */
+export const LG_DEEP: [number, number] = [2.0, 1.6]
+/** Worker Liquid Glass: Specular IOR Level 0.4 on the face (three.js specularIntensity 1 ≙ Blender 0.5). */
+export const LG_SPECULAR = 0.8
+
+/** Worker `lit`: the Liquid Glass self-illumination follows the key light. */
+export function liquidGlassLit(key: number): number {
+  return Math.max(0.4, Math.min(1.4, 0.55 + 0.45 * key))
+}
+
 /** Worker `tint_curve`: UI tint (0..1) → colour mix factor, eased out so the default 0.45 keeps colours vivid. */
 export function tintCurve(t: number): number {
   const c = Math.max(0, Math.min(1, t))
@@ -91,11 +134,11 @@ export function tintCurve(t: number): number {
 }
 
 /**
- * Mono / tint renditions (PLAN §5, worker `_mono`): perceptual luminance stretched from the icon-wide range to
- * MONO_FLOOR..1. A narrow range is never over-stretched (lo ≤ hi − MONO_MIN_RANGE), like the worker.
+ * Mono / tint renditions (PLAN §5/§10, worker `_mono`): perceptual luminance stretched from the icon-wide range to
+ * MONO_FLOOR..1 (0.3..1, defined with the other rendition rules in lib/appearance.ts). A narrow range is never
+ * over-stretched (lo ≤ hi − MONO_MIN_RANGE), like the worker.
  */
-export const MONO_FLOOR = 0.25
-export const MONO_MIN_RANGE = 0.55
+export { MONO_FLOOR, MONO_MIN_RANGE }
 
 /** Preset param defaults merged with the layer's overrides. Unknown presets fall back to `satin`. */
 export function resolveMaterialParams(spec: MaterialSpec, presets: Presets | null | undefined): Params {
@@ -157,6 +200,7 @@ function baseSpec(presetId: string, paintMode: PaintMode, intent: MaterialIntent
     emissive: 0,
     core: 0,
     rim: { key: 0, back: 0, glow: 0 },
+    lg: null,
     bloom: 0,
     unlit: false,
     intent,
@@ -188,20 +232,20 @@ export function describeMaterial(spec: MaterialSpec, presets: Presets | null | u
   switch (presetId) {
     case 'liquid_glass': {
       const specular = str('specular', 'auto')
-      const rim = num('rim', 0.8)
-      glassTint(0.45)
+      const transl = clamp(num('translucency', 0.75), 0, 1)
+      glassTint(0.5)
       s.transmission = 1
-      s.milk = (1 - clamp(num('translucency', 0.6), 0, 1)) * 1.6
-      s.roughness = num('frost', 0.12)
-      s.ior = num('ior', 1.45)
+      s.roughness = num('frost', 0.06)
+      s.ior = num('ior', 1.5)
       s.thicknessScale = 2.8
       s.clearcoat = specular === 'off' ? 0 : 1
       s.clearcoatRoughness = 0.02
-      s.specularIntensity = specular === 'off' ? 0.45 : 1
-      s.rim = {
-        key: specular === 'off' ? 0 : specular === 'inside' ? 0.3 * rim : rim,
-        back: specular === 'off' || specular === 'outside' ? 0 : 0.45 * rim * (specular === 'inside' ? 2.2 : 1),
-        glow: num('glow', 0),
+      s.specularIntensity = LG_SPECULAR
+      s.lg = {
+        fill: [clamp(1.2 - 0.9 * transl, 0, 1), clamp(1.35 - 0.6 * transl, 0, 0.94)],
+        rim: specular === 'off' ? 0 : 5 * num('rim', 1),
+        band: LG_RIM_BANDS[specular] ?? LG_RIM_BANDS.auto,
+        glow: num('glow', 0.35),
       }
       break
     }
@@ -409,7 +453,17 @@ export interface PaintBinding {
   color: THREE.Color
   /** Linear luminance range of the paint (mono / tint renditions). */
   lumRange: [number, number]
+  /** Largest alpha of the paint map (default 1). */
+  alphaMax?: number
 }
+
+/**
+ * Raster regions whose paint never gets more than half opaque (shading / highlight overlays traced from soft-alpha
+ * images) render without refraction: the worker alpha-mixes its glass with transparency, so at ≤ 50 % alpha the
+ * body reads as a tinted veil — three.js transmission instead refracts the traced polygon's bevels into shards and,
+ * being drawn after the blended layers, would hide the translucent art underneath it.
+ */
+export const OVERLAY_ALPHA_MAX = 0.5
 
 export interface FakeGlassBinding {
   /** What the glass shows through itself: the plate fill / wallpaper (canvas space) or the backdrop (screen space). */
@@ -443,6 +497,8 @@ export interface MaterialContext {
   /** Art-space y extent of the layer (translucency falloff). */
   milkRange?: [number, number]
   opacity: number
+  /** Liquid Glass self-illumination factor (liquidGlassLit(rig key)); default 1. */
+  lit?: number
 }
 
 function createUniforms() {
@@ -474,6 +530,11 @@ function createUniforms() {
     bisCenter: { value: new THREE.Vector2() },
     bisRadius: { value: 1 },
     bisInflate: { value: 0 },
+    bisLgFill: { value: new THREE.Vector2(0.5, 0.9) },
+    bisLgRim: { value: 0 },
+    bisLgBand: { value: new THREE.Vector4(0.015, 0.06, 0.24, 0.4) },
+    bisLgGlow: { value: 0 },
+    bisLgLit: { value: 1 },
   }
 }
 
@@ -542,6 +603,24 @@ varying vec4 vBisClip;
 #ifdef BIS_INFLATE
   varying vec3 vBisTilt;
 #endif
+#ifdef BIS_LG
+  uniform vec2 bisLgFill;
+  uniform float bisLgRim;
+  uniform vec4 bisLgBand;
+  uniform float bisLgGlow;
+  uniform float bisLgLit;
+  // Worker _band: smoothstep(a0, a1, e) · (1 − smoothstep(b0, b1, e)).
+  float bisBand( vec4 b, float e ) { return smoothstep( b.x, b.y, e ) * ( 1.0 - smoothstep( b.z, b.w, e ) ); }
+  // Worker _whiteness: perceptual HSV value × (1 − saturation).
+  float bisWhiteness( vec3 c ) {
+    float mx = max( max( c.r, c.g ), c.b );
+    float mn = min( min( c.r, c.g ), c.b );
+    float sat = mx > 1e-6 ? ( mx - mn ) / mx : 0.0;
+    return clamp( pow( max( mx, 0.0 ), 1.0 / 2.2 ) * ( 1.0 - sat ), 0.0, 1.0 );
+  }
+#endif
+// Stretched mono level of the last paint sample (worker _lum, clear renditions).
+float bisLumSt = 1.0;
 
 vec3 bisPaintSample() {
   #ifdef BIS_PAINT_MAP
@@ -556,6 +635,7 @@ vec3 bisPaintSample() {
     float hi = bisLumRange.y;
     float lo = min( bisLumRange.x, hi - ${MONO_MIN_RANGE.toFixed(4)} );
     float st = mix( ${MONO_FLOOR.toFixed(4)}, 1.0, clamp( ( l - lo ) / max( hi - lo, 1e-4 ), 0.0, 1.0 ) );
+    bisLumSt = st;
     vec3 g = vec3( pow( st, 2.2 ) );
     #if BIS_INTENT == 2
       g = mix( g, g * bisIntentTint, bisIntentStrength );
@@ -579,13 +659,33 @@ float bisMilkAmount( vec3 paint ) {
 const PAINT_APPLY = /* glsl */ `
 #include <map_fragment>
 vec3 bisP = bisPaintSample();
-float bisMilkV = bisMilkAmount( bisP );
+// Body colour (worker glass_colors base_m): tinted() = mix(white, paint, tintCurve(tint)) in gamma-2.2 space.
+#ifdef BIS_PAINT_PERCEPTUAL
+  vec3 bisPm = pow( mix( pow( bisNeutral, vec3( 1.0 / 2.2 ) ), pow( max( bisP, vec3( 0.0 ) ), vec3( 1.0 / 2.2 ) ), bisPaintMix ), vec3( 2.2 ) );
+#else
+  vec3 bisPm = mix( bisNeutral, bisP, bisPaintMix );
+#endif
+#ifdef BIS_LG
+  // Liquid Glass fill share (see LiquidGlassModel); e = 1 − |N.xy| of the unperturbed normal.
+  vec3 bisN0 = inverseTransformDirection( normalize( vNormal ), viewMatrix );
+  float bisE = clamp( 1.0 - length( bisN0.xy ), 0.0, 1.0 );
+  float bisV01 = clamp( ( vBisArt.y - bisMilkRange.x ) / max( bisMilkRange.y - bisMilkRange.x, 1e-4 ), 0.0, 1.0 );
+  float bisFill = mix( bisLgFill.x, bisLgFill.y, pow( bisWhiteness( bisP ), 1.5 ) ) * mix( 0.8, 1.0, bisV01 );
+  #if BIS_INTENT == 1
+    bisFill = clamp( bisFill * bisLumSt * 1.15, 0.0, 1.0 );
+  #endif
+  bisFill = clamp( bisFill * mix( 0.12, 1.0, smoothstep( 0.3, 0.8, bisE ) ), 0.0, 1.0 );
+  float bisMilkV = bisFill;
+#else
+  float bisMilkV = bisMilkAmount( bisP );
+#endif
 #if BIS_PAINT_MODE != 2
-  #ifdef BIS_PAINT_PERCEPTUAL
-    // Worker tinted(): mix(white, paint, tintCurve(tint)) in gamma-2.2 space.
-    diffuseColor.rgb *= pow( mix( pow( bisNeutral, vec3( 1.0 / 2.2 ) ), pow( max( bisP, vec3( 0.0 ) ), vec3( 1.0 / 2.2 ) ), bisPaintMix ), vec3( 2.2 ) );
+  #ifdef BIS_LG
+    // Clear-glass tint deepens toward the outline (worker: body^(4 → 2) per interface over e 0 → 0.8). three.js
+    // tints a transmitted path once; body^(LG_DEEP) over the same range matches the Cycles renders.
+    diffuseColor.rgb *= pow( max( bisPm, vec3( 0.0 ) ), vec3( mix( ${LG_DEEP[0].toFixed(2)}, ${LG_DEEP[1].toFixed(2)}, clamp( bisE / 0.8, 0.0, 1.0 ) ) ) );
   #else
-    diffuseColor.rgb *= mix( bisNeutral, bisP, bisPaintMix );
+    diffuseColor.rgb *= bisPm;
   #endif
 #endif
 #ifdef BIS_PAINT_ALPHA
@@ -608,13 +708,24 @@ float bisNV = saturate( dot( normal, bisV ) );
 #else
   totalEmissiveRadiance += bisP * bisEmissive;
 #endif
-// Light-angle-locked rim (glass doc §3.2): (max(N·L,0)^3 + 0.45·max(−N·L,0)^3) × Fresnel
-vec3 bisNW = inverseTransformDirection( normal, viewMatrix );
-float bisD = dot( bisNW, bisRimDir );
-float bisFres = pow( 1.0 - bisNV, 2.0 );
-float bisRim = ( pow( max( bisD, 0.0 ), 3.0 ) * bisRimKey + pow( max( -bisD, 0.0 ), 3.0 ) * bisRimBack ) * bisFres;
-totalEmissiveRadiance += bisRimColor * bisRim * 6.0;
-totalEmissiveRadiance += bisP * bisGlow * ( 1.0 - bisNV );
+#ifdef BIS_LG
+  // Liquid Glass (worker _rim_lg, glow, self-lit fill): the light direction projected into the icon plane.
+  vec2 bisLxy = length( bisRimDir.xy ) > 1e-3 ? normalize( bisRimDir.xy ) : vec2( 0.0, 1.0 );
+  float bisNl = length( bisN0.xy );
+  float bisLs = bisNl > 1e-5 ? dot( bisN0.xy / bisNl, bisLxy ) : 0.0;
+  float bisBackSide = max( -bisLs, 0.0 );
+  totalEmissiveRadiance += bisRimColor * ( pow( max( bisLs, 0.0 ), 2.0 ) + 0.16 * bisBackSide * bisBackSide ) * bisBand( bisLgBand, bisE ) * bisLgRim;
+  totalEmissiveRadiance += mix( bisPm, vec3( 1.0 ), 0.3 ) * bisBand( vec4( 0.3, 0.45, 0.8, 0.95 ), bisE ) * ( 0.08 + 0.92 * bisBackSide ) * bisLgGlow;
+  totalEmissiveRadiance += bisPm * bisFill * ${(1 - LG_FILL_DIFFUSE).toFixed(4)} * mix( 0.8, 1.04, bisV01 ) * bisLgLit;
+#else
+  // Light-angle-locked rim (glass doc §3.2): (max(N·L,0)^3 + 0.45·max(−N·L,0)^3) × Fresnel
+  vec3 bisNW = inverseTransformDirection( normal, viewMatrix );
+  float bisD = dot( bisNW, bisRimDir );
+  float bisFres = pow( 1.0 - bisNV, 2.0 );
+  float bisRim = ( pow( max( bisD, 0.0 ), 3.0 ) * bisRimKey + pow( max( -bisD, 0.0 ), 3.0 ) * bisRimBack ) * bisFres;
+  totalEmissiveRadiance += bisRimColor * bisRim * 6.0;
+  totalEmissiveRadiance += bisP * bisGlow * ( 1.0 - bisNV );
+#endif
 #ifdef BIS_FAKE_GLASS
   #if BIS_BEHIND_SPACE == 0
     vec2 bisBuv = vBisWorld.xy * bisBehindScale + 0.5;
@@ -630,6 +741,29 @@ totalEmissiveRadiance += bisP * bisGlow * ( 1.0 - bisNV );
   float bisF = 0.04 + 0.96 * pow( 1.0 - bisNV, 5.0 );
   totalEmissiveRadiance += bisBehind * bisGlassColor * bisFakeT * ( 1.0 - bisF ) * 0.9;
 #endif
+`
+
+// Liquid Glass: specular level and coat fade out toward the silhouette (worker: e 0.08 → 0.6), tamed grazing
+// reflections; the self-lit fill's diffuse share is LG_FILL_DIFFUSE (the rest is emission, added above).
+const LG_LIGHTS = /* glsl */ `
+#include <lights_physical_fragment>
+#ifdef BIS_LG
+  float bisTame = clamp( ( bisE - 0.08 ) / 0.52, 0.0, 1.0 );
+  material.specularColor *= bisTame;
+  material.specularColorBlended *= bisTame;
+  material.specularF90 *= bisTame;
+  #ifdef USE_CLEARCOAT
+    material.clearcoat *= bisTame;
+  #endif
+#endif
+`
+
+const LG_AO = /* glsl */ `
+#ifdef BIS_LG
+  reflectedLight.directDiffuse *= ${LG_FILL_DIFFUSE.toFixed(4)};
+  reflectedLight.indirectDiffuse *= ${LG_FILL_DIFFUSE.toFixed(4)};
+#endif
+#include <aomap_fragment>
 `
 
 const warned = new Set<string>()
@@ -671,6 +805,8 @@ function patchShader(shader: THREE.WebGLProgramParametersWithUniforms, uniforms:
   fs = inject(fs, '#include <normal_fragment_begin>', normalBegin)
   fs = inject(fs, '#include <emissivemap_fragment>', EMISSIVE_ADD)
   fs = inject(fs, '#include <transmission_fragment>', transmission)
+  fs = inject(fs, '#include <lights_physical_fragment>', LG_LIGHTS)
+  fs = inject(fs, '#include <aomap_fragment>', LG_AO)
   shader.fragmentShader = fs
 }
 
@@ -688,7 +824,7 @@ export class IconMaterial extends THREE.MeshPhysicalMaterial {
   }
 
   override customProgramCacheKey(): string {
-    return 'bis-icon-v2'
+    return 'bis-icon-v3'
   }
 }
 
@@ -712,7 +848,10 @@ const _c = new THREE.Color()
 /** Push `spec` + `ctx` into `m` (in place). Triggers a program switch only when the shader topology changes. */
 export function applyIconMaterial(m: IconMaterial, s: IconMaterialSpec, ctx: MaterialContext): void {
   const u = m.bis
-  const fake = ctx.fake && s.transmission > 0 ? ctx.fake : null
+  const paintAlpha = !!ctx.paintAlpha && !!ctx.paint.map
+  const overlay = paintAlpha && (ctx.paint.alphaMax ?? 1) < OVERLAY_ALPHA_MAX
+  const refract = s.transmission > 0 && !overlay
+  const fake = ctx.fake && refract ? ctx.fake : null
   m.isFakeGlass = !!fake
 
   const defines: Record<string, string | number> = {
@@ -722,7 +861,6 @@ export function applyIconMaterial(m: IconMaterial, s: IconMaterialSpec, ctx: Mat
     BIS_PAINT_MODE: PAINT_MODE_INDEX[s.paintMode],
     BIS_INTENT: INTENT_INDEX[s.intent.intent],
   }
-  const paintAlpha = !!ctx.paintAlpha && !!ctx.paint.map
   if (ctx.paint.map) defines.BIS_PAINT_MAP = ''
   if (paintAlpha) defines.BIS_PAINT_ALPHA = ''
   if (fake) {
@@ -734,12 +872,13 @@ export function applyIconMaterial(m: IconMaterial, s: IconMaterialSpec, ctx: Mat
   if (inflate > 1e-4) defines.BIS_INFLATE = ''
   if (s.milkByLum) defines.BIS_MILK_LUM = ''
   if (s.paintPerceptual) defines.BIS_PAINT_PERCEPTUAL = ''
+  if (s.lg) defines.BIS_LG = ''
 
   // ---------------------------------------------------------------- physical properties
   m.color.setRGB(s.baseColor[0], s.baseColor[1], s.baseColor[2])
   m.roughness = clamp(s.roughness, 0, 1)
   m.metalness = clamp(s.metalness, 0, 1)
-  m.transmission = fake ? 0 : clamp(s.transmission, 0, 1)
+  m.transmission = fake || !refract ? 0 : clamp(s.transmission, 0, 1)
   m.thickness = Math.max(0, ctx.thickness * s.thicknessScale)
   m.ior = clamp(s.ior, 1, 2.333)
   m.clearcoat = clamp(s.clearcoat, 0, 1)
@@ -754,7 +893,7 @@ export function applyIconMaterial(m: IconMaterial, s: IconMaterialSpec, ctx: Mat
   m.iridescenceIOR = s.iridescenceIOR
   m.iridescenceThicknessRange = [s.iridescenceRange[0], s.iridescenceRange[1]]
   m.iridescenceThicknessMap = s.iridescence > 0 ? filmTexture(s.iridescenceBands) : null
-  m.dispersion = fake ? 0 : Math.max(0, s.dispersion)
+  m.dispersion = fake || !refract ? 0 : Math.max(0, s.dispersion)
   m.anisotropy = clamp(s.anisotropy, 0, 1)
   m.anisotropyMap = s.anisotropy > 0 && s.anisotropyRadial ? getRadialAnisotropyMap() : null
   if (s.grain > 0) {
@@ -810,6 +949,14 @@ export function applyIconMaterial(m: IconMaterial, s: IconMaterialSpec, ctx: Mat
   u.bisInflate.value = inflate
   u.bisMilk.value = Math.max(0, s.milk)
   u.bisMilkRange.value.set(ctx.milkRange?.[0] ?? -1, ctx.milkRange?.[1] ?? 1)
+  if (s.lg) {
+    const lit = ctx.lit ?? 1
+    u.bisLgFill.value.set(s.lg.fill[0], s.lg.fill[1])
+    u.bisLgRim.value = s.lg.rim
+    u.bisLgBand.value.set(s.lg.band[0], s.lg.band[1], s.lg.band[2], s.lg.band[3])
+    u.bisLgGlow.value = 1.4 * s.lg.glow * lit
+    u.bisLgLit.value = lit
+  }
 
   const topology = [
     JSON.stringify(defines),
@@ -824,6 +971,34 @@ export function applyIconMaterial(m: IconMaterial, s: IconMaterialSpec, ctx: Mat
     m.needsUpdate = true
   }
 }
+
+/**
+ * three.js draws `transparent` materials after the transmissive (glass) ones and leaves them out of the transmission
+ * buffer, so a blended body — layer opacity < 1, soft raster alpha, a blend mode — lying under a glass layer is
+ * depth-occluded by that glass and never refracted by it: it simply vanishes (Blender shows it through the glass).
+ * Blended, non-refractive bodies are therefore drawn in the opaque pass instead: `transparent = false` with an explicit
+ * blend function (three.js only drops blending for NormalBlending on opaque materials), after the opaque bodies and
+ * back to front through `renderOrder` (see BLENDED_RENDER_ORDER). Returns whether the material was routed.
+ * Callers route only bodies that are not lying on top of refracting glass (LayerStack StackEntry.routeBlended): drawn
+ * before that glass, a routed body would occlude it (depth) and be refracted by it instead of covering it.
+ */
+export function blendInOpaquePass(m: THREE.MeshPhysicalMaterial): boolean {
+  if (!m.transparent || m.transmission > 0) return false
+  if (m.blending === THREE.NormalBlending) {
+    m.blending = THREE.CustomBlending
+    m.blendEquation = THREE.AddEquation
+    m.blendSrc = m.premultipliedAlpha ? THREE.OneFactor : THREE.SrcAlphaFactor
+    m.blendDst = THREE.OneMinusSrcAlphaFactor
+    m.blendEquationAlpha = THREE.AddEquation
+    m.blendSrcAlpha = THREE.OneFactor
+    m.blendDstAlpha = THREE.OneMinusSrcAlphaFactor
+  }
+  m.transparent = false
+  return true
+}
+
+/** renderOrder base of blended bodies in the opaque pass: plate 1, layer at stack level L → 2 + L (+ sub-order). */
+export const BLENDED_RENDER_ORDER = { plate: 1, layer: 2 } as const
 
 /** Convenience: true when the preset renders with real transmission (glass). */
 export function isTransmissive(s: IconMaterialSpec): boolean {

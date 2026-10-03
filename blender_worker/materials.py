@@ -20,6 +20,10 @@ Spec keys::
     bbox     (minx, miny, maxx, maxy) object-space extents (translucency falloff, dome)
     inflate  float                   0..1 dome normal on the front cap
     emission float                   extra paint-coloured emission (tinted-dark, plus-lighter blend)
+    eevee_backdrop None | dict       role 'backdrop' (glass plate over the wallpaper, clear/tinted renditions):
+                                     appearance.wallpaper_linear() — EEVEE shades frosted glass over it
+    obj_scale float                  object scale (object coords -> world XY for the backdrop lookup)
+    lit      float                   key-light level (1 = studio): scales Liquid Glass' self-lit fill
 """
 from __future__ import annotations
 
@@ -71,6 +75,7 @@ def topology_key(spec: dict) -> str:
         spec.get("mono") is not None, bool(spec.get("mono") and spec["mono"].get("tint") is not None),
         bool(spec.get("clear")), bool(spec.get("alpha")), spec.get("role", "opaque"),
         float(spec.get("inflate") or 0) > 0,
+        len((spec.get("eevee_backdrop") or {}).get("blobs") or []) if spec.get("eevee_backdrop") else -1,
     ]
     if spec["preset"] == "tinted_glass":
         flags.append(float(pr.get("absorption", 0) or 0) > 0)
@@ -184,6 +189,7 @@ class _Ctx:
         self._tc = None
         self._geo = None
         self._obj = None
+        self._edge_s = None
 
     def prm(self, key: str, default: float = 0.0) -> float:
         v = self.params.get(key, default)
@@ -532,10 +538,134 @@ def _glass_common(c: _Ctx, col, normal, tint: float, frost: float, ior: float, t
     return cyc, ev, None
 
 
+# Liquid Glass bands on the round bevel, by the normalised SCREEN distance from the silhouette
+# e = 1 − |N.xy| (round profile seen along the view axis: 0 at the outline, 1 where the flat cap begins).
+RIM_BANDS = {"auto": (0.015, 0.06, 0.24, 0.4), "inside": (0.3, 0.42, 0.6, 0.78),
+             "outside": (0.0, 0.005, 0.06, 0.14)}
+
+
+def _edge(c: _Ctx):
+    """-> (e = 1 − |N.xy| (0 = silhouette, 1 = cap), normal socket); built once per material."""
+    if c._edge_s is None:
+        g = c.g
+        nrm = c.geo.outputs["Normal"]
+        c._edge_s = (g.math("SUBTRACT", 1.0, g.vmath("LENGTH", g.vmath("MULTIPLY", nrm, (1.0, 1.0, 0.0))),
+                            clamp=True), nrm)
+    return c._edge_s
+
+
+def _band(c: _Ctx, e, a0, a1, b0, b1):
+    g = c.g
+    return g.math("MULTIPLY", g.map_range(e, a0, a1, 0.0, 1.0, interp="SMOOTHSTEP"),
+                  g.map_range(e, b0, b1, 1.0, 0.0, interp="SMOOTHSTEP"))
+
+
+def _light_side(c: _Ctx, nrm, sign: float = 1.0):
+    """max(0, ±dot(normalize(N.xy), normalize(L.xy))): 1 on the edges facing (+1) / opposite (−1) the light."""
+    g = c.g
+    L = c.spec.get("light", (-0.45, 0.45, 0.77))
+    lx, ly = float(L[0]), float(L[1])
+    ln = (lx * lx + ly * ly) ** 0.5
+    lx, ly = (lx / ln, ly / ln) if ln > 1e-3 else (0.0, 1.0)
+    n2 = g.vmath("NORMALIZE", g.vmath("MULTIPLY", nrm, (1.0, 1.0, 0.0)))
+    return g.math("MAXIMUM", g.math("MULTIPLY", g.vmath("DOT_PRODUCT", n2, (lx, ly, 0.0)), sign), 0.0)
+
+
+def _rim_lg(c: _Ctx, strength: float, mode: str):
+    """Liquid Glass specular rim: a crisp band just inside the outline, bright (clipping to white) on the
+    edges facing the light (its direction projected into the icon plane), a faint counter-rim on the
+    opposite side and only a hint elsewhere (Icon Composer 1.x look at the default −45°)."""
+    g = c.g
+    e, nrm = _edge(c)
+    key = g.math("POWER", _light_side(c, nrm, 1.0), 2.0)
+    back = g.math("POWER", _light_side(c, nrm, -1.0), 2.0)
+    w = g.math("ADD", key, g.math("MULTIPLY", back, 0.16))
+    band = _band(c, e, *RIM_BANDS.get(mode, RIM_BANDS["auto"]))
+    return g.math("MULTIPLY", g.math("MULTIPLY", w, band), strength if mode != "off" else 0.0)
+
+
+def _whiteness(c: _Ctx, col):
+    """0..1: how white the paint is (perceptual value × (1 − saturation)). White glyphs on coloured plates
+    keep a frosted-white body; saturated brand colours stay clear, vivid glass."""
+    g = c.g
+    hsv = g.node("ShaderNodeSeparateColor", mode="HSV")
+    g.set(hsv.inputs[0], col)
+    v = g.math("POWER", g.math("MAXIMUM", hsv.outputs[2], 0.0), 1 / 2.2)
+    return g.math("MULTIPLY", v, g.math("SUBTRACT", 1.0, hsv.outputs[1]), clamp=True)
+
+
+def _coat_only(c: _Ctx, normal, rim, coat_w):
+    """Glossy clear coat + rim emission over a self-lit fill (a black, non-transmissive Principled adds
+    only its dielectric reflections)."""
+    p = _principled(c, {"Base Color": (0.0, 0.0, 0.0), "Roughness": 0.25, "Specular IOR Level": 0.0,
+                        "Coat Weight": coat_w, "Coat Roughness": 0.02, "Coat IOR": 1.5,
+                        "Emission Color": WHITE, "Emission Strength": rim}, normal)
+    return p.outputs[0]
+
+
 def b_liquid_glass(c: _Ctx, col, normal):
-    return _glass_common(c, col, normal, c.prm("tint", 0.45), c.prm("frost", 0.12), c.prm("ior", 1.45),
-                         c.prm("translucency", 0.6), c.prm("rim", 0.8) * 4.5,
-                         str(c.params.get("specular", "auto")), c.prm("glow", 0.0))
+    """Apple iOS 26-style Liquid Glass (art-directed; both engines share the structure).
+
+    * Face: the brand colour as backlit, self-lit glass ("lit from within", slightly brighter at the top)
+      mixed with clear transmission; ``fill`` follows Translucency, the paint's whiteness (white glyphs stay
+      frosted white over colour) and Icon Composer's vertical falloff. Self-lit, so the layer's own drop
+      shadow and the view transform's highlight desaturation never wash the brand colour out.
+    * Pill edge: clear glass, so what lies beneath is lensed into the rounded edge, with a deeper colour
+      (longer paths, Beer-Lambert-like) and tamed grazing reflections (else the bright plate mirrors in as
+      a pale outline).
+    * A crisp light-locked specular rim + faint counter-rim just inside the outline, a glossy coat, and a
+      soft paint-tinted inner glow where the light exits (opposite the key).
+    EEVEE: the same mix with a single refraction closure (diffuse + refraction mixes render grainy)."""
+    g = c.g
+    tint, frost, ior = c.prm("tint", 0.5), c.prm("frost", 0.06), c.prm("ior", 1.5)
+    transl, rim_amt, glow = c.prm("translucency", 0.5), c.prm("rim", 1.0), c.prm("glow", 0.35)
+    mode = str(c.params.get("specular", "auto"))
+    lit = float(c.spec.get("lit", 1.0))
+    base_t, base_m = glass_colors(c, col, tint)
+    rim = _rim_lg(c, 5.0 * rim_amt, mode)
+    coat_w = 0.0 if mode == "off" else 1.0
+    e, nrm = _edge(c)
+    # fill share
+    bx = c.spec.get("bbox") or (-1, -1, 1, 1)
+    y = g.separate(c.tc.outputs["Object"]).outputs["Y"]
+    v01 = g.map_range(y, bx[1], bx[3], 0.0, 1.0)
+    white = g.math("POWER", _whiteness(c, col), 1.5)
+    f_col, f_white = clamp(1.2 - 0.9 * transl, 0.0, 1.0), clamp(1.35 - 0.6 * transl, 0.0, 0.94)
+    fill = g.math("MULTIPLY", g.map_range(white, 0.0, 1.0, f_col, f_white),
+                  g.map_range(v01, 0.0, 1.0, 0.8, 1.0))
+    if c.spec.get("clear") and c.spec.get("_lum") is not None:
+        fill = g.math("MULTIPLY", fill, g.math("MULTIPLY", c.spec["_lum"], 1.15), clamp=True)
+    fill = g.math("MULTIPLY", fill, g.map_range(e, 0.3, 0.8, 0.12, 1.0, interp="SMOOTHSTEP"), clamp=True)
+    coat_b = g.math("MULTIPLY", g.map_range(e, 0.08, 0.6, 0.0, 1.0), coat_w)
+    spec_b = g.map_range(e, 0.08, 0.6, 0.0, 0.4)
+    common = {"IOR": ior, "Coat Weight": coat_b, "Coat Roughness": 0.02, "Coat IOR": 1.5,
+              "Specular IOR Level": spec_b, "Emission Color": WHITE, "Emission Strength": rim}
+    # glass colour per interface = paint (the studio-lit plate beneath is brighter than 1.0: a sqrt tint
+    # would be washed out to pastel by the view transform); deeper toward the outline; white stays clear
+    deep = g.node("ShaderNodeGamma")
+    g.set(deep.inputs["Color"], base_t)
+    g.set(deep.inputs["Gamma"], g.map_range(e, 0.0, 0.8, 4.0, 2.0))
+    pt = _principled(c, {**common, "Base Color": deep.outputs[0], "Roughness": frost, "Transmission Weight": 1.0},
+                     normal)
+    # self-lit fill: emission (brighter at the top) + a little diffuse response, under the coat
+    fill_em = g.node("ShaderNodeEmission")
+    g.set(fill_em.inputs["Color"], base_m)
+    g.set(fill_em.inputs["Strength"], g.map_range(v01, 0.0, 1.0, 0.8 * lit, 1.04 * lit))
+    pc = _principled(c, {"Base Color": base_m, "Roughness": 0.35, "Specular IOR Level": 0.0}, normal)
+    coat = _coat_only(c, normal, rim, coat_b)
+    filled = g.add_shader(g.mix_shader(0.82, pc.outputs[0], fill_em.outputs[0]), coat)
+    # inner glow where the light leaves the glass (opposite the key), paint-tinted
+    gband = _band(c, e, 0.3, 0.45, 0.8, 0.95)
+    gdir = g.math("ADD", 0.08, g.math("MULTIPLY", _light_side(c, nrm, -1.0), 0.92))
+    glow_em = g.node("ShaderNodeEmission")
+    g.set(glow_em.inputs["Color"], g.mix_rgb(0.3, base_m, WHITE))
+    g.set(glow_em.inputs["Strength"], g.math("MULTIPLY", g.math("MULTIPLY", gband, gdir), 1.4 * glow * lit))
+    cyc = g.add_shader(g.mix_shader(fill, pt.outputs[0], filled), glow_em.outputs[0])
+    role = c.spec.get("role", "refract")
+    # under other glass (role 'fake') the clear part becomes EEVEE's non-refractive fake glass
+    clear = _fake_glass(c, deep.outputs[0], rim, normal, frost) if role == "fake" else pt.outputs[0]
+    ev = g.add_shader(g.mix_shader(fill, clear, g.add_shader(fill_em.outputs[0], coat)), glow_em.outputs[0])
+    return cyc, ev, None
 
 
 def b_clear_glass(c: _Ctx, col, normal):
@@ -760,6 +890,44 @@ def b_flat(c: _Ctx, col, normal):
     return em.outputs[0], em.outputs[0], None
 
 
+def _backdrop_glass(c: _Ctx, col, normal):
+    """EEVEE stand-in for a frosted glass PLATE over the known wallpaper (role 'backdrop'): the wallpaper
+    straight below each point (orthographic; parallax ignored), softened by the frost, filtered by the
+    glass colour and slightly whitened by the frost's forward scatter, as emission; plus the pane's own
+    dielectric reflection + glossy coat. No raytraced refraction, so the plate lands in the depth buffer
+    and the (raytraced) glass layers above refract it — as in Cycles."""
+    from . import appearance as A
+    g = c.g
+    wp = c.spec["eevee_backdrop"]
+    frost = c.prm("frost", 0.3)
+    _, base_m = glass_colors(c, col, c.prm("tint", 0.0))
+    pos = c.tc.outputs["Object"]
+    s = float(c.spec.get("obj_scale") or 1.0)
+    pos = g.vmath("MULTIPLY", pos, (s, s, s))
+    y = g.separate(pos).outputs["Y"]
+    wcol = g.mix_rgb(g.map_range(y, A.WP_Y, -A.WP_Y, 0.0, 1.0), wp["top"], wp["bottom"])
+    blur = 1.0 + 1.2 * frost          # rough transmission over a gap: blobs spread out
+    for bx, by, br, bc in wp["blobs"]:
+        d = g.vmath("DISTANCE", pos, (bx * A.WP_POS, by * A.WP_POS, 0.0))
+        f = g.map_range(d, 0.0, br * A.WP_R * blur, 1.0, 0.0, interp="SMOOTHSTEP")
+        wcol = g.mix_rgb(g.math("MULTIPLY", f, A.WP_MIX / (1.0 + 0.5 * frost)), wcol, bc)
+    seen = g.mix_rgb(1.0, wcol, base_m, blend="MULTIPLY")
+    bw = g.node("ShaderNodeRGBToBW")       # dark: the frost mixes in the grey studio light (less saturated)
+    g.set(bw.inputs[0], seen)
+    seen = g.mix_rgb(0.45 if wp.get("kind") == "dark" else 0.0, seen, bw.outputs[0])
+    # forward scatter of the (studio-lit) frost: a whitening that scales with the scene light (dark: env 0.6)
+    scatter = (0.1 + 0.35 * frost) * (0.32 if wp.get("kind") == "dark" else 1.0)
+    seen = g.mix_rgb(clamp(scatter), seen, WHITE, blend="SCREEN")
+    em = g.node("ShaderNodeEmission")
+    g.set(em.inputs["Color"], seen)
+    g.set(em.inputs["Strength"], 1.0)
+    rim = _rim(c, 1.2)
+    p = _principled(c, {"Base Color": (0.0, 0.0, 0.0), "Roughness": clamp(frost, 0.05, 0.8),
+                        "Specular IOR Level": 0.5, "Coat Weight": 1.0, "Coat Roughness": 0.03,
+                        "Emission Color": WHITE, "Emission Strength": rim}, normal)
+    return g.add_shader(p.outputs[0], em.outputs[0])
+
+
 BUILDERS = {
     "liquid_glass": b_liquid_glass, "clear_glass": b_clear_glass, "frosted_glass": b_frosted_glass,
     "dispersive_crystal": b_dispersive_crystal, "tinted_glass": b_tinted_glass,
@@ -779,6 +947,8 @@ def _build(mat: bpy.types.Material, spec: dict, update: bool) -> None:
         normal = _normal(c)
         builder = BUILDERS.get(spec["preset"], b_liquid_glass)
         cyc, ev, vol = builder(c, col, normal)
+        if spec.get("role") == "backdrop":
+            ev = _backdrop_glass(c, col, normal)
         alpha = _alpha(c, paint_alpha)
         _finish(c, cyc, ev, col, alpha, vol)
     finally:
@@ -796,9 +966,11 @@ def make_spec(preset: str, params: Optional[dict], paint: dict, **kw) -> dict:
         "mono": None, "clear": False, "alpha": False,
         "shadow": {"kind": "neutral", "opacity": 0.5},
         "role": "opaque", "thickness": 0.1, "light": (-0.45, 0.45, 0.77), "bbox": (-1, -1, 1, 1),
-        "inflate": 0.0, "emission": 0.0,
+        "inflate": 0.0, "emission": 0.0, "eevee_backdrop": None, "obj_scale": 1.0, "lit": 1.0,
     }
     spec.update(kw)
     if spec["role"] != "opaque" and spec["preset"] not in GLASS:
         spec["role"] = "opaque"
+    if spec["role"] == "backdrop" and not spec.get("eevee_backdrop"):
+        spec["role"] = "refract"
     return spec

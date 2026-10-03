@@ -1,9 +1,11 @@
 // Typed wrappers for every REST endpoint in docs/PLAN.md §8.
 import type {
   AnimateRequest,
+  BatchRequest,
   ExportRequest,
   GeometryBundle,
   Job,
+  Look,
   Presets,
   Project,
   ProjectSummary,
@@ -11,6 +13,8 @@ import type {
   RenderRequest,
   SampleIcon,
   SplitStrategy,
+  StyleRequest,
+  StyleSpec,
   SystemStatus,
 } from '../types'
 import { http, apiUrl } from './client'
@@ -65,6 +69,20 @@ export const projectsApi = {
   animate: (id: string, req: AnimateRequest) => http.post<Job>(`/projects/${enc(id)}/animate`, req),
   export: (id: string, req: ExportRequest) => http.post<Job>(`/projects/${enc(id)}/export`, req),
   blend: (id: string, open: boolean) => http.post<Job>(`/projects/${enc(id)}/blend`, { open }),
+
+  /** The project's transferable style (PLAN §10). */
+  getStyle: (id: string) => http.get<StyleSpec>(`/projects/${enc(id)}/style`),
+  /** Apply a look / style / another project's style; the server saves and returns the new project. */
+  applyStyle: (id: string, req: StyleRequest) => http.post<Project>(`/projects/${enc(id)}/style`, req),
+}
+
+export const looksApi = {
+  list: () => http.get<Record<string, Look>>('/looks'),
+}
+
+export const batchApi = {
+  /** "Icon Pack": many sources → one style → renders (+ optional exports). Returns a `batch` job. */
+  start: (req: BatchRequest) => http.post<Job>('/batch', req),
 }
 
 export const jobsApi = {

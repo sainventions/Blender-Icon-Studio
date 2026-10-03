@@ -18,7 +18,7 @@
           "min": 0,
           "max": 1,
           "step": 0.01,
-          "default": 0.45,
+          "default": 0.5,
           "help": "How strongly the layer colour tints the glass."
         },
         "frost": {
@@ -27,7 +27,7 @@
           "min": 0,
           "max": 0.5,
           "step": 0.01,
-          "default": 0.12,
+          "default": 0.06,
           "help": "Surface roughness of the transmission (Icon Composer 'Blur')."
         },
         "translucency": {
@@ -36,7 +36,7 @@
           "min": 0,
           "max": 1,
           "step": 0.01,
-          "default": 0.6,
+          "default": 0.75,
           "help": "How see-through the glass is (Icon Composer 'Translucency')."
         },
         "ior": {
@@ -45,7 +45,7 @@
           "min": 1.0,
           "max": 1.8,
           "step": 0.01,
-          "default": 1.45,
+          "default": 1.5,
           "unit": "IOR",
           "help": "Index of refraction — lensing strength at the rounded edges."
         },
@@ -67,7 +67,7 @@
           "min": 0,
           "max": 3,
           "step": 0.05,
-          "default": 0.8,
+          "default": 1.0,
           "help": "Light-angle-locked rim emission strength."
         },
         "glow": {
@@ -76,7 +76,7 @@
           "min": 0,
           "max": 2,
           "step": 0.05,
-          "default": 0.0,
+          "default": 0.35,
           "help": "Lit-from-within glow near the edges."
         }
       }

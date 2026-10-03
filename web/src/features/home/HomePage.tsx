@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowDown,
+  ArrowRight,
   Clock,
   Copy,
   Cpu,
@@ -8,6 +9,7 @@ import {
   FolderOpen,
   Keyboard,
   Layers,
+  LayoutGrid,
   RefreshCw,
   Search,
   SlidersHorizontal,
@@ -19,7 +21,8 @@ import {
 import type { ProjectSummary, SampleIcon } from '../../types'
 import { errorMessage, projectsApi, samplesApi } from '../../api'
 import { cn, relativeTime, shortGpuName, titleCase } from '../../lib/format'
-import { openProjectRoute } from '../../lib/route'
+import { goPack, openProjectRoute } from '../../lib/route'
+import { SAMPLE_COLLECTION_LABEL, sampleCollection } from '../../lib/meta'
 import { useAppStore } from '../../store/app'
 import { toast } from '../../store/toasts'
 import { useUi } from '../../store/ui'
@@ -51,6 +54,7 @@ export default function HomePage() {
 
       <main className="relative mx-auto max-w-[1320px] px-8 pb-24">
         <Hero onImport={pickFile} onBrowse={() => samplesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })} />
+        <PackCard />
         <RecentProjects />
         <div ref={samplesRef} className="scroll-mt-16">
           <SampleGallery />
@@ -85,7 +89,7 @@ export default function HomePage() {
 }
 
 // ------------------------------------------------------------------------------------------ chrome
-function Backdrop() {
+export function Backdrop() {
   return (
     <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-[900px] overflow-hidden">
       <div className="absolute -top-40 left-1/2 h-[700px] w-[1200px] -translate-x-1/2 rounded-full opacity-60 blur-[120px]" style={{ background: 'radial-gradient(closest-side, rgb(123 102 255 / 0.22), transparent)' }} />
@@ -116,6 +120,9 @@ function TopNav({ onImport }: { onImport: () => void }) {
         <IconButton label="Keyboard shortcuts" kbd="?" onClick={() => openDialog('shortcuts')}>
           <Keyboard />
         </IconButton>
+        <Button variant="ghost" size="sm" icon={<LayoutGrid />} onClick={goPack} tipLabel="Apply one look to a whole icon set">
+          Icon Pack
+        </Button>
         <Button variant="secondary" size="sm" icon={<Upload />} onClick={onImport}>
           Import SVG
         </Button>
@@ -183,7 +190,10 @@ function Hero({ onImport, onBrowse }: { onImport: () => void; onBrowse: () => vo
           <Button variant="primary" size="lg" icon={<Upload />} onClick={onImport} className="px-5">
             Import SVG
           </Button>
-          <Button variant="secondary" size="lg" icon={<ArrowDown />} onClick={onBrowse}>
+          <Button variant="secondary" size="lg" icon={<LayoutGrid />} onClick={goPack} tipLabel="Restyle and render a whole icon set at once">
+            Icon Pack
+          </Button>
+          <Button variant="ghost" size="lg" icon={<ArrowDown />} onClick={onBrowse}>
             Try a sample
           </Button>
           <span className="ml-1 hidden items-center gap-1.5 text-2xs text-fg-4 md:flex">
@@ -207,6 +217,53 @@ function Hero({ onImport, onBrowse }: { onImport: () => void; onBrowse: () => vo
       <div className="relative hidden items-center justify-center lg:flex">
         <GlassMotif size={300} />
       </div>
+    </section>
+  )
+}
+
+// ------------------------------------------------------------------------------------------ icon pack card
+function PackCard() {
+  const samples = useAppStore((s) => s.samples.data)
+  const looks = useAppStore((s) => s.presets.data?.looks)
+  const preview = useMemo(() => (samples ?? []).filter((x) => collectionOf(x) === 'corpus').slice(0, 7), [samples])
+  const lookCount = looks ? Object.keys(looks).length : 0
+  return (
+    <section className="mt-2">
+      <button
+        type="button"
+        onClick={goPack}
+        className="group relative flex w-full items-center gap-6 overflow-hidden rounded-2xl border border-line bg-surface-1/70 p-5 text-left backdrop-blur transition-[border-color,box-shadow,transform] duration-200 hover:-translate-y-0.5 hover:border-line-3 hover:shadow-[0_24px_60px_-28px_rgb(123_102_255/0.6)]"
+      >
+        <span aria-hidden className="pointer-events-none absolute inset-0 opacity-70 [background:radial-gradient(ellipse_60%_120%_at_0%_50%,rgb(143_125_255/0.14),transparent_70%),radial-gradient(ellipse_40%_100%_at_100%_50%,rgb(47_212_240/0.08),transparent_70%)]" />
+        <span className="relative flex h-12 w-12 shrink-0 items-center justify-center rounded-xl accent-gradient shadow-[0_10px_30px_-10px_rgb(123_102_255/0.9)]">
+          <LayoutGrid className="h-6 w-6 text-white" />
+        </span>
+        <span className="relative block min-w-0 flex-1">
+          <span className="flex items-center gap-2">
+            <span className="text-[15px] font-semibold tracking-[-0.01em] text-fg">Icon Pack</span>
+            <Badge tone="accent">New</Badge>
+          </span>
+          <span className="mt-1 block max-w-[560px] text-xs leading-relaxed text-fg-3">
+            Have a whole icon set? Pick the icons, choose one of {lookCount || 'the'} looks and render them all in one go — with a contact sheet and a zip at the end.
+          </span>
+        </span>
+        <span className="relative hidden shrink-0 items-center md:flex" aria-hidden>
+          {preview.map((s, i) => (
+            <img
+              key={s.name}
+              src={samplesApi.thumbnailUrl(s.name)}
+              alt=""
+              loading="lazy"
+              draggable={false}
+              className="-ml-3 h-12 w-12 rounded-[22%] object-contain drop-shadow-[0_6px_10px_rgb(0_0_0/0.5)] transition-transform duration-300 first:ml-0 group-hover:-translate-y-0.5"
+              style={{ transitionDelay: `${i * 25}ms`, zIndex: preview.length - i }}
+            />
+          ))}
+        </span>
+        <span className="relative flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-line-2 bg-white/[0.04] px-3 text-xs font-medium text-fg-2 transition-colors group-hover:border-accent/50 group-hover:text-fg">
+          Start a pack <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
+        </span>
+      </button>
     </section>
   )
 }
@@ -557,14 +614,10 @@ function SampleCard({
 }
 
 // ------------------------------------------------------------------------------------------ bits
-const COLLECTION_LABEL: Record<string, string> = { corpus: 'App icons', svgtests: 'Test SVGs' }
+const COLLECTION_LABEL = SAMPLE_COLLECTION_LABEL
+const collectionOf = sampleCollection
 
-/** The server tags samples with their source folder (additive field, not in the shared contract). */
-function collectionOf(s: SampleIcon): string {
-  return (s as SampleIcon & { collection?: string }).collection ?? 'corpus'
-}
-
-function SectionHeader({ icon, title, count, children }: { icon: React.ReactNode; title: string; count?: number; children?: React.ReactNode }) {
+export function SectionHeader({ icon, title, count, children }: { icon: React.ReactNode; title: string; count?: number; children?: React.ReactNode }) {
   return (
     <div className="mb-4 flex items-center gap-2.5">
       <span className="flex h-6 w-6 items-center justify-center rounded-md border border-line-2 bg-white/[0.03] text-fg-3 [&>svg]:h-3.5 [&>svg]:w-3.5">{icon}</span>
@@ -576,7 +629,7 @@ function SectionHeader({ icon, title, count, children }: { icon: React.ReactNode
   )
 }
 
-function OfflineNote({ error, onRetry }: { error: string; onRetry: () => void }) {
+export function OfflineNote({ error, onRetry }: { error: string; onRetry: () => void }) {
   return (
     <div className="flex items-center gap-3 rounded-xl border border-bad/20 bg-bad/[0.06] px-4 py-3 text-xs text-fg-2">
       <StatusDot tone="bad" />

@@ -21,6 +21,7 @@ import { projectsApi } from '../../../api'
 import { cn, formatNumber, hashString } from '../../../lib/format'
 import { effectiveLayer, setLayerOverride, updateLayers, withParam, type OverrideField } from '../../../lib/projectOps'
 import { paintColor } from '../../../lib/color'
+import { isReservedParam } from '../../../lib/looks'
 import { useAppStore } from '../../../store/app'
 import { useEditor } from '../../../store/editor'
 import { useUi } from '../../../store/ui'
@@ -96,7 +97,7 @@ export function LayerInspector() {
   const editMaterialParam = (spec: MaterialSpec, paramKey: string) => {
     const apply = (m: MaterialSpec): MaterialSpec => {
       if (m.preset !== spec.preset) return m
-      if (paramKey === '*') return Object.keys(m.params ?? {}).length ? { ...m, params: {} } : m
+      if (paramKey === '*') return Object.keys(m.params ?? {}).some((k) => !isReservedParam(k)) ? { ...m, params: {} } : m
       return m.params?.[paramKey] === spec.params[paramKey] ? m : withParam(m, paramKey, spec.params[paramKey])
     }
     const bucket = materialScope.bucket

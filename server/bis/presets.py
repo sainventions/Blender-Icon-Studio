@@ -27,7 +27,7 @@ class PresetStore:
             mtime = path.stat().st_mtime
         except OSError:
             return self._data or {"version": 1, "materials": {}, "lighting": {}, "platforms": {},
-                                  "appearances": {}, "quality": {}, "colorModes": {}}
+                                  "appearances": {}, "quality": {}, "colorModes": {}, "looks": {}}
         with self._lock:
             if mtime != self._mtime:
                 self._data = json.loads(path.read_text(encoding="utf-8"))
@@ -37,6 +37,7 @@ class PresetStore:
     def with_swatches(self) -> dict[str, Any]:
         data = json.loads(json.dumps(self.raw()))  # deep copy
         data.pop("$comment", None)
+        data.setdefault("looks", {})
         sw_dir: Path = self.settings.swatches_dir
         for key, mat in (data.get("materials") or {}).items():
             png = sw_dir / f"{key}.png"

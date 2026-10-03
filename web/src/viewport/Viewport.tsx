@@ -65,13 +65,23 @@ function onCreated(state: RootState, store: ViewportStore): void {
       scene: state.scene,
       invalidate: state.invalidate,
       store,
-      /** Render `frames` frames synchronously (works while the page is hidden / rAF is throttled). */
+      /**
+       * Render `frames` frames synchronously (works while the page is hidden / rAF is throttled). Each frame is
+       * stepped as 1/60 s of simulated time so damped animations (explode, camera framing) progress.
+       */
       advance(frames = 60) {
         const t0 = performance.now()
-        for (let i = 0; i < frames; i++) state.get().advance(t0 + i * 16.67, true)
+        for (let i = 0; i < frames; i++) {
+          const s = state.get()
+          s.clock.oldTime = performance.now() - 1000 / 60
+          s.advance(t0 + i * 16.67, true)
+        }
       },
       get camera() {
         return state.get().camera
+      },
+      get controls() {
+        return state.get().controls
       },
     }
   }

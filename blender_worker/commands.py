@@ -193,10 +193,17 @@ def cmd_animate(ctx: Context, args: dict, progress) -> dict:
     layer_ids = [L["id"] for L in project["layers"]]
     t0 = time.perf_counter()
     frames = []
-    margs = {**args, "size": size, "camera": None}
+    margs = {**args, "size": size, "camera": base_cam}
     span = 0.9 if fmt == "mp4" else 1.0
+    # one framing for the whole clip: union of the subject over sampled frames (no jitter, never cropped)
+    samples = n if n <= 96 else 96
+    plan = ctx.builder.plan_animation(
+        project, bundle, _appearance(args, project),
+        [R.frame_overrides(kind, k / samples, base_cam, base_angle, layer_ids) for k in range(samples)], base_cam)
     for i in range(n):
         ov = R.frame_overrides(kind, i / n, base_cam, base_angle, layer_ids)
+        if plan is not None:
+            ov["framing"] = plan
         out = os.path.join(out_dir, f"frame_{i + 1:04d}.png")
         _render_one(ctx, project, bundle, margs, out, None, overrides=ov)
         frames.append(os.path.abspath(out))
@@ -272,7 +279,8 @@ def cmd_scene_info(ctx: Context, args: dict, progress) -> dict:
     objs = []
     for ob in bpy.data.objects:
         if ob.name.startswith("BIS"):
-            objs.append({"name": ob.name, "type": ob.type, "route": ob.data.get("bis_route") if ob.type == "CURVE" else None,
+            objs.append({"name": ob.name, "type": ob.type,
+                         "route": ob.data.get("bis_route") if ob.type in ("CURVE", "MESH") and ob.data else None,
                          "material": ob.material_slots[0].material.name if ob.material_slots and
                          ob.material_slots[0].material else None,
                          "location": [round(v, 5) for v in ob.matrix_world.translation]})

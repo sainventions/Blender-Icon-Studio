@@ -364,7 +364,7 @@ const LayerRow = memo(function LayerRow({
         }}
         onContextMenu={(e) => onContext(e, 'layer', layer.id)}
         className={cn(
-          'group relative mx-1 flex h-10 items-center gap-1.5 rounded-md pl-1 pr-1 outline-none transition-colors',
+          'group relative mx-1 flex h-10 items-center gap-1.5 rounded-md pl-1 pr-1 outline-none transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent/70',
           isDragging ? 'bg-surface-4 shadow-pop' : selected ? (primary ? 'bg-accent/[0.16]' : 'bg-accent/[0.09]') : 'hover:bg-white/[0.04]',
           !layer.visible && 'opacity-55',
         )}

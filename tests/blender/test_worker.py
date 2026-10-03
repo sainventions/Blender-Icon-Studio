@@ -537,3 +537,106 @@ def test_no_vram_growth_over_20_renders(worker, fixtures, outdir):
     if before is not None and after is not None:
         print(f"VRAM whole GPU: {before} -> {after} MiB; worker Cycles peaks {by_icon}")
         assert after - before < 300, (before, after)
+
+
+# ------------------------------------------------------------------------------------------------
+# round 2: auto-framing, EEVEE clear/tinted plate, raster performance
+# ------------------------------------------------------------------------------------------------
+def _alpha_box(path: str, thr: int = 8):
+    import numpy as np
+    _, alpha = _alpha_stats(path)
+    ys, xs = np.nonzero(alpha > thr)
+    h, w = alpha.shape
+    return {"touch": bool(xs.min() == 0 or ys.min() == 0 or xs.max() == w - 1 or ys.max() == h - 1),
+            "cx": (xs.min() + xs.max() + 1) / 2 / w, "cy": (ys.min() + ys.max() + 1) / 2 / h,
+            "ext": max(xs.max() - xs.min() + 1, ys.max() - ys.min() + 1) / max(w, h)}
+
+
+@pytest.mark.parametrize("name", ["Photos", "Maps"])
+def test_perspective_views_are_auto_framed(worker, fixtures, outdir, name):
+    """Tilted / exploded perspective views: never cropped, centred, filling ~84 % (8 % margin per side)."""
+    cams = {"tilt": {"view": "perspective", "tiltX": 20, "tiltY": -25, "fov": 30},
+            "explode3": {"view": "perspective", "tiltX": 20, "tiltY": -25, "fov": 30, "explode": 3.0},
+            "wide": {"view": "perspective", "tiltX": -12, "tiltY": 40, "fov": 60, "explode": 2.0}}
+    for key, cam in cams.items():
+        out = outdir / f"framing_{name}_{key}.png"
+        _render(worker, fixtures[name], out, camera=cam)
+        b = _alpha_box(str(out))
+        assert not b["touch"], (key, b)
+        assert abs(b["cx"] - 0.5) < 0.03 and abs(b["cy"] - 0.5) < 0.03, (key, b)
+        assert 0.78 < b["ext"] < 0.9, (key, b)
+
+
+def test_front_framing_unchanged(worker, fixtures, outdir):
+    """Front orthographic framing stays exactly ortho_scale 2.24 (plate edge 5.4 % from the border)."""
+    out = outdir / "front_framing.png"
+    _render(worker, fixtures["Photos"], out, size=224)
+    b = _alpha_box(str(out), thr=128)
+    assert abs(b["ext"] - 2.0 / 2.24) < 0.012, b
+    assert abs(b["cx"] - 0.5) < 0.006 and abs(b["cy"] - 0.5) < 0.006, b
+
+
+@pytest.mark.parametrize("kind", ["explode", "turntable", "tilt"])
+def test_animation_frames_share_one_framing(worker, fixtures, outdir, kind):
+    """Animations fit the union of all frames: no frame is cropped and the clip never zooms/jitters."""
+    fx = fixtures["Photos"]
+    r = worker.result("animate", {"project": fx["project"], "geometryPath": fx["geometryPath"], "quality": "draft",
+                                  "size": 96, "kind": kind, "frames": 8, "fps": 12, "format": "png",
+                                  "outDir": str(outdir / f"anim_frame_{kind}")})
+    boxes = [_alpha_box(f) for f in r["frames"]]
+    assert not any(b["touch"] for b in boxes), boxes
+    assert max(b["ext"] for b in boxes) > 0.7          # the widest frame fills the frame (no tiny subject)
+    cam = worker.result("scene_info")["objects"]
+    assert any(o["name"] == "BIS Camera" for o in cam)
+
+
+def test_eevee_clear_plate_matches_cycles(worker, fixtures, outdir):
+    """Clear / tinted renditions: the EEVEE draft shades the frosted plate over the wallpaper like Cycles
+    (it used to render an opaque dark grey pane)."""
+    import numpy as np
+    for ap in ("clear-light", "clear-dark", "tinted-light"):
+        means = {}
+        for q in ("draft", "preview"):
+            out = outdir / f"clearplate_{ap}_{q}.png"
+            _render(worker, fixtures["Photos"], out, appearance=ap, quality=q)
+            a = np.asarray(_png(str(out)).convert("RGB")).astype(float)
+            h, w, _ = a.shape
+            patch = np.vstack([a[int(.40 * h):int(.60 * h), int(.10 * w):int(.16 * w)].reshape(-1, 3),
+                               a[int(.10 * h):int(.16 * h), int(.30 * w):int(.70 * w)].reshape(-1, 3)])
+            means[q] = patch.mean(axis=0)
+        assert np.abs(means["draft"] - means["preview"]).max() < 30, (ap, means)
+
+
+def test_raster_icons_render_fast(worker, outdir):
+    """Icons with embedded raster images: baked meshes (no per-render curve/modifier evaluation) and
+    adaptive spline resolution keep warm drafts well under a second (Vanced Neon took 12.7 s)."""
+    import make_fixtures
+    index = make_fixtures.make(["Vanced Neon", "Find Device"], HERE / "_fixtures")
+    for name in ("Vanced Neon", "Find Device"):
+        e = index[name]
+        proj = json.loads(Path(e["project"]).read_text(encoding="utf-8"))
+        args = {"project": proj, "geometryPath": e["geometryPath"], "quality": "draft", "size": 256,
+                "out": str(outdir / f"rasterperf_{name}.png")}
+        worker.result("render", args)                                   # cold: bake + shader compile
+        warm = min(worker.result("render", args)["seconds"] for _ in range(2))
+        assert warm < 1.0, (name, warm)
+        pv = worker.result("render", {**args, "quality": "preview", "samples": SPP})["seconds"]
+        assert pv < 2.5, (name, pv)
+
+
+def test_raster_region_perspective_framing(worker, outdir):
+    """An extruded raster region is framed by its traced contour, not its PNG placement quad (Find Device's
+    image overhangs the plate: the view was framed ~8 % too loose and off-centre)."""
+    import make_fixtures
+    index_path = HERE / "_fixtures" / "index.json"
+    index = json.loads(index_path.read_text(encoding="utf-8")) if index_path.exists() else {}
+    if "Find Device" not in index or not Path(index["Find Device"]["geometryPath"]).exists():
+        index = make_fixtures.make(["Find Device"], HERE / "_fixtures")
+    e = index["Find Device"]
+    proj = json.loads(Path(e["project"]).read_text(encoding="utf-8"))
+    out = outdir / "framing_find_device.png"
+    worker.result("render", {"project": proj, "geometryPath": e["geometryPath"], "quality": "draft", "size": PX,
+                             "out": str(out), "camera": {"view": "perspective", "tiltX": 20, "tiltY": -25, "fov": 30}})
+    b = _alpha_box(str(out))
+    assert not b["touch"] and abs(b["cx"] - 0.5) < 0.02 and abs(b["cy"] - 0.5) < 0.02, b
+    assert 0.8 < b["ext"] < 0.9, b

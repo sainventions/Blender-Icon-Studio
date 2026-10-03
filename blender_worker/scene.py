@@ -7,11 +7,12 @@ Layout (PLAN §3, D1): icon in the XY plane, camera on +Z looking −Z, 1 BU = 1
       BIS Art          (empty)        canvas.art: uniform scale + (x, y)
         BIS Layer <id> (empty)        layer.transform (scale about the canvas origin, then translate)
                                       + z = depth.z · camera.explode + ε  (expressed in Art-local units)
-          BIS <id> r<i> / sil / img<k>  curve objects; object coords == art coords (texture projection)
+          BIS <id> r<i> / sil / img<k>  baked mesh objects (geometry.solid_mesh); object coords == art coords
     BIS Rig (collection)              camera, 4 area lights, wallpaper plane
 
-Everything is updated in place between renders: objects/empties are reused by name, curve datablocks
-come from geometry's cache (layer hash + depth params), materials update their node values in place.
+Everything is updated in place between renders: objects/empties are reused by name, piece meshes (baked
+once from the bevelled curve / GN stack) come from geometry's cache (layer hash + depth params), materials
+update their node values in place.
 """
 from __future__ import annotations
 
@@ -20,10 +21,11 @@ import os
 from typing import Optional
 
 import bpy
+import numpy as np
 from mathutils import Matrix, Vector
 
 from . import appearance as appearance_mod
-from . import geometry, lighting, materials
+from . import framing, geometry, lighting, materials
 from .defaults import norm_bundle, norm_camera, norm_project
 from .gpu import configure_scene
 from .util import gradient_samples, hex_to_linear, hex_to_srgb, log, srgb_to_linear, stable_hash
@@ -31,6 +33,7 @@ from .util import gradient_samples, hex_to_linear, hex_to_srgb, log, srgb_to_lin
 LAYER_EPS = 0.002          # layer back face above the plate front face
 REGION_DZ = 0.001          # zSub step (zSub is interpreted as a sub-layer index)
 CARD_THICKNESS = 0.004
+PLATE_WALLPAPER_GAP = 0.9  # wallpaper plane below the plate's back face
 
 
 def _collection(name: str, parent: Optional[bpy.types.Collection] = None) -> bpy.types.Collection:
@@ -56,16 +59,23 @@ def _empty(name: str, col: bpy.types.Collection, parent: Optional[bpy.types.Obje
     return ob
 
 
-def _curve_object(name: str, data: bpy.types.Curve, col: bpy.types.Collection,
-                  parent: Optional[bpy.types.Object]) -> bpy.types.Object:
+def _mesh_object(name: str, data: bpy.types.Mesh, col: bpy.types.Collection,
+                 parent: Optional[bpy.types.Object]) -> bpy.types.Object:
+    """Object showing a baked piece mesh (geometry.solid_mesh). No modifiers: nothing is re-evaluated
+    per render."""
     ob = bpy.data.objects.get(name)
-    if ob is not None and ob.type != "CURVE":
+    if ob is not None and ob.type != "MESH":
         bpy.data.objects.remove(ob)
         ob = None
     if ob is None:
         ob = bpy.data.objects.new(name, data)
     elif ob.data != data:
+        old = ob.data
         ob.data = data
+        if old is not None and old.users == 0 and not geometry.is_cached_mesh(old):
+            bpy.data.meshes.remove(old)
+    for m in list(ob.modifiers):
+        ob.modifiers.remove(m)
     if ob.name not in col.objects:
         col.objects.link(ob)
     if ob.parent != parent:
@@ -241,13 +251,19 @@ class SceneBuilder:
         self._specs = []
         rig = lighting.resolve(lighting_spec, env["envScale"], env["keyScale"], overrides.get("lightAngle"))
         L = lighting.key_vector(rig)
+        self._lit = max(0.4, min(1.4, 0.55 + 0.45 * float(rig["key"])))
         lighting.update_lights(scene, rig_col, rig)
         lighting.update_world(scene, rig, (*hex_to_linear(backdrop_color), 1.0))
-        # stack height (for perspective framing): top of the highest visible layer, exploded
-        stack_top = max([float(Lr["depth"].get("z", 0.0)) * float(cam.get("explode", 1.0)) +
-                         float(Lr["depth"].get("thickness", 0.1)) for Lr in eff["layers"] if Lr.get("visible", True)]
-                        + [0.0])
-        self._camera(rig_col, cam, full_bleed, stack_top)
+        # perspective views are auto-framed on the subject (framing.py); animations pass one shared plan
+        fplan = None
+        if cam.get("view", "front") != "front" and not full_bleed:
+            fplan = overrides.get("framing")
+            if not fplan:
+                hulls = self.subject_hulls(eff, bnd, full_bleed)
+                pts = self.subject_points(hulls, float(cam.get("explode", 1.0)), overrides.get("layerZ") or {})
+                fplan = framing.plan([(pts, float(cam.get("tiltX", 0.0)), float(cam.get("tiltY", 0.0)))],
+                                     float(cam.get("fov", 30.0) or 30.0), float(cam.get("zoom", 1.0) or 1.0))
+        self._camera(rig_col, cam, full_bleed, fplan)
 
         canvas = eff["canvas"]
         shape = "square" if full_bleed else canvas["shape"]
@@ -275,13 +291,22 @@ class SceneBuilder:
         # ---- plate ---------------------------------------------------------------------------------
         plate = canvas["plate"]
         plate_ok = plate.get("visible", True) and shape != "none" and (plate["fill"].get("type") != "none")
+        wp_kind = env.get("wallpaper") or (("dark" if env.get("dark") else "light") if backdrop == "wallpaper" else None)
         if plate_ok:
             pp = plate["material"]["preset"]
-            # a glass plate always refracts in EEVEE: it is the big frosted pane over the wallpaper (clear /
-            # tinted appearances). Glass layers above then refract the wallpaper instead of the plate - a
-            # draft-only approximation (D7); Cycles is exact.
-            role = "refract" if materials.is_glass(pp) else "opaque"
-            self._plate(icon_col, plate, shape, canvas.get("cornerRadius", 0.225), role, L, env, full_bleed)
+            backdrop_wp = None
+            if materials.is_glass(pp) and wp_kind:
+                # EEVEE: a frosted glass plate over the wallpaper (clear / tinted renditions) cannot refract a
+                # camera-invisible wallpaper (screen-space tracing falls back to the dark studio world). The
+                # draft shades it as frosted glass over the *known* wallpaper instead (no raytraced refraction),
+                # which also puts the plate into the depth buffer so the glass layers above refract it.
+                # Cycles stays physically exact.
+                backdrop_wp = appearance_mod.wallpaper_linear(wp_kind, PLATE_WALLPAPER_GAP + plate["thickness"])
+                role = "backdrop"
+            else:
+                role = "refract" if materials.is_glass(pp) else "opaque"
+            self._plate(icon_col, plate, shape, canvas.get("cornerRadius", 0.225), role, L, env, full_bleed,
+                        backdrop_wp)
             keep.add("BIS Plate")
             used_mats.add("BIS Mat Plate")
 
@@ -309,7 +334,6 @@ class SceneBuilder:
             stats["layers"] += 1
 
         # ---- wallpaper ---------------------------------------------------------------------------------
-        wp_kind = env.get("wallpaper") or (("dark" if env.get("dark") else "light") if backdrop == "wallpaper" else None)
         if wp_kind:
             self._wallpaper(rig_col, wp_kind, plate["thickness"], camera_visible=(backdrop == "wallpaper"))
             keep.add("BIS Wallpaper")
@@ -320,12 +344,13 @@ class SceneBuilder:
             if ob.name not in keep:
                 data = ob.data if ob.type == "MESH" else None
                 bpy.data.objects.remove(ob, do_unlink=True)
-                if data is not None and data.users == 0:
+                if data is not None and data.users == 0 and not geometry.is_cached_mesh(data):
                     bpy.data.meshes.remove(data)
         for m in list(bpy.data.materials):
             if m.name.startswith("BIS Mat") and m.name not in used_mats and m.users == 0:
                 bpy.data.materials.remove(m)
         geometry.purge_unused_curves()
+        geometry.purge_unused_meshes()
         materials.purge_unused_images()
 
         # ---- scene-level flags ---------------------------------------------------------------------------
@@ -348,7 +373,7 @@ class SceneBuilder:
         return self.info
 
     # -------------------------------------------------------------------------- camera
-    def _camera(self, col: bpy.types.Collection, cam: dict, full_bleed: bool, stack_top: float = 0.0) -> None:
+    def _camera(self, col: bpy.types.Collection, cam: dict, full_bleed: bool, fplan: Optional[dict] = None) -> None:
         ob = bpy.data.objects.get("BIS Camera")
         if ob is None:
             ob = bpy.data.objects.new("BIS Camera", bpy.data.cameras.new("BIS Camera"))
@@ -358,42 +383,113 @@ class SceneBuilder:
         zoom = max(0.05, float(cam.get("zoom", 1.0)))
         cd.clip_start = 0.05
         cd.clip_end = 200.0
-        if cam.get("view", "front") == "front" or full_bleed:
+        if cam.get("view", "front") == "front" or full_bleed or not fplan:
+            # front: the fixed App-Store framing (room for shadows); unchanged by auto-framing
             cd.type = "ORTHO"
             cd.ortho_scale = (2.0 if full_bleed else 2.24) / zoom
+            cd.shift_x = cd.shift_y = 0.0
             ob.matrix_world = Matrix.Translation((0.0, 0.0, 10.0))
         else:
             cd.type = "PERSP"
             cd.sensor_fit = "AUTO"
-            fov = math.radians(max(5.0, min(120.0, float(cam.get("fov", 30.0)))))
-            cd.angle = fov
-            # frame the ±1.12 icon (+ room for tilt foreshortening), aimed at the middle of the layer stack
-            dist = (1.12 / zoom) / math.tan(fov / 2.0) * 1.32 + 0.5 * stack_top
-            tx, ty = math.radians(float(cam.get("tiltX", 0.0))), math.radians(float(cam.get("tiltY", 0.0)))
-            pos = Matrix.Rotation(ty, 4, "Y") @ Matrix.Rotation(-tx, 4, "X") @ Vector((0.0, 0.0, dist, 1.0))
-            pos = Vector(pos[:3])
-            target = Vector((0.0, 0.0, 0.4 * stack_top))
-            z = (pos - target).normalized()
-            up = Vector((0.0, 1.0, 0.0))
-            if abs(z.dot(up)) > 0.999:
-                up = Vector((0.0, 0.0, -1.0))
-            x = up.cross(z).normalized()
-            y = z.cross(x)
-            m = Matrix((x, y, z)).transposed().to_4x4()
-            m.translation = pos
+            pos, rot = framing.camera_pose(fplan, float(cam.get("tiltX", 0.0)), float(cam.get("tiltY", 0.0)))
+            cd.angle = 2.0 * math.atan(max(1e-4, float(fplan["tan"])))
+            cd.shift_x, cd.shift_y = (float(s) for s in fplan["shift"])
+            m = Matrix([list(r) for r in rot]).to_4x4()
+            m.translation = Vector([float(c) for c in pos])
             ob.matrix_world = m
+            dist = float(np.linalg.norm(pos - np.asarray(fplan["target"])))
+            # near clip well in front of the subject's nearest point (plan['near'], depth along the view axis)
+            cd.clip_start = max(0.001, min(dist * 0.05, 0.5 * float(fplan.get("near", dist))))
         self.scene.camera = ob
+
+    # -------------------------------------------------------------------------- framing subject
+    def subject_hulls(self, eff: dict, bnd: dict, full_bleed: bool = False) -> list:
+        """Convex hulls (canvas XY) of everything visible + their z spans, for perspective auto-framing:
+        [(hull (M, 2), z_base, thickness, explode_scaled, layer id | None)]. The plate spans −thickness..0;
+        a layer spans z·explode + ε + dz .. + thickness."""
+        canvas = eff["canvas"]
+        shape = "square" if full_bleed else canvas["shape"]
+        out = []
+        plate = canvas["plate"]
+        if plate.get("visible", True) and shape != "none" and (plate["fill"].get("type") != "none"):
+            th = max(0.0, float(plate.get("thickness", 0.16)))
+            ring = [p for s in geometry.plate_outline(shape, canvas.get("cornerRadius", 0.225))
+                    for p in geometry._flatten_ring(s["points"], True, 6)]
+            out.append((framing.hull2d(np.asarray(ring)), -th, th, False, None))
+        art = canvas["art"]
+        sa, ax, ay = float(art.get("scale", 1.0)), float(art.get("x", 0.0)), float(art.get("y", 0.0))
+        for Lr in eff["layers"]:
+            if not Lr.get("visible", True):
+                continue
+            g = bnd["layers"].get(Lr["id"])
+            if g is None:
+                continue
+            ring = []
+            spl = g.get("silhouette") or [s for r in g.get("regions") or [] for s in r.get("splines") or []]
+            for s in spl:
+                ring += geometry._flatten_ring(s.get("points") or [], bool(s.get("closed", True)), 4)
+            # flat image cards (raster images that are not extruded regions) render their full placement quad;
+            # an extruded raster region is bounded by its traced contour (its PNG placement can overhang the
+            # plate: Find Device's 1685 px image framed 8 % too loose and off-centre)
+            region_ids = {r.get("elementId") for r in g.get("regions") or []}
+            for im in g.get("images") or []:
+                if im.get("path") and im.get("elementId") not in region_ids:
+                    ring += [tuple(p) for p in image_quad(im, g.get("bbox") or (-1, -1, 1, 1))]
+            if len(ring) < 3:
+                continue
+            tr = Lr["transform"]
+            sl, tx, ty = float(tr.get("scale", 1.0)), float(tr.get("x", 0.0)), float(tr.get("y", 0.0))
+            pts = (np.asarray(ring, dtype=np.float64) * sa + np.array([ax, ay])) * sl + np.array([tx, ty])
+            dp = Lr["depth"]
+            out.append((framing.hull2d(pts), float(dp.get("z", 0.0)), max(0.0, float(dp.get("thickness", 0.1))),
+                        True, Lr["id"]))
+        return out
+
+    @staticmethod
+    def subject_points(hulls: list, explode: float, layer_z: Optional[dict] = None) -> np.ndarray:
+        layer_z = layer_z or {}
+        chunks = []
+        for hull, z, th, scaled, lid in hulls:
+            z0 = (z * explode + LAYER_EPS + float(layer_z.get(lid, 0.0))) if scaled else z
+            chunks.append(framing.prism(hull, z0, z0 + th))
+        return np.vstack(chunks) if chunks else np.zeros((0, 3))
+
+    def plan_animation(self, project: dict, bundle: dict, appearance: str, frame_overrides: list,
+                       camera: Optional[dict] = None) -> Optional[dict]:
+        """One framing plan (framing.plan) for every perspective frame of an animation: the union of the
+        sampled frames' subject bounds. None when no frame is perspective."""
+        proj = norm_project(project)
+        bnd = norm_bundle(bundle)
+        eff = appearance_mod.resolve(proj, appearance, bnd)["project"]
+        base = norm_camera(camera, eff["camera"]) if camera else dict(eff["camera"])
+        hulls = None
+        frames = []
+        for ov in frame_overrides:
+            cam = dict(base)
+            cam.update(ov.get("camera") or {})
+            if "explode" in ov:
+                cam["explode"] = ov["explode"]
+            if cam.get("view", "front") == "front":
+                continue
+            if hulls is None:
+                hulls = self.subject_hulls(eff, bnd)
+            frames.append((self.subject_points(hulls, float(cam.get("explode", 1.0)), ov.get("layerZ") or {}),
+                           float(cam.get("tiltX", 0.0)), float(cam.get("tiltY", 0.0))))
+        if not frames:
+            return None
+        return framing.plan(frames, float(base.get("fov", 30.0) or 30.0), float(base.get("zoom", 1.0) or 1.0))
 
     # -------------------------------------------------------------------------- plate
     def _plate(self, col, plate: dict, shape: str, corner_radius: float, role: str, L, env: dict,
-               full_bleed: bool = False) -> None:
+               full_bleed: bool = False, backdrop_wp: Optional[dict] = None) -> None:
         th = max(0.0, float(plate.get("thickness", 0.16)))
         bevel_req = max(0.0, float(plate.get("bevel", 0.04)))
         bevel, route = geometry.effective_bevel(bevel_req, th, 1.0)
         splines = geometry.plate_outline(shape, corner_radius)
-        data, route = geometry.curve_data({"plate": shape, "cr": round(corner_radius, 4)}, splines, th, bevel,
-                                          route, 8)
-        ob = _curve_object("BIS Plate", data, col, None)
+        data, route = geometry.solid_mesh({"plate": shape, "cr": round(corner_radius, 4)}, splines, th, bevel,
+                                          route, 8, gn_bevel=bevel_req)
+        ob = _mesh_object("BIS Plate", data, col, None)
         ob.location = (0.0, 0.0, -th / 2.0)
         # full-bleed masters: push the bevelled rim just outside the 2.0-wide frame (flat face edge to edge)
         grow = 1.0 + (bevel + 0.01 if full_bleed else 0.0)
@@ -406,11 +502,10 @@ class SceneBuilder:
             mono=None, clear=False, alpha=bool(paint.get("has_alpha")),
             shadow={"kind": "none", "opacity": 0.0}, role=role, thickness=th, light=L,
             bbox=(-1.0, -1.0, 1.0, 1.0), inflate=0.0, emission=0.0,
-            preview_color=paint.get("color", (0.9, 0.9, 0.9)),
+            preview_color=paint.get("color", (0.9, 0.9, 0.9)), eevee_backdrop=backdrop_wp, obj_scale=grow,
         )
         mat = materials.ensure("BIS Mat Plate", spec)
         _set_material(ob, mat)
-        geometry.apply_route(ob, route, th, bevel_req, 8, mat)
         self._specs.append(spec)
         ob.visible_shadow = True
 
@@ -499,7 +594,7 @@ class SceneBuilder:
             preset, mpar if preset == Lr["material"]["preset"] else {}, paint,
             mono=env.get("mono"), clear=bool(env.get("clear")), alpha=alpha,
             shadow=dict(Lr.get("shadow") or {}), role=role, thickness=th_local, light=L, bbox=bbox,
-            inflate=float(dp.get("inflate", 0.0)), emission=boost,
+            inflate=float(dp.get("inflate", 0.0)), emission=boost, lit=getattr(self, "_lit", 1.0),
             preview_color=pieces[0][4] if pieces else (0.8, 0.8, 0.8),
         )
         if preset == "tinted_glass" and spec["shadow"].get("kind") == "neutral":
@@ -524,26 +619,30 @@ class SceneBuilder:
                 pmat = materials.ensure(rname, rspec)
                 self._specs.append(rspec)
                 mats.add(rname)
-            data, proute = geometry.curve_data({**key_base, "p": pid, "n": len(splines)}, splines, th_local,
-                                               bevel_local, route, segments)
+            # GN route from the start: the Bevel modifier gets the requested width (use_clamp_overlap does the
+            # clamping); a route switched by cusps / failed caps keeps the clamped bevel. Raster pieces (alpha-
+            # traced, slightly wobbly contours) always take the GN route: a round curve bevel lenses every
+            # wobble of the trace into crinkled highlights, the angle-limited Bevel modifier keeps them clean.
+            want = "gn" if raster is not None else route
+            data, proute = geometry.solid_mesh({**key_base, "p": pid, "n": len(splines)}, splines, th_local,
+                                               bevel_local, want, segments,
+                                               gn_bevel=bevel_local_req if route == "gn" else bevel_local)
             if proute != route:
                 stats["gnFallback"] += 1
-            ob = _curve_object(f"BIS {lid} {pid}", data, col, lay)
+            ob = _mesh_object(f"BIS {lid} {pid}", data, col, lay)
             ob.location = (0.0, 0.0, (thickness / 2.0 + zoff) / S)
             ob.scale = (1.0, 1.0, 1.0)
             ob.color = (*rgb, max(0.0, min(1.0, op)))
             _set_material(ob, pmat)
-            geometry.apply_route(ob, proute, th_local, bevel_local_req if proute == route else bevel_local,
-                                 segments, pmat)
             names.add(ob.name)
             stats["pieces"] += 1
 
         for k, im in enumerate(cards):
             bb = im.get("bbox") or bbox
             quad = image_quad(im, bbox)
-            data, _ = geometry.curve_data({"card": im.get("path"), "quad": [list(p) for p in quad]},
+            data, _ = geometry.solid_mesh({"card": im.get("path"), "quad": [list(p) for p in quad]},
                                           [geometry.poly_spline(quad)], CARD_THICKNESS / S, 0.0, "gn", 1)
-            ob = _curve_object(f"BIS {lid} img{k}", data, col, lay)
+            ob = _mesh_object(f"BIS {lid} img{k}", data, col, lay)
             ob.location = (0.0, 0.0, (CARD_THICKNESS / 2.0 + 0.0005) / S)
             ob.color = (1.0, 1.0, 1.0, max(0.0, min(1.0, float(im.get("opacity", 1.0)) * layer_opacity)))
             cpaint = {"kind": "texture", "image": im["path"], "uv": image_uv(im, bbox), "has_alpha": True}
@@ -553,7 +652,6 @@ class SceneBuilder:
             cname = f"BIS Mat {lid} img{k}"
             cmat = materials.ensure(cname, cspec)
             _set_material(ob, cmat)
-            geometry.apply_route(ob, "gn", CARD_THICKNESS / S, 0.0, 1, cmat)
             names.add(ob.name)
             mats.add(cname)
             self._specs.append(cspec)
@@ -569,7 +667,7 @@ class SceneBuilder:
             ob = bpy.data.objects.new("BIS Wallpaper", me)
         if ob.name not in col.objects:
             col.objects.link(ob)
-        ob.location = (0.0, 0.0, -plate_thickness - 0.9)
+        ob.location = (0.0, 0.0, -plate_thickness - PLATE_WALLPAPER_GAP)
         ob.visible_camera = camera_visible
         ob.visible_shadow = False
         ob.visible_diffuse = False
@@ -584,12 +682,13 @@ class SceneBuilder:
             tc = gr.node("ShaderNodeTexCoord")
             pos = tc.outputs["Object"]
             y = gr.separate(pos).outputs["Y"]
-            t = gr.map_range(y, 2.2, -2.2, 0.0, 1.0)
+            A = appearance_mod
+            t = gr.map_range(y, A.WP_Y, -A.WP_Y, 0.0, 1.0)
             base = gr.mix_rgb(t, (*hex_to_linear(w["top"]), 1), (*hex_to_linear(w["bottom"]), 1))
             for b in w["blobs"]:
-                d = gr.vmath("DISTANCE", pos, (b["x"] * 1.6, b["y"] * 1.6, 0.0))
-                f = gr.map_range(d, 0.0, b["r"] * 1.9, 1.0, 0.0, interp="SMOOTHSTEP")
-                base = gr.mix_rgb(gr.math("MULTIPLY", f, 0.85), base, (*hex_to_linear(b["color"]), 1))
+                d = gr.vmath("DISTANCE", pos, (b["x"] * A.WP_POS, b["y"] * A.WP_POS, 0.0))
+                f = gr.map_range(d, 0.0, b["r"] * A.WP_R, 1.0, 0.0, interp="SMOOTHSTEP")
+                base = gr.mix_rgb(gr.math("MULTIPLY", f, A.WP_MIX), base, (*hex_to_linear(b["color"]), 1))
             em = gr.node("ShaderNodeEmission")
             gr.set(em.inputs["Color"], base)
             gr.set(em.inputs["Strength"], 1.0)

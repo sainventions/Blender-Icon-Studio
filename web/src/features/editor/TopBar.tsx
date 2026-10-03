@@ -5,7 +5,14 @@ import {
   ChevronDown,
   CircleAlert,
   Clapperboard,
+  ClipboardCopy,
+  ClipboardPaste,
+  Copy,
   Download,
+  Ellipsis,
+  House,
+  Keyboard,
+  LayoutGrid,
   LoaderCircle,
   Orbit,
   PanelLeft,
@@ -17,7 +24,8 @@ import {
 } from 'lucide-react'
 import type { AppearanceId, Quality } from '../../types'
 import { cn, formatSeconds, relativeTime } from '../../lib/format'
-import { goHome } from '../../lib/route'
+import { goHome, goPack } from '../../lib/route'
+import { useCopiedStyle } from '../../lib/looks'
 import { APPEARANCE_IDS } from '../../lib/projectOps'
 import { APPEARANCE_VISUAL } from '../../lib/meta'
 import { useNow } from '../../lib/hooks'
@@ -27,12 +35,16 @@ import { useRender } from '../../store/render'
 import { useUi } from '../../store/ui'
 import { AppearanceIcon, Logo, PlatformIcon } from '../../components/icons'
 import { Button, IconButton, Menu, Segmented, useAnchor, type MenuItem } from '../../components/ui'
-import { openInBlender, PLATFORM_IDS, setPlatform } from './actions'
+import { duplicateProject, openInBlender, PLATFORM_IDS, setPlatform } from './actions'
+import { LooksButton } from '../looks/LooksPanels'
+import { copyStyle, pasteStyle } from '../looks/styleActions'
 
 export function TopBar() {
   return (
-    <header className="relative z-20 flex h-11 shrink-0 items-center gap-2 border-b border-line bg-surface-1/95 px-2 backdrop-blur">
-      <div className="flex min-w-0 flex-1 items-center gap-1.5">
+    // Grid, not flex: the appearance switcher stays centred while there is room, and the right-hand tools never
+    // slide underneath it on narrow windows (their column is at least max-content; the left side truncates).
+    <header className="relative z-20 grid h-11 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(max-content,1fr)] items-center gap-2 border-b border-line bg-surface-1/95 px-2 backdrop-blur">
+      <div className="flex min-w-0 items-center gap-1.5">
         <button
           type="button"
           onClick={goHome}
@@ -51,27 +63,32 @@ export function TopBar() {
 
       <AppearanceSwitcher />
 
-      <div className="flex min-w-0 flex-1 items-center justify-end gap-1.5">
+      <div className="flex items-center justify-end gap-1.5">
         <PlatformPicker />
         <ViewToggle />
         <span className="mx-0.5 h-4 w-px bg-line-2" />
+        <LooksButton />
         <RenderButton />
-        <Button
-          variant="ghost"
-          size="sm"
-          icon={<Clapperboard />}
-          onClick={() => useUi.getState().openDialog('animate')}
-          tipLabel="Animate — turntable, tilt, light sweep…"
-          aria-label="Animate"
-        >
-          <span className="hidden xl:inline">Animate</span>
-        </Button>
-        <Button variant="ghost" size="sm" icon={<Box />} onClick={() => void openInBlender()} tipLabel="Open the scene in Blender 5.0" aria-label="Open in Blender">
-          <span className="hidden xl:inline">Blender</span>
-        </Button>
+        {/* Narrow windows: Animate / Blender live in the ⋯ menu only, so the bar never overlaps the appearances. */}
+        <span className="hidden xl:contents">
+          <Button
+            variant="ghost"
+            size="sm"
+            icon={<Clapperboard />}
+            onClick={() => useUi.getState().openDialog('animate')}
+            tipLabel="Animate — turntable, tilt, light sweep…"
+            aria-label="Animate"
+          >
+            <span className="hidden 2xl:inline">Animate</span>
+          </Button>
+          <Button variant="ghost" size="sm" icon={<Box />} onClick={() => void openInBlender()} tipLabel="Open the scene in Blender 5.0" aria-label="Open in Blender">
+            <span className="hidden 2xl:inline">Blender</span>
+          </Button>
+        </span>
         <Button variant="primary" size="sm" icon={<Download />} onClick={() => useUi.getState().openDialog('export')} tipLabel="Export icons" tipKbd="E">
           Export
         </Button>
+        <OverflowMenu />
         <span className="mx-0.5 h-4 w-px bg-line-2" />
         <PanelToggles />
       </div>
@@ -401,5 +418,46 @@ function PanelToggles() {
         <PanelRight />
       </IconButton>
     </div>
+  )
+}
+
+function OverflowMenu() {
+  const ref = useRef<HTMLButtonElement>(null)
+  const menu = useAnchor<HTMLButtonElement>()
+  const copied = useCopiedStyle()
+  const busy = useEditor((s) => !!s.busy)
+  return (
+    <>
+      <IconButton ref={ref} label="More" onClick={() => ref.current && menu.toggle(ref.current)} active={menu.open} aria-haspopup="menu">
+        <Ellipsis />
+      </IconButton>
+      <Menu
+        open={menu.open}
+        onClose={menu.close}
+        anchor={menu.anchor}
+        placement="bottom-end"
+        width={280}
+        items={[
+          { type: 'label', label: 'Style' },
+          { label: 'Copy style', icon: <ClipboardCopy />, shortcut: 'Mod+Alt+C', description: 'Materials, depth, plate and lighting of this icon.', onSelect: () => void copyStyle() },
+          {
+            label: copied ? `Paste style from “${copied.sourceName}”` : 'Paste style',
+            icon: <ClipboardPaste />,
+            shortcut: 'Mod+Alt+V',
+            disabled: !copied || busy,
+            description: copied ? undefined : 'Copy a style in any project first.',
+            onSelect: () => void pasteStyle(),
+          },
+          { type: 'separator' },
+          { label: 'Icon Pack…', icon: <LayoutGrid />, description: 'Apply one look to a whole icon set and render them all.', onSelect: goPack },
+          { label: 'Animate…', icon: <Clapperboard />, description: 'Turntable, tilt, light sweep, explode.', onSelect: () => useUi.getState().openDialog('animate') },
+          { label: 'Duplicate project', icon: <Copy />, shortcut: 'Mod+D', onSelect: () => void duplicateProject() },
+          { label: 'Open in Blender', icon: <Box />, onSelect: () => void openInBlender() },
+          { type: 'separator' },
+          { label: 'Keyboard shortcuts', icon: <Keyboard />, shortcut: '?', onSelect: () => useUi.getState().openDialog('shortcuts') },
+          { label: 'All projects', icon: <House />, onSelect: goHome },
+        ]}
+      />
+    </>
   )
 }

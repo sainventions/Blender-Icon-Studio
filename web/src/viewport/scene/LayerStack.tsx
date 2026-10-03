@@ -16,6 +16,8 @@ import type {
 } from '../../types'
 import {
   applyIconMaterial,
+  blendInOpaquePass,
+  BLENDED_RENDER_ORDER,
   describeMaterial,
   IconMaterial,
   type FakeGlassBinding,
@@ -42,6 +44,12 @@ export interface StackEntry {
   scale: number
   spec: IconMaterialSpec
   fake: boolean
+  /**
+   * Blended (semi-transparent / blend-mode) bodies of this layer are drawn in the opaque pass (blendInOpaquePass) so
+   * refracting glass above them shows and refracts them. False only when refracting glass lies below the layer and
+   * none above it: then they stay in the transparent pass, drawn after the glass, or they would punch a hole in it.
+   */
+  routeBlended: boolean
   /** Canvas-space bbox (after transforms). */
   bbox: [number, number, number, number]
 }
@@ -100,6 +108,7 @@ export function buildStack(
       scale: s,
       spec: specFor(layerMaterial(layer), presets),
       fake: false,
+      routeBlended: true,
       bbox: bx,
     })
   })
@@ -116,27 +125,65 @@ export function buildStack(
       }
     }
   }
-  return out
-}
-
-export interface ZBox {
-  x0: number
-  y0: number
-  x1: number
-  y1: number
-  z0: number
-  z1: number
-}
-
-/** World-space boxes of the plate and every layer at a given explode amount (camera framing). */
-export function stackBoxes(stack: StackEntry[], explode: number, plateThickness: number | null): ZBox[] {
-  const out: ZBox[] = []
-  if (plateThickness !== null) out.push({ x0: -1, y0: -1, x1: 1, y1: 1, z0: -plateThickness, z1: 0 })
-  for (const e of stack) {
-    const z0 = e.baseZ + explode * EXPLODE_SPREAD * (e.level + 1)
-    out.push({ x0: e.bbox[0], y0: e.bbox[1], x1: e.bbox[2], y1: e.bbox[3], z0, z1: z0 + e.thickness })
+  // Pass routing of blended bodies (see StackEntry.routeBlended): refracting glass = transmissive and not fake.
+  const refracts = (e: StackEntry) => e.spec.transmission > 0 && !e.fake
+  for (let i = 0; i < out.length; i++) {
+    let above = false
+    let below = false
+    for (let j = 0; j < out.length && !above; j++) {
+      if (j === i || !refracts(out[j]) || !overlaps(out[i].bbox, out[j].bbox)) continue
+      if (j > i) above = true
+      else below = true
+    }
+    out[i].routeBlended = above || !below
   }
   return out
+}
+
+/** The plate as framing geometry: its outline (canvas space) extruded over [−thickness, 0]. */
+export interface PlateFrame {
+  outline: [number, number][]
+  thickness: number
+}
+
+/**
+ * World-space points whose hull bounds what the camera must show at a given explode amount: the plate outline at its
+ * front and back faces (tighter than its bounding square for rounded shapes) and the 8 corners of every layer box.
+ * Written into `out` (xyz triplets, reused between frames); returns the number of points.
+ */
+export function stackFramePoints(
+  stack: StackEntry[],
+  explode: number,
+  plate: PlateFrame | null,
+  out: number[],
+): number {
+  let n = 0
+  const push = (x: number, y: number, z: number) => {
+    out[n * 3] = x
+    out[n * 3 + 1] = y
+    out[n * 3 + 2] = z
+    n++
+  }
+  if (plate) {
+    for (const [x, y] of plate.outline) {
+      push(x, y, 0)
+      push(x, y, -plate.thickness)
+    }
+  }
+  for (const e of stack) {
+    const z0 = e.baseZ + explode * EXPLODE_SPREAD * (e.level + 1)
+    const z1 = z0 + e.thickness
+    const [x0, y0, x1, y1] = e.bbox
+    for (let k = 0; k < 2; k++) {
+      const z = k ? z1 : z0
+      push(x0, y0, z)
+      push(x1, y0, z)
+      push(x1, y1, z)
+      push(x0, y1, z)
+    }
+  }
+  out.length = n * 3
+  return n
 }
 
 function linLum(hex: string): number {
@@ -192,6 +239,8 @@ interface LayerBodyProps {
   /** Icon-wide luminance range (mono / tint renditions). */
   intentLum: [number, number]
   presets: Presets | null
+  /** Liquid Glass self-illumination (worker `lit`). */
+  lit: number
 }
 
 export const LayerBody = memo(function LayerBody(p: LayerBodyProps) {
@@ -225,6 +274,7 @@ export const LayerBody = memo(function LayerBody(p: LayerBodyProps) {
       radius: Math.max(1e-3, Math.max(x1 - x0, y1 - y0) / 2),
       milkRange: [y0, y1],
       opacity: layer.opacity * paint.opacity,
+      lit: p.lit,
     }
   }, [
     paint,
@@ -236,6 +286,7 @@ export const LayerBody = memo(function LayerBody(p: LayerBodyProps) {
     p.plateBehind,
     p.rimDir,
     p.rimColor,
+    p.lit,
     layer.depth.inflate,
     layer.opacity,
     lg.bbox,
@@ -418,6 +469,8 @@ export const LayerBody = memo(function LayerBody(p: LayerBodyProps) {
           ctx={ctx}
           blend={layer.blendMode}
           castShadow={castShadow}
+          order={BLENDED_RENDER_ORDER.layer + entry.level + Math.min(0.9, Math.max(0, part.zSub) * 10)}
+          route={entry.routeBlended}
         />
       ))}
       {cards.map((c, i) => (
@@ -431,6 +484,8 @@ export const LayerBody = memo(function LayerBody(p: LayerBodyProps) {
           presets={p.presets}
           rimDir={p.rimDir}
           lumRange={p.intentLum}
+          order={BLENDED_RENDER_ORDER.layer + entry.level + 0.95}
+          route={entry.routeBlended}
         />
       ))}
     </group>
@@ -446,11 +501,16 @@ interface BodyMeshProps {
   ctx: MaterialContext
   blend: BlendMode
   castShadow: boolean
+  /** renderOrder when the body is blended (drawn back to front, in either pass — see blendInOpaquePass). */
+  order: number
+  /** Blended bodies go to the opaque pass (StackEntry.routeBlended). */
+  route: boolean
 }
 
-function applyBlend(m: IconMaterial, blend: BlendMode, spec: IconMaterialSpec): string {
+/** Returns the material's pass key: `mode|transparent|routed|blended` (blended = needs the back-to-front order). */
+function applyBlend(m: IconMaterial, blend: BlendMode, route: boolean): string {
   // Blend modes only make sense for opaque, non-refractive bodies; glass always composites physically.
-  const mode = spec.transmission > 0 && !m.isFakeGlass ? 'normal' : blend
+  const mode = m.transmission > 0 ? 'normal' : blend
   m.blending = THREE.NormalBlending
   m.premultipliedAlpha = false
   switch (mode) {
@@ -484,10 +544,21 @@ function applyBlend(m: IconMaterial, blend: BlendMode, spec: IconMaterialSpec): 
     default:
       break
   }
-  return `${mode}|${m.transparent}`
+  const routed = route && blendInOpaquePass(m)
+  return `${mode}|${m.transparent}|${routed}|${routed || m.transparent}`
 }
 
-const BodyMesh = memo(function BodyMesh({ part, z, layerId, spec, ctx, blend, castShadow }: BodyMeshProps) {
+const BodyMesh = memo(function BodyMesh({
+  part,
+  z,
+  layerId,
+  spec,
+  ctx,
+  blend,
+  castShadow,
+  order,
+  route,
+}: BodyMeshProps) {
   const store = useViewportStore()
   const invalidate = useThree((s) => s.invalidate)
   const geometry = useCached(geometryCache, part.key, part.build)
@@ -498,13 +569,14 @@ const BodyMesh = memo(function BodyMesh({ part, z, layerId, spec, ctx, blend, ca
 
   useLayoutEffect(() => {
     applyIconMaterial(material, spec, { ...ctx, opacity: ctx.opacity * part.opacity, paintAlpha: part.alpha })
-    const key = applyBlend(material, blend, spec)
+    const key = applyBlend(material, blend, route)
     if (key !== blendKey.current) {
       blendKey.current = key
       material.needsUpdate = true
     }
+    if (meshRef.current) meshRef.current.renderOrder = key.endsWith('|true') ? order : 0
     invalidate()
-  }, [material, spec, ctx, part.opacity, part.alpha, blend, invalidate])
+  }, [material, spec, ctx, part.opacity, part.alpha, blend, order, route, invalidate])
 
   useLayoutEffect(() => {
     const m = meshRef.current
@@ -526,7 +598,7 @@ const BodyMesh = memo(function BodyMesh({ part, z, layerId, spec, ctx, blend, ca
       position-z={z}
       castShadow={castShadow}
       receiveShadow
-      renderOrder={material.transparent ? 2 : 0}
+      renderOrder={blendKey.current.endsWith('|true') ? order : 0}
     />
   )
 })
@@ -617,6 +689,8 @@ function RasterCardMesh({
   presets,
   rimDir,
   lumRange,
+  order,
+  route,
 }: {
   card: RasterCard
   z: number
@@ -626,6 +700,9 @@ function RasterCardMesh({
   presets: Presets | null
   rimDir: THREE.Vector3
   lumRange: [number, number]
+  order: number
+  /** Opaque-pass routing (StackEntry.routeBlended). */
+  route: boolean
 }) {
   const store = useViewportStore()
   const invalidate = useThree((s) => s.invalidate)
@@ -635,6 +712,7 @@ function RasterCardMesh({
   const material = useMemo(() => new IconMaterial(), [])
   const spec = useMemo(() => describeMaterial(cardMaterialSpec(layerMaterial), presets), [layerMaterial, presets])
   const meshRef = useRef<THREE.Mesh>(null)
+  const routedRef = useRef<boolean | null>(null)
   useEffect(() => () => geometry.dispose(), [geometry])
   useEffect(() => () => material.dispose(), [material])
   const ready = !!asset?.ready
@@ -649,13 +727,20 @@ function RasterCardMesh({
     })
     material.transparent = true
     material.depthWrite = false
+    material.blending = THREE.NormalBlending // undo an earlier routing
+    // Under refracting glass: opaque pass, so it stays visible (and refracted); on top of glass: after it.
+    const routed = route && blendInOpaquePass(material)
+    if (routed !== routedRef.current) {
+      routedRef.current = routed
+      material.needsUpdate = true
+    }
     invalidate()
-  }, [material, spec, asset, ready, placement, lumRange, rimDir, opacity, card.opacity, invalidate])
+  }, [material, spec, asset, ready, placement, lumRange, rimDir, opacity, card.opacity, route, invalidate])
   useLayoutEffect(() => {
     const m = meshRef.current
     if (!m) return
     store.addMesh(layerId, m)
     return () => store.removeMesh(layerId, m)
   }, [store, layerId])
-  return <mesh ref={meshRef} geometry={geometry} material={material} position-z={z} renderOrder={3} />
+  return <mesh ref={meshRef} geometry={geometry} material={material} position-z={z} renderOrder={order} />
 }

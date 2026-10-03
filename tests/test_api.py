@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -562,12 +563,41 @@ def test_svg_sniffing():
 
 
 def test_open_in_blender_launches_detached(tmp_path):
-    """The real launcher (flags incl. job breakaway on Windows) with Python standing in for blender.exe."""
-    from bis.rendering import open_in_blender
+    """The real launcher with Python standing in for blender.exe: the GUI process must be fully detached —
+    on Windows outside the server's process tree and outside every job object (it must survive the server)."""
+    from bis.rendering import open_in_blender, pid_alive
 
     scene = tmp_path / "scene.py"  # stands in for the .blend
     marker = tmp_path / "opened.txt"
-    scene.write_text(f"open({str(marker)!r}, 'w').write('ok')")
-    proc = open_in_blender(Path(sys.executable), scene)
-    assert proc.wait(30) == 0 and marker.read_text() == "ok"
+    scene.write_text("import os, sys, time\n"
+                     f"open({str(marker)!r}, 'w').write(f'{{os.getpid()}} {{os.getppid()}} {{os.getcwd()}}')\n"
+                     "time.sleep(1.5)\n")
+    launched = open_in_blender(Path(sys.executable), scene)
+    assert launched.pid > 0
+    end = time.time() + 30
+    while not (marker.is_file() and marker.read_text()) and time.time() < end:
+        time.sleep(0.05)
+    pid, ppid, cwd = marker.read_text().split(" ", 2)
+    assert Path(cwd) == tmp_path
+    assert int(ppid) != os.getpid()  # not our child
+    if sys.platform == "win32":
+        assert launched.method == "wmi", launched
+        import ctypes
+        from ctypes import wintypes
 
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.OpenProcess.restype = wintypes.HANDLE
+        k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        k32.IsProcessInJob.argtypes = [wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)]
+        # (the venv python.exe is a redirector that runs the real interpreter in its own job: check the
+        # process the launcher started — Blender in production)
+        h = k32.OpenProcess(0x1000, False, launched.pid)
+        if h:  # still running (the script sleeps 1.5 s): it must not be in any job object
+            in_job = wintypes.BOOL()
+            assert k32.IsProcessInJob(h, None, ctypes.byref(in_job))
+            k32.CloseHandle(h)
+            assert not in_job.value
+    end = time.time() + 30
+    while launched.alive() and time.time() < end:
+        time.sleep(0.05)
+    assert not pid_alive(launched.pid)

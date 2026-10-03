@@ -82,7 +82,7 @@ function statsFromColors(colors: string[]): PaintStats {
     avg[1] += c.g / colors.length
     avg[2] += c.b / colors.length
   }
-  return { lumMin: lo, lumMax: hi, avg }
+  return { lumMin: lo, lumMax: hi, avg, alphaMax: 1 }
 }
 
 function drawGradient(fill: GradientFill): GradientAsset {

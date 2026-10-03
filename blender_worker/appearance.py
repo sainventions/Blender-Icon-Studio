@@ -26,6 +26,10 @@ WALLPAPERS = {
 }
 
 MONO_FLOOR = 0.3
+# wallpaper shader layout (object coords of the wallpaper plane == world XY): vertical gradient over
+# ±WP_Y, blobs at (x, y)·WP_POS with smoothstep radius r·WP_R mixed by WP_MIX (scene._wallpaper and the
+# EEVEE frosted-plate fallback in materials.py)
+WP_Y, WP_POS, WP_R, WP_MIX = 2.2, 1.6, 1.9, 0.85
 
 
 def _apply_override(proj: dict, ov: dict) -> None:
@@ -150,6 +154,14 @@ def _mix_hex(a: str, b: str, t: float) -> str:
     ca, cb = hex_to_srgb(a), hex_to_srgb(b)
     c = lerp(ca, cb, t)
     return "#%02x%02x%02x" % tuple(int(round(max(0, min(1, v)) * 255)) for v in c)
+
+
+def wallpaper_linear(kind: str, depth: float = 1.0) -> dict:
+    """Linear-colour wallpaper for shader use (EEVEE frosted-plate fallback); ``depth`` = distance from the
+    plate's front face down to the wallpaper plane."""
+    w = WALLPAPERS.get(kind) or WALLPAPERS["light"]
+    return {"kind": kind, "top": hex_to_linear(w["top"]), "bottom": hex_to_linear(w["bottom"]), "depth": float(depth),
+            "blobs": [(x, y, r, hex_to_linear(c)) for (x, y, r, c) in w["blobs"]]}
 
 
 def wallpaper(kind: str) -> dict:

@@ -109,6 +109,11 @@ class Settings:
         return self.workspace / "projects"
 
     @property
+    def batches_dir(self) -> Path:
+        """Batch ("Icon Pack") outputs: contact sheets + pack zips, served at /files/batches/<jobId>/."""
+        return self.workspace / "batches"
+
+    @property
     def tmp_dir(self) -> Path:
         return self.workspace / "tmp"
 
@@ -149,7 +154,8 @@ class Settings:
         return self.blender_exe is not None and Path(self.blender_exe).is_file()
 
     def ensure_dirs(self) -> None:
-        for d in (self.workspace, self.projects_dir, self.tmp_dir, self.cache_dir, self.logs_dir):
+        for d in (self.workspace, self.projects_dir, self.batches_dir, self.tmp_dir, self.cache_dir,
+                  self.logs_dir):
             d.mkdir(parents=True, exist_ok=True)
 
     def with_overrides(self, **kw) -> "Settings":

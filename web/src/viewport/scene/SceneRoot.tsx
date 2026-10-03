@@ -4,12 +4,13 @@ import { useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import type { AppearanceId, Fill, GeometryBundle, LayerTransform, Presets, Project } from '../../types'
 import { appearanceWallpaper, isDarkAppearance } from '../../lib/appearance'
-import type { FakeGlassBinding } from '../../lib/materials3d'
+import { plateOutline } from '../../lib/shapes'
+import { liquidGlassLit, type FakeGlassBinding } from '../../lib/materials3d'
 import { Backdrop, useBackdropBinding, type BackdropSpec } from './Backdrop'
 import { CameraRig } from './CameraRig'
 import { Effects } from './Effects'
 import { GridOverlay } from './GridOverlay'
-import { LayerBody, buildStack, iconLumRange, stackBoxes, stackTop } from './LayerStack'
+import { LayerBody, buildStack, iconLumRange, stackFramePoints, stackTop, type PlateFrame } from './LayerStack'
 import { Plate } from './Plate'
 import { lightDir, resolveRig } from './rig'
 import { StudioLighting } from './StudioLighting'
@@ -77,6 +78,8 @@ export function SceneRoot(p: SceneRootProps) {
   const rig = useMemo(() => resolveRig(lighting, presets), [lighting, presets])
   const rimDir = useMemo(() => lightDir(rig.angle, rig.elevation), [rig.angle, rig.elevation])
   const rimColor = useMemo(() => new THREE.Color(rig.rimColors[0] ?? '#ffffff'), [rig.rimColors])
+  // Worker `lit`: Liquid Glass self-illumination follows the key light (dark renditions: key × 0.85).
+  const lit = liquidGlassLit(rig.key)
 
   // Backdrop + plate paint (shared: the plate fill is what lower "fake glass" layers show through themselves).
   const bspec = backdropSpec(project, p.appearance)
@@ -102,8 +105,18 @@ export function SceneRoot(p: SceneRootProps) {
   const top = useCallback((e: number) => stackTop(stack, e), [stack])
   const lumRange = useMemo(() => iconLumRange(stack), [stack])
   const intentLum = useMemo<[number, number]>(() => lumRange, [lumRange[0], lumRange[1]]) // eslint-disable-line react-hooks/exhaustive-deps
-  const plateT = plateVisible ? canvas.plate.thickness : null
-  const boxes = useCallback((e: number) => stackBoxes(stack, e, plateT), [stack, plateT])
+  // Camera framing hull: the plate outline (front + back face) and every layer box at a given explode amount.
+  const plateFrame = useMemo<PlateFrame | null>(
+    () =>
+      plateVisible
+        ? { outline: plateOutline(canvas.shape, canvas.cornerRadius, 64), thickness: canvas.plate.thickness }
+        : null,
+    [plateVisible, canvas.shape, canvas.cornerRadius, canvas.plate.thickness],
+  )
+  const framePoints = useCallback(
+    (e: number, out: number[]) => stackFramePoints(stack, e, plateFrame, out),
+    [stack, plateFrame],
+  )
   // Worker _shadow_color: a shadow ray loses opacity × 0.85 (glass) / 0.95 (solids) of the light, × 0.6 for unlit
   // `flat` layers. One shadow map serves all layers, so the strongest caster sets the darkness.
   const shadowStrength = useMemo(() => {
@@ -128,13 +141,18 @@ export function SceneRoot(p: SceneRootProps) {
         view={p.view}
         zoom={project.camera.zoom || 1}
         fov={project.camera.fov || 30}
-        stackTop={top}
-        boxes={boxes}
-        plateThickness={plateVisible ? canvas.plate.thickness : 0}
+        points={framePoints}
       />
       <group name="icon">
         {plateVisible && (
-          <Plate canvas={canvas} presets={presets} paint={platePaint} behind={backdropBehind} rimDir={rimDir} />
+          <Plate
+            canvas={canvas}
+            presets={presets}
+            paint={platePaint}
+            behind={backdropBehind}
+            rimDir={rimDir}
+            lit={lit}
+          />
         )}
         {stack.map((entry) => (
           <LayerBody
@@ -150,6 +168,7 @@ export function SceneRoot(p: SceneRootProps) {
             onTransform={onTransform}
             intentLum={intentLum}
             presets={presets}
+            lit={lit}
           />
         ))}
       </group>

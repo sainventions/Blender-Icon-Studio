@@ -64,6 +64,15 @@ class JobContext:
     def message(self, message: str) -> None:
         self.progress(self.job.progress, message)
 
+    def partial_result(self, result: dict[str, Any]) -> None:
+        """Publish what a long job has finished so far (a batch's done icons) as ``job.result`` with
+        ``partial: true``. The final result replaces it; a cancelled or failed job keeps it."""
+        if self.token.cancelled or self.job.state != "running":
+            return
+        self.job.result = {**result, "partial": True}
+        self._last_publish = time.monotonic()
+        self._manager._publish(self.job)
+
     async def yield_to_live(self) -> None:
         """Let queued *live* jobs (drafts, auto previews) run now, between two GPU steps of a long job
         (exports render a dozen masters). The GPU is idle at that point, so the queue stays serial."""
@@ -367,4 +376,5 @@ class JobManager:
         if job.state != "cancelled":
             job.state = "cancelled"
             job.message = "Cancelled"
-        job.result = None
+        if not (isinstance(job.result, dict) and job.result.get("partial")):
+            job.result = None  # (a partial result — what finished before the cancel — stays)

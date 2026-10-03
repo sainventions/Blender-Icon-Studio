@@ -1,5 +1,5 @@
 // Static UI metadata: strategies, export targets, animation kinds, appearance/material visuals.
-import type { AnimateRequest, AppearanceId, ExportTarget, SplitStrategy } from '../types'
+import type { AnimateRequest, AppearanceId, ExportTarget, LightingPreset, SampleIcon, SplitStrategy } from '../types'
 
 export const STRATEGIES: { id: SplitStrategy; label: string; description: string }[] = [
   { id: 'smart', label: 'Smart', description: 'Detects the plate, then groups shapes by stacking order and colour. Best default.' },
@@ -66,3 +66,41 @@ export const MATERIAL_CSS: Record<string, string> = {
 }
 
 export const CATEGORY_ORDER = ['Glass', 'Solid', 'Metal', 'Light']
+
+/** Little visual for a lighting preset (chips, look thumbnails): a dark studio with the key light's warmth. */
+export function lightingCss(id: string, p: LightingPreset | undefined): string {
+  if (!p) return 'radial-gradient(circle at 25% 20%, rgba(255,255,255,0.55), transparent 55%), #2a2a33'
+  if (p.rimColors?.length) return `radial-gradient(circle at 30% 30%, ${p.rimColors[0]}, transparent 60%), radial-gradient(circle at 75% 75%, ${p.rimColors[1] ?? p.rimColors[0]}, transparent 60%), #0b0b12`
+  const warm = p.warmth > 0 ? `rgba(255,170,90,${0.25 + p.warmth * 0.4})` : 'rgba(255,255,255,0.75)'
+  const env = Math.min(1, p.environment / 1.8)
+  const base = `rgb(${Math.round(30 + env * 120)} ${Math.round(30 + env * 120)} ${Math.round(38 + env * 120)})`
+  if (id === 'top' || p.lockAngle === 0) return `radial-gradient(ellipse 80% 55% at 50% 0%, ${warm}, transparent 70%), ${base}`
+  return `radial-gradient(circle at 25% 20%, ${warm}, transparent ${40 + p.key * 15}%), linear-gradient(135deg, transparent 60%, rgba(255,255,255,${Math.min(0.6, p.rim * 0.25)})), ${base}`
+}
+
+/** Neutral plate chips per plate material (the plate's colour comes from each icon's own fill). */
+export const PLATE_FINISH_CSS: Record<string, string> = {
+  satin: 'radial-gradient(ellipse 70% 50% at 32% 18%, rgba(255,255,255,.55), transparent 70%), linear-gradient(180deg, #fbfbfc, #d7d8df)',
+  glossy_plastic:
+    'radial-gradient(ellipse 55% 30% at 36% 14%, rgba(255,255,255,.98), transparent 72%), linear-gradient(180deg, #ffffff 0%, #e9eaf0 55%, #c9cbd4 100%)',
+  matte_clay: 'linear-gradient(180deg, #efe8df, #cfc4b6)',
+  brushed_metal:
+    'repeating-linear-gradient(90deg, rgba(255,255,255,.07) 0 1px, rgba(0,0,0,.05) 1px 3px), linear-gradient(180deg, #e3e7ec 0%, #a9b1bc 55%, #7d8693 100%)',
+  chrome: 'linear-gradient(180deg, #fafafa 0%, #b4b4bc 40%, #3f3f46 52%, #8a8a93 64%, #ececf0 100%)',
+  frosted_glass: 'radial-gradient(circle at 30% 25%, rgba(255,255,255,.8), transparent 50%), linear-gradient(150deg, #eef0f4, #b9bdc7)',
+}
+
+/** Sheen laid over a custom plate fill so the finish still reads. */
+export const PLATE_SHEEN_CSS: Record<string, string> = {
+  glossy_plastic: 'radial-gradient(ellipse 55% 30% at 36% 14%, rgba(255,255,255,.55), transparent 72%)',
+  satin: 'radial-gradient(ellipse 70% 50% at 32% 18%, rgba(255,255,255,.16), transparent 70%)',
+  brushed_metal: 'repeating-linear-gradient(90deg, rgba(255,255,255,.05) 0 1px, rgba(0,0,0,.05) 1px 3px)',
+  chrome: 'linear-gradient(180deg, rgba(255,255,255,.35), transparent 45%, rgba(255,255,255,.18))',
+}
+
+/** Sample collections (the server tags samples with their source folder). */
+export const SAMPLE_COLLECTION_LABEL: Record<string, string> = { corpus: 'App icons', svgtests: 'Test SVGs' }
+
+export function sampleCollection(s: SampleIcon): string {
+  return s.collection ?? 'corpus'
+}

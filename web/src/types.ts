@@ -226,7 +226,11 @@ export interface BatchRequest {
   strategy?: SplitStrategy; quality?: Quality; size?: number; appearance?: AppearanceId
   export?: ExportRequest | null
 }
-export interface BatchItemResult { source: BatchSource; projectId?: string; name: string; renderUrl?: string; error?: string }
+export interface BatchItemResult {
+  source: BatchSource; projectId?: string; name: string; renderUrl?: string; error?: string
+  exportUrl?: string // this icon's own export zip (batch with `export`)
+  seconds?: number
+}
 
 // ---------------------------------------------------------------- system
 export interface SystemStatus {

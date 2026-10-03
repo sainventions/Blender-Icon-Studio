@@ -5,11 +5,13 @@ import * as THREE from 'three'
 import { RefCache, useCached } from '../refCache'
 
 export interface PaintStats {
-  /** Linear-light luminance range over opaque pixels (mono/tint renditions stretch this to 0.25..1). */
+  /** Linear-light luminance range over opaque pixels (mono/tint renditions stretch it to MONO_FLOOR..1). */
   lumMin: number
   lumMax: number
   /** Average linear colour over opaque pixels (fallback paint). */
   avg: [number, number, number]
+  /** Largest alpha (0..1) of the downsampled image: < 0.5 = a translucent overlay (shading / highlight art). */
+  alphaMax: number
 }
 
 export interface TextureAsset {
@@ -35,6 +37,10 @@ export function imageStats(image: CanvasImageSource, size = 64): PaintStats | nu
     if (!ctx) return null
     ctx.drawImage(image, 0, 0, size, size)
     const data = ctx.getImageData(0, 0, size, size).data
+    let alphaMax = 0
+    for (let i = 3; i < data.length; i += 4) if (data[i] > alphaMax) alphaMax = data[i]
+    // Colour statistics over the opaque pixels — or, for a translucent overlay, over everything visible.
+    const cut = alphaMax >= 128 ? 128 : 8
     let lo = Infinity
     let hi = -Infinity
     let r = 0
@@ -42,7 +48,7 @@ export function imageStats(image: CanvasImageSource, size = 64): PaintStats | nu
     let b = 0
     let count = 0
     for (let i = 0; i < data.length; i += 4) {
-      if (data[i + 3] < 128) continue
+      if (data[i + 3] < cut) continue
       const lr = srgbToLinear(data[i] / 255)
       const lg = srgbToLinear(data[i + 1] / 255)
       const lb = srgbToLinear(data[i + 2] / 255)
@@ -55,7 +61,7 @@ export function imageStats(image: CanvasImageSource, size = 64): PaintStats | nu
       count++
     }
     if (!count) return null
-    return { lumMin: lo, lumMax: hi, avg: [r / count, g / count, b / count] }
+    return { lumMin: lo, lumMax: hi, avg: [r / count, g / count, b / count], alphaMax: alphaMax / 255 }
   } catch {
     return null // tainted canvas etc.
   }

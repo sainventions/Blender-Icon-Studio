@@ -61,7 +61,28 @@ renders the faithful glass. One click exports a ready-to-ship icon set for every
 
 - **Animations:** turntable, tilt, float, light sweep and explode, as MP4 (H.264), WebP, GIF or a PNG
   sequence.
-- **Open in Blender:** saves the scene and opens it in your Blender GUI with your own preferences.
+- **Looks:** one-click styles that restyle the whole icon — Liquid Glass, Crystal, Frosted, Prism, Candy,
+  Clay, Chrome, Neon, Iridescent and Soft 3D (`looks` in `shared/presets.json`). A look sets every layer's
+  material, depth, bevel and shadow, restacks the layers (`z = i × zGap`), and sets the plate material plus,
+  when the look defines them, the lighting, camera, colour mode and tint. Bevels are always clamped to
+  0.9 × each layer's safe radius, so thin strokes never invert. The icon's own plate colour and shape are
+  kept unless the look sets them (Neon switches the plate to System Dark).
+- **Copy / paste style:** copy the look of one icon and paste it onto another. Pasting works with a copied
+  `StyleSpec` or directly from another project (`fromProject`). The copied style holds the dominant layer
+  material, depth and shadow, each layer's material by stack position (bottom → top), the median layer gap,
+  the plate material, and the lighting, camera, colour mode and tint. A plate *fill* only travels when it's a
+  deliberate System Light / System Dark / None fill, because a solid or gradient plate is the icon's own
+  brand colour. Use `?plateFill=true&shape=true` to copy the fill and shape anyway.
+- **Icon Pack (batch):** pick many sample icons or existing projects, apply one look (or a copied style), and
+  render them all in one queued job. Progress reads "Icon 7/24: Maps". If one icon fails, it's marked on its
+  tile and the rest of the pack still renders. Finished icons appear while the pack runs. Cancel stops after the
+  current icon and keeps the icons already rendered. Your live drafts still run between icons. The result
+  has a **contact sheet**: a dark PNG grid with each icon's name under its tile.
+  Add an export request and every icon is also exported, then everything is packed into **one zip** with a
+  folder per icon plus the contact sheet. Draft and preview batch renders are capped at 512 px.
+- **Open in Blender:** saves the scene and opens it in your Blender GUI with your own preferences. On Windows,
+  Blender starts through WMI, so it isn't a child of the server or in the server's job object. It stays open
+  after the server stops.
 - **Pro-tool UI:** a layers panel, a viewport with a compare slider against the Blender render, an inspector,
   a strip of all six renditions, and live GPU / VRAM / queue status.
 
@@ -155,7 +176,8 @@ If the server is already running, the launcher just opens a new window.
 |---|---|
 | `GET /system`, `GET /system/logs` | status (Blender, worker, GPU, queue) and the tail of the worker's stdout |
 | `POST /system/worker/restart` | restart the worker |
-| `GET /presets` | material, lighting, platform and quality presets, plus swatch URLs |
+| `GET /presets` | material, lighting, platform, quality presets and `looks`, plus swatch URLs |
+| `GET /looks` | the named looks `{id: {label, description, style}}` |
 | `GET /samples` | the sample library |
 | `GET /samples/{name}/thumbnail.png`, `GET /samples/{name}/source.svg` | a sample's thumbnail or raw SVG |
 | `GET\|POST /projects` | list projects, or create one (multipart `file`, or JSON `{sample}`) |
@@ -167,12 +189,15 @@ If the server is already running, the launcher just opens a new window.
 | `POST /projects/{id}/layers/{layerId}/split` | split one layer |
 | `POST /projects/{id}/elements/move` | move elements to another layer |
 | `GET /projects/{id}/geometry` | the geometry bundle |
+| `GET /projects/{id}/style` | copy style → `StyleSpec` (`?plateFill=true&shape=true` also copies the plate fill / shape) |
+| `POST /projects/{id}/style` | paste style: exactly one of `{look}`, `{style: StyleSpec}` or `{fromProject}` → the saved `Project` (400 if not exactly one, 404 for an unknown look or project) |
 | `GET /projects/{id}/layers/{layerId}/thumbnail.png` | a layer thumbnail |
 | `POST /projects/{id}/render` | queue a render → `Job` |
 | `POST /projects/{id}/renditions` | the six appearances → `Job[]` |
 | `POST /projects/{id}/animate` | queue an animation → `Job` |
 | `POST /projects/{id}/export` | queue an export → `Job`; the result holds `zip`, `files` and `previews` |
 | `POST /projects/{id}/blend` | save a `.blend` (`{open: true}` launches Blender) → `Job` |
+| `POST /batch` | Icon Pack: `BatchRequest` `{sources: [{sample} \| {projectId}], look? \| style? \| fromProject?, strategy, quality, size, appearance, export?}` → `Job` (kind `batch`); the result holds `items` (`BatchItemResult[]`), `contactSheet` and, with `export`, `zip` (files under `/files/batches/<jobId>/`); while it runs (and after a cancel) `result` is partial: `{items, count, failed, partial: true}` |
 | `GET /jobs`, `GET /jobs/{id}`, `DELETE /jobs/{id}` | list, read or cancel jobs |
 | `WS /ws` | `{type:'job', job}`, `{type:'system', status}` (every 2 s) and `{type:'project', projectId, event}` |
 

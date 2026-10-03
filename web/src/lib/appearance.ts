@@ -53,6 +53,21 @@ export function isClearAppearance(a: AppearanceId): boolean {
   return a === 'clear-light' || a === 'clear-dark'
 }
 
+/**
+ * Mono / tint renditions (worker appearance.MONO_FLOOR / materials.MONO_MIN_RANGE): the perceptual luminance of the
+ * art is stretched from the icon-wide range [lo, hi] onto MONO_FLOOR..1 (brightest → white); a narrow range is never
+ * over-stretched (lo ≤ hi − MONO_MIN_RANGE). PLAN §10: the floor is 0.3 (supersedes 0.25 in §5).
+ */
+export const MONO_FLOOR = 0.3
+export const MONO_MIN_RANGE = 0.55
+
+/** Worker `_mono`: perceptual luminance (0..1) → stretched mono grey level (perceptual, MONO_FLOOR..1). */
+export function monoLevel(perceptualLum: number, lo: number, hi: number): number {
+  const l = Math.min(lo, hi - MONO_MIN_RANGE)
+  const t = Math.max(0, Math.min(1, (perceptualLum - l) / Math.max(hi - l, 1e-4)))
+  return MONO_FLOOR + (1 - MONO_FLOOR) * t
+}
+
 /** PLAN §5: dark renditions use environment × 0.6 and key × 0.85. */
 export const DARK_ENV_SCALE = 0.6
 export const DARK_KEY_SCALE = 0.85

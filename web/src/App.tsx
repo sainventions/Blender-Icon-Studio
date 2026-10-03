@@ -7,10 +7,11 @@ import HomePage from './features/home/HomePage'
 import { EditorSkeleton } from './features/editor/EditorSkeleton'
 import { ImportDialog } from './features/dialogs/ImportDialog'
 import { ShortcutsDialog } from './features/dialogs/ShortcutsDialog'
-import { ConfirmHost, Toaster, TooltipLayer } from './components/ui'
+import { ConfirmHost, Spinner, Toaster, TooltipLayer } from './components/ui'
 
 // The editor pulls in three.js — keep it out of the home screen bundle.
 const EditorPage = lazy(() => import('./features/editor/EditorPage'))
+const PackPage = lazy(() => import('./features/pack/PackPage'))
 
 export default function App() {
   const route = useRoute()
@@ -34,13 +35,18 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    document.title = route.name === 'home' ? 'Blender Icon Studio' : 'Editor · Blender Icon Studio'
+    document.title =
+      route.name === 'home' ? 'Blender Icon Studio' : route.name === 'pack' ? 'Icon Pack · Blender Icon Studio' : 'Editor · Blender Icon Studio'
   }, [route])
 
   return (
     <>
       {route.name === 'home' ? (
         <HomePage />
+      ) : route.name === 'pack' ? (
+        <Suspense fallback={<PageFallback />}>
+          <PackPage />
+        </Suspense>
       ) : (
         <Suspense fallback={<EditorSkeleton />}>
           <EditorPage key={route.projectId} projectId={route.projectId} />
@@ -52,5 +58,13 @@ export default function App() {
       <Toaster />
       <TooltipLayer />
     </>
+  )
+}
+
+function PageFallback() {
+  return (
+    <div className="flex h-full items-center justify-center bg-app">
+      <Spinner />
+    </div>
   )
 }

@@ -13,11 +13,14 @@ Those jobs carry ``request.auto = true``.
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
 import logging
+import os
 import subprocess
 import sys
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -38,29 +41,127 @@ MIN_SIZE, MAX_SIZE = 16, 4096
 RENDITION_SIZE = 256
 
 
-def open_in_blender(exe: Path, blend: Path) -> subprocess.Popen:
-    """Open a .blend in the Blender GUI — deliberately WITHOUT -b/--factory-startup so the user's
-    preferences (already OptiX) apply. Detached from the server process."""
-    def launch(flags: int) -> subprocess.Popen:
-        return subprocess.Popen(
-            [str(exe), str(blend)],
-            cwd=str(blend.parent),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=flags,
-            close_fds=True,
-            env=blender_env(),
-        )
+@dataclass
+class LaunchedProcess:
+    """A GUI process started by :func:`open_in_blender` (not a child we wait on)."""
+    pid: int
+    method: str                       # 'wmi' | 'cmd-start' | 'popen'
+    popen: subprocess.Popen | None = None
 
+    def alive(self) -> bool:
+        if self.popen is not None:
+            return self.popen.poll() is None
+        return pid_alive(self.pid)
+
+
+# Win32_Process.Create via CIM: the new process is created by the WMI service host — outside the server's
+# process tree AND outside every job object the server runs in (a terminal / IDE / agent harness job with
+# KILL_ON_JOB_CLOSE that forbids breakaway would otherwise take Blender down with the server).
+_WMI_LAUNCH_PS = r"""
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+$startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ CreateFlags = [uint32]$env:BIS_LAUNCH_FLAGS }
+$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+    CommandLine = $env:BIS_LAUNCH_CMDLINE; CurrentDirectory = $env:BIS_LAUNCH_CWD; ProcessStartupInformation = $startup }
+if ($r.ReturnValue -ne 0) { [Console]::Error.WriteLine("Win32_Process.Create returned $($r.ReturnValue)"); exit 2 }
+[Console]::Out.WriteLine($r.ProcessId)
+"""
+_DETACHED_PROCESS = 0x00000008
+_CREATE_NEW_PROCESS_GROUP = 0x00000200
+_CREATE_NO_WINDOW = 0x08000000
+_CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+
+
+def pid_alive(pid: int) -> bool:
     if sys.platform != "win32":
-        return launch(0)
-    flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+    import ctypes
+    from ctypes import wintypes
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenProcess.restype = wintypes.HANDLE
+    k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    k32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    h = k32.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not h:
+        return False
     try:
-        # the user's Blender session must survive the server (and a terminal job object the server runs in)
-        return launch(flags | subprocess.CREATE_BREAKAWAY_FROM_JOB)
+        code = wintypes.DWORD()
+        return bool(k32.GetExitCodeProcess(h, ctypes.byref(code))) and code.value == 259  # STILL_ACTIVE
+    finally:
+        k32.CloseHandle(h)
+
+
+def _powershell() -> str:
+    root = os.environ.get("SystemRoot") or r"C:\Windows"
+    exe = Path(root) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    return str(exe) if exe.is_file() else "powershell.exe"
+
+
+def _launch_wmi(cmdline: str, cwd: Path) -> LaunchedProcess:
+    env = {**os.environ, "BIS_LAUNCH_CMDLINE": cmdline, "BIS_LAUNCH_CWD": str(cwd),
+           "BIS_LAUNCH_FLAGS": str(_DETACHED_PROCESS | _CREATE_NEW_PROCESS_GROUP)}
+    script = base64.b64encode(_WMI_LAUNCH_PS.encode("utf-16-le")).decode("ascii")
+    r = subprocess.run(
+        [_powershell(), "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+         "-EncodedCommand", script],
+        env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60,
+        creationflags=_CREATE_NO_WINDOW,
+    )
+    out = (r.stdout or "").strip().splitlines()
+    if r.returncode != 0 or not out or not out[-1].strip().isdigit():
+        err = (r.stderr or "").strip().splitlines()
+        raise OSError(f"WMI launch failed ({r.returncode}): {err[-1] if err else r.stdout.strip()}")
+    return LaunchedProcess(int(out[-1].strip()), "wmi")
+
+
+def _launch_cmd_start(exe: Path, blend: Path) -> LaunchedProcess:
+    """Fallback: `cmd /c start` — Blender's parent (cmd) exits at once, so it leaves the server's process tree;
+    job breakaway when the enclosing job allows it."""
+    cmdline = f'cmd.exe /d /c start "" /D "{blend.parent}" "{exe}" "{blend}"'
+    flags = _DETACHED_PROCESS | _CREATE_NEW_PROCESS_GROUP | _CREATE_NO_WINDOW
+
+    def run(f: int) -> subprocess.Popen:
+        return subprocess.Popen(cmdline, cwd=str(blend.parent), stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=f,
+                                close_fds=True, env=blender_env())
+
+    try:
+        proc = run(flags | _CREATE_BREAKAWAY_FROM_JOB)
     except OSError:  # the enclosing job forbids breakaway
-        return launch(flags)
+        proc = run(flags)
+    proc.wait(30)
+    if proc.returncode:
+        raise OSError(f"cmd start exited with {proc.returncode}")
+    return LaunchedProcess(proc.pid, "cmd-start")
+
+
+def open_in_blender(exe: Path, blend: Path) -> LaunchedProcess:
+    """Open a .blend in the Blender GUI — the given Blender 5.0 exe (never the .blend file association),
+    deliberately WITHOUT -b/--factory-startup so the user's preferences (already OptiX) apply.
+
+    The window must outlive the server: on Windows it is started through WMI (Win32_Process.Create), which
+    puts it outside the server's process tree and outside any job object (``taskkill /T`` of the server or a
+    closing terminal/harness job does not reach it). Falls back to ``cmd /c start`` (+ job breakaway)."""
+    exe, blend = Path(exe), Path(blend)
+    if sys.platform != "win32":
+        proc = subprocess.Popen([str(exe), str(blend)], cwd=str(blend.parent), stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+                                close_fds=True, env=blender_env())
+        return LaunchedProcess(proc.pid, "popen", proc)
+    cmdline = subprocess.list2cmdline([str(exe), str(blend)])
+    try:
+        launched = _launch_wmi(cmdline, blend.parent)
+    except (OSError, subprocess.SubprocessError) as e:
+        log.warning("WMI launch of Blender failed (%s); falling back to cmd start", e)
+        return _launch_cmd_start(exe, blend)
+    log.info("opened %s in Blender (pid %d, %s)", blend.name, launched.pid, launched.method)
+    return launched
 
 
 class RenderService:
@@ -404,8 +505,11 @@ class RenderService:
                 if self.settings.blender_found and not self.settings.fake_blender:
                     ctx.progress(0.97, "Opening Blender…")
                     try:  # the .blend is saved either way; a GUI launch failure must not fail the job
-                        self.opener(Path(self.settings.blender_exe), path)  # type: ignore[arg-type]
+                        launched = await asyncio.to_thread(
+                            self.opener, Path(self.settings.blender_exe), path)  # type: ignore[arg-type]
                         result["opened"] = True
+                        if isinstance(getattr(launched, "pid", None), int):
+                            result["pid"] = launched.pid
                     except Exception as e:  # noqa: BLE001
                         log.warning("could not open Blender: %s", e)
                         result["openError"] = str(e)

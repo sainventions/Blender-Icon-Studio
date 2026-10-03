@@ -6,7 +6,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict
 
-from .models import AppearanceId, CameraSpec, Quality, SplitStrategy
+from .models import AppearanceId, BatchSource, CameraSpec, Quality, SplitStrategy
 
 WorkerState = Literal["stopped", "starting", "ready", "busy", "error"]
 
@@ -106,3 +106,16 @@ class BlendBody(_M):
 class SwatchesBody(_M):
     size: int = 192
     quality: Quality = "preview"
+
+
+# ---------------------------------------------------------------------------------------------- batch
+class BatchItemResult(_M):
+    """One icon of a batch ("Icon Pack") job result (mirrors types.ts BatchItemResult)."""
+    source: BatchSource
+    projectId: Optional[str] = None
+    name: str
+    renderUrl: Optional[str] = None
+    error: Optional[str] = None
+    # additive extras (not in types.ts yet; harmless for the UI)
+    exportUrl: Optional[str] = None       # this icon's own export zip (when the batch exports)
+    seconds: Optional[float] = None

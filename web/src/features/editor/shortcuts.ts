@@ -6,6 +6,7 @@ import { useEditor } from '../../store/editor'
 import { useRender } from '../../store/render'
 import { useUi, type StageMode } from '../../store/ui'
 import { animateExplode, duplicateProject } from './actions'
+import { copyStyle, pasteStyle } from '../looks/styleActions'
 
 export interface ShortcutDef {
   keys: string
@@ -19,6 +20,8 @@ export const SHORTCUTS: ShortcutDef[] = [
   { keys: 'Mod+Shift+Z', label: 'Redo', group: 'General' },
   { keys: 'Mod+S', label: 'Save now', group: 'General' },
   { keys: 'Mod+D', label: 'Duplicate project', group: 'General' },
+  { keys: 'Mod+Alt+C', label: 'Copy style (materials, depth, plate, lighting)', group: 'General' },
+  { keys: 'Mod+Alt+V', label: 'Paste style onto this project', group: 'General' },
   { keys: 'E', label: 'Export…', group: 'General' },
   { keys: '?', label: 'Keyboard shortcuts', group: 'General' },
   { keys: '1 – 6', label: 'Switch appearance (Light, Dark, Clear, Clear Dark, Tinted, Tinted Dark)', group: 'View' },
@@ -70,6 +73,12 @@ export function useEditorShortcuts() {
         e.stopPropagation()
       }
 
+      if (mod && e.altKey) {
+        // e.code: Ctrl+Alt is AltGr on many layouts, so e.key may be a different character.
+        if (e.code === 'KeyC') return handled(), void copyStyle()
+        if (e.code === 'KeyV') return handled(), void pasteStyle()
+        return
+      }
       if (mod) {
         if (lower === 'z' && !e.shiftKey) return handled(), ed.undo()
         if ((lower === 'z' && e.shiftKey) || lower === 'y') return handled(), ed.redo()

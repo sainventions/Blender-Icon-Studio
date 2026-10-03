@@ -20,11 +20,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from .batch import BatchError, BatchService
 from .blender import BlenderBridge, BlenderUnavailable, Bridge, FakeBridge
 from .config import Settings, load_settings
 from .events import EventHub
 from .jobs import JobManager
-from .models import AnimateRequest, ExportRequest, Project, RenderRequest
+from .models import AnimateRequest, BatchRequest, ExportRequest, Project, RenderRequest, StyleRequest
 from .pipeline import SvgPipeline, SvgPipelineUnavailable
 from .presets import PresetStore
 from .projects import ProjectError, ProjectNotFound, ProjectStore
@@ -40,6 +41,7 @@ from .schemas import (
     SplitLayerBody,
     SwatchesBody,
 )
+from .style import LookNotFound, StyleError, extract_style, looks, resolve_style_request, restyle_project
 from .system import SystemMonitor
 from .util import PathOutsideBase, background
 
@@ -128,6 +130,7 @@ def create_app(
     presets = PresetStore(settings)
     renders = RenderService(settings, store, bridge, jobs, presets, opener=opener)
     samples = SampleLibrary(settings, pipeline)
+    batches = BatchService(settings, store, samples, renders, jobs, presets)
     monitor = SystemMonitor(settings, bridge, jobs, hub.publish, lambda: hub.subscriber_count > 0)
     bridge.on_status = monitor.push_soon
     jobs.on_queue_change.append(monitor.push_soon)
@@ -168,6 +171,7 @@ def create_app(
     app.state.presets = presets
     app.state.renders = renders
     app.state.samples = samples
+    app.state.batches = batches
     app.state.monitor = monitor
     app.state.svg = pipeline
 
@@ -199,6 +203,18 @@ def create_app(
     @app.exception_handler(SvgPipelineUnavailable)
     async def _su(_: Request, exc: SvgPipelineUnavailable):
         return JSONResponse({"detail": str(exc)}, status_code=503)
+
+    @app.exception_handler(LookNotFound)
+    async def _lnf(_: Request, exc: LookNotFound):
+        return JSONResponse({"detail": str(exc)}, status_code=404)
+
+    @app.exception_handler(StyleError)
+    async def _se(_: Request, exc: StyleError):
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+
+    @app.exception_handler(BatchError)
+    async def _be(_: Request, exc: BatchError):
+        return JSONResponse({"detail": str(exc)}, status_code=400)
 
     @app.exception_handler(BlenderUnavailable)
     async def _bu(_: Request, exc: BlenderUnavailable):
@@ -235,6 +251,10 @@ def create_app(
     @api.get("/presets")
     def get_presets() -> dict:
         return presets.with_swatches()
+
+    @api.get("/looks")
+    def get_looks() -> dict:
+        return looks(presets)
 
     @api.get("/samples")
     def list_samples() -> list:
@@ -322,6 +342,20 @@ def create_app(
     def move_elements(pid: str, body: MoveElementsBody) -> dict:
         return store.move_elements(pid, body.elementIds, body.toLayerId).model_dump(mode="json")
 
+    # ------------------------------------------------------------------------------------------ styles (PLAN §10)
+    @api.get("/projects/{pid}/style")
+    def get_style(pid: str, plateFill: bool | None = None, shape: bool = False) -> dict:
+        """Copy style. plateFill: None = only deliberate system/none plate fills; shape: include the plate shape."""
+        return extract_style(store.load(pid), plate_fill=plateFill, plate_shape=shape).model_dump(mode="json")
+
+    @api.post("/projects/{pid}/style")
+    def post_style(pid: str, body: StyleRequest | None = None) -> dict:
+        """Apply a look / pasted style / another project's style; saves (broadcasts "saved") and returns it."""
+        if not store.exists(pid):
+            raise ProjectNotFound(pid)
+        style = resolve_style_request(body or StyleRequest(), presets, store.load)
+        return restyle_project(store, pid, style).model_dump(mode="json")
+
     @api.get("/projects/{pid}/geometry")
     def get_geometry(pid: str) -> JSONResponse:
         bundle, _ = store.geometry(store.load(pid))
@@ -356,6 +390,10 @@ def create_app(
     @api.post("/projects/{pid}/blend")
     async def blend(pid: str, body: BlendBody | None = None) -> dict:
         return (await renders.submit_blend(pid, body or BlendBody())).model_dump(mode="json")
+
+    @api.post("/batch")
+    async def batch(body: BatchRequest) -> dict:
+        return (await batches.submit(body)).model_dump(mode="json")
 
     @api.get("/jobs")
     async def list_jobs(projectId: str | None = None, limit: int | None = Query(None, ge=1, le=1000)) -> list:
@@ -417,6 +455,7 @@ def create_app(
 
     # ------------------------------------------------------------------------------------------ static
     app.mount("/files/projects", StaticFiles(directory=settings.projects_dir, check_dir=False), name="files")
+    app.mount("/files/batches", StaticFiles(directory=settings.batches_dir, check_dir=False), name="batches")
     app.mount("/swatches", StaticFiles(directory=settings.swatches_dir, check_dir=False), name="swatches")
 
     dist = settings.web_dist

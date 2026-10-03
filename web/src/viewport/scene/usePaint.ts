@@ -55,7 +55,12 @@ export function usePaint(fill: Fill, textureUrl: string | null, fallbackHex: str
       const st = texStats
       const color = st ? new THREE.Color(...st.avg) : new THREE.Color().setStyle(fallbackHex)
       return {
-        binding: { map: tex.texture, color, lumRange: st ? [st.lumMin, st.lumMax] : [0, 1] },
+        binding: {
+          map: tex.texture,
+          color,
+          lumRange: st ? [st.lumMin, st.lumMax] : [0, 1],
+          alphaMax: st ? st.alphaMax : 1,
+        },
         opacity: 1,
         none: false,
         ready: true,

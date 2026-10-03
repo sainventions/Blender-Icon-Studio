@@ -4,9 +4,10 @@
 // lib/projectOps). Slider drags pass a `coalesce` key so a whole gesture becomes one undo step. Structural
 // operations (re-split / merge / split / move elements) run on the server, which returns the new Project.
 import { create } from 'zustand'
-import type { AppearanceId, GeometryBundle, Project, SplitStrategy } from '../types'
+import type { AppearanceId, GeometryBundle, Project, SplitStrategy, StyleRequest } from '../types'
 import { errorMessage, projectsApi } from '../api'
 import { removeLayers, reorderLayers, structuralSig, updateLayers } from '../lib/projectOps'
+import { sanitizeProject } from '../lib/looks'
 import { toast } from './toasts'
 import { useAppStore } from './app'
 
@@ -76,6 +77,9 @@ interface EditorState {
   mergeLayers: (ids?: string[]) => Promise<void>
   splitLayer: (id: string, mode: 'elements' | 'islands') => Promise<void>
   moveElements: (elementIds: string[], toLayerId: string | null) => Promise<void>
+  /** Apply a look / pasted style / another project's style on the server — ONE undo step (undo PUTs the
+   *  previous project back). Resolves true on success. */
+  applyStyle: (req: StyleRequest, label: string) => Promise<boolean>
 }
 
 const HISTORY_LIMIT = 200
@@ -114,7 +118,7 @@ const emptySelection: Selection = { layerIds: [], primary: null, elementIds: [] 
 async function saveDetached(snapshot: Project): Promise<void> {
   if (inflight) await inflight // never rejects (errors are handled inside flushSave)
   try {
-    await projectsApi.save(snapshot)
+    await projectsApi.save(sanitizeProject(snapshot))
     // The home screen may already have listed the project (name / updatedAt) from before this save.
     if (useAppStore.getState().projects.data) void useAppStore.getState().loadProjects()
   } catch (e) {
@@ -167,16 +171,21 @@ export const useEditor = create<EditorState>((set, get) => {
   }
 
   /** Run a server-side structural operation that returns the new project. */
-  const structural = async (label: string, op: (id: string) => Promise<Project>, after?: (p: Project) => Partial<EditorState>) => {
+  const structural = async (
+    label: string,
+    op: (id: string) => Promise<Project>,
+    after?: (p: Project) => Partial<EditorState>,
+    opts: { forceGeometry?: boolean } = {},
+  ): Promise<boolean> => {
     const s = get()
-    if (!s.project || s.busy) return
+    if (!s.project || s.busy) return false
     set({ busy: label })
     try {
       const ok = await get().flushSave()
       if (!ok) throw new Error('Could not save pending changes first.')
       const before = get().project!
-      const next = await op(before.id)
-      if (get().project?.id !== before.id) return
+      const next = sanitizeProject(await op(before.id))
+      if (get().project?.id !== before.id) return false
       // Keep the UI-only appearance the user is on (re-saved below if it differs from the server's copy).
       const merged: Project = { ...next, appearance: get().project!.appearance }
       const differs = merged.appearance !== next.appearance
@@ -194,9 +203,11 @@ export const useEditor = create<EditorState>((set, get) => {
       }))
       lastCommit = { key: null, at: 0 }
       if (differs) scheduleSave(50)
-      void get().refreshGeometry()
+      void get().refreshGeometry(opts.forceGeometry)
+      return true
     } catch (e) {
       toast.error(`${label} failed`, { description: errorMessage(e) })
+      return false
     } finally {
       set({ busy: null })
     }
@@ -247,7 +258,7 @@ export const useEditor = create<EditorState>((set, get) => {
         busy: null,
       })
       try {
-        const project = await projectsApi.get(id)
+        const project = sanitizeProject(await projectsApi.get(id))
         if (token !== openToken) return
         const top = project.layers[project.layers.length - 1]
         set({
@@ -369,7 +380,7 @@ export const useEditor = create<EditorState>((set, get) => {
         let failed = false
         inflight = (async () => {
           try {
-            await projectsApi.save(snapshot)
+            await projectsApi.save(sanitizeProject(snapshot))
             if (get().project?.id !== snapshot.id) return
             const cur = get()
             set({
@@ -534,11 +545,12 @@ export const useEditor = create<EditorState>((set, get) => {
     },
 
     // ---------------------------------------------------------------------------------- structural
-    resplit: (strategy) =>
-      structural(`Re-split (${strategy})`, (id) => projectsApi.split(id, strategy), (p) => {
+    resplit: async (strategy) => {
+      await structural(`Re-split (${strategy})`, (id) => projectsApi.split(id, strategy), (p) => {
         const top = p.layers[p.layers.length - 1]
         return { selection: top ? { layerIds: [top.id], primary: top.id, elementIds: [] } : emptySelection }
-      }),
+      })
+    },
 
     mergeLayers: async (ids) => {
       const s = get()
@@ -564,6 +576,8 @@ export const useEditor = create<EditorState>((set, get) => {
       })
     },
 
+    applyStyle: (req, label) => structural(label, (id) => projectsApi.applyStyle(id, req), undefined, { forceGeometry: true }),
+
     moveElements: async (elementIds, toLayerId) => {
       if (!elementIds.length) return
       const prevIds = new Set(get().project?.layers.map((l) => l.id) ?? [])
@@ -588,7 +602,7 @@ if (typeof window !== 'undefined') {
       const { id } = s.project
       const rev = s.rev
       void projectsApi
-        .save(s.project, { keepalive: true })
+        .save(sanitizeProject(s.project), { keepalive: true })
         .then(() => {
           // Still here (the user cancelled leaving): reflect the save.
           const cur = useEditor.getState()
