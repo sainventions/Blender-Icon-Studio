@@ -15,6 +15,7 @@ import {
 } from '../../lib/materials3d'
 import { useCached } from '../refCache'
 import { buildPlateGeometry, geometryCache, plateGeometryKey, plateParams } from '../geometry/layerGeometry'
+import { createWallpaperTexture, WALLPAPER_EXTENT } from '../textures/procedural'
 import type { ResolvedPaint } from './usePaint'
 
 interface Props {
@@ -39,13 +40,25 @@ export const Plate = memo(function Plate({ canvas, presets, paint, behind, rimDi
   useEffect(() => () => material.dispose(), [material])
 
   const spec = useMemo(() => describeMaterial(canvas.plate.material, presets), [canvas.plate.material, presets])
+  // Over a rendition wallpaper a glass plate uses the worker's backdrop-glass model (frosted pane, see FakeGlassBinding):
+  // the wallpaper as seen through the frost (blobs spread out), × glass colour, screened by the frost's scatter.
+  const frost = spec.transmission > 0 ? Math.round(spec.roughness * 100) / 100 : 0
+  const frosted = useMemo(
+    () => (behind.tone && behind.space === 'canvas' ? createWallpaperTexture(behind.tone, behind.extent ?? WALLPAPER_EXTENT, 256, frost) : null),
+    [behind.tone, behind.space, behind.extent, frost],
+  )
+  useEffect(() => () => frosted?.dispose(), [frosted])
+  const fake = useMemo<FakeGlassBinding>(
+    () => (behind.tone && frosted ? { ...behind, map: frosted, backdropGlass: true } : behind),
+    [behind, frosted],
+  )
 
   useLayoutEffect(() => {
     applyIconMaterial(material, spec, {
       paint: paint.binding,
       thickness: canvas.plate.thickness,
       // The plate is always the bottom-most surface: a glass plate is faked over the backdrop.
-      fake: behind,
+      fake,
       rimDir,
       opacity: paint.opacity,
       lit,
@@ -59,7 +72,7 @@ export const Plate = memo(function Plate({ canvas, presets, paint, behind, rimDi
     }
     if (meshRef.current) meshRef.current.renderOrder = routed ? BLENDED_RENDER_ORDER.plate : 0
     invalidate()
-  }, [material, spec, paint, behind, rimDir, lit, canvas.plate.thickness, invalidate])
+  }, [material, spec, paint, fake, rimDir, lit, canvas.plate.thickness, invalidate])
 
   if (!canvas.plate.visible || canvas.shape === 'none' || paint.none || !geometry) return null
   return (

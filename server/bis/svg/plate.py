@@ -4,18 +4,26 @@ The bottom-most element is the icon's plate when it is big (>= 45 % of the viewB
 (>= 90 % of) everything painted above it and looks like a plate (near-square bbox, IoU >= 0.85
 with a fitted squircle / rounded rect / circle / square - the parametric canvas plate replaces
 it). Its own stroke outline (fill + stroke plates) belongs to it. The plate is not a layer: it becomes ``canvas.plate`` (parametric shape, fill converted
-to canvas coordinates) and ``canvas.art`` maps the source plate exactly onto −1..1."""
+to canvas coordinates) and ``canvas.art`` maps the source plate exactly onto −1..1.
+
+Full-bleed art (no plate element, but the union of all art IS a plate shape - Earth's waves) is
+framed the same way: the fitted outline maps onto −1..1, the plate takes the art's rim colour and
+every element stays art. With a (detected or full-bleed) plate, extruded art is clipped to the
+fitted plate outline shrunk by PLATE_CLIP_INSET (:func:`plate_clip_path`)."""
 from __future__ import annotations
 
 import math
-from typing import Dict, Optional, Sequence
+from typing import Dict, List, Optional, Sequence
 
 import numpy as np
+import pathops
 import shapely
+import shapely.errors
 from picosvg.svg_transform import Affine2D
 from shapely.geometry import Polygon, box
 
-from bis.models import ArtTransform, Canvas, FillSystem, Plate
+from bis.models import ArtTransform, Canvas, FillSolid, FillSystem, Plate
+from .colors import to_hex
 from .common import ArtSpace, rnd
 from .elements import Elem, model_paint
 
@@ -25,6 +33,12 @@ MIN_PLATE_IOU = 0.85         # the canvas plate replaces the source shape: it mu
 PLATE_ONLY_MIN_IOU = 0.90    # a lone element counts as a plate only if it looks like one
 MAX_PLATE_ASPECT = 1.06      # the canvas plate is square (-1..1): wide pills / banners are art
 NO_PLATE_ART_SCALE = 0.78
+FULL_BLEED_MIN_IOU = 0.90    # no plate element, but the art's union IS a plate shape (edge-to-edge art)
+FULL_BLEED_MIN_SIZE = 0.80   # ... spanning >= this fraction of the longer viewBox side
+PLATE_CLIP_INSET = 0.004     # art units: extruded art is clipped to the plate outline shrunk by this
+                             # (~2 px at 1024: art flush with the plate edge shows no plate-coloured rim;
+                             # below ~0.003 the clip runs into the source plate's own outline)
+CLIP_WARN_FRACTION = 0.005   # warn when clipping removes more than this share of the foreground art
 
 
 def _superellipse(x0, y0, x1, y1, n: float = 5.0, samples: int = 360) -> Polygon:
@@ -52,6 +66,44 @@ def _iou(a, b) -> float:
     return float(a.intersection(b).area / u) if u > 0 else 0.0
 
 
+def _best_corner_radius(geom, bbox: Sequence[float], r0: float) -> float:
+    """Corner radius of the rounded rect that best matches `geom` (max IoU). The equal-area radius
+    `r0` is a good start but too round for 'continuous' (squircle-like) corners, which bulge
+    further into the corner than a circular arc of the same area: golden-section search on
+    [0.4 r0, 1.2 r0]."""
+    x0, y0, x1, y1 = bbox
+    rmax = min(x1 - x0, y1 - y0) / 2
+    if r0 <= 1e-9 or rmax <= 0:
+        return r0
+    # the corners decide: compare only the four corner squares (fast, and the IoU signal is not
+    # diluted by the identical interior)
+    s = min(rmax, 1.4 * r0)
+    corners = shapely.union_all([box(x0, y0, x0 + s, y0 + s), box(x1 - s, y0, x1, y0 + s),
+                                 box(x0, y1 - s, x0 + s, y1), box(x1 - s, y1 - s, x1, y1)])
+    g = geom.intersection(corners)
+
+    def score(r):
+        return _iou(g, _rounded(x0, y0, x1, y1, r).intersection(corners))
+
+    lo, hi = 0.4 * r0, min(1.2 * r0, rmax)
+    if hi <= lo:
+        return r0
+    phi = (math.sqrt(5) - 1) / 2
+    a, b = hi - phi * (hi - lo), lo + phi * (hi - lo)
+    fa, fb = score(a), score(b)
+    for _ in range(18):
+        if fa >= fb:
+            hi, b, fb = b, a, fa
+            a = hi - phi * (hi - lo)
+            fa = score(a)
+        else:
+            lo, a, fa = a, b, fb
+            b = lo + phi * (hi - lo)
+            fb = score(b)
+    r = (lo + hi) / 2
+    return r if score(r) >= score(r0) else r0
+
+
 def classify_shape(geom, bbox: Sequence[float]) -> dict:
     """Fit squircle / rounded rect / circle / square to a plate polygon (SVG units).
 
@@ -60,7 +112,7 @@ def classify_shape(geom, bbox: Sequence[float]) -> dict:
     w, h = x1 - x0, y1 - y0
     size = max(w, h)
     area = geom.area
-    r = math.sqrt(max(0.0, w * h - area) / (4 - math.pi))
+    r = _best_corner_radius(geom, bbox, math.sqrt(max(0.0, w * h - area) / (4 - math.pi)))
     cands = {
         "squircle": _superellipse(x0, y0, x1, y1),
         "rounded": _rounded(x0, y0, x1, y1, r),
@@ -108,11 +160,196 @@ def detect_plate(elems: Sequence[Elem], view_box, tol: float) -> Optional[dict]:
     return {"indices": idxs, "bboxSvg": [round(v, 4) for v in (x0, y0, x1, y1)], **info}
 
 
+def detect_full_bleed(elems: Sequence[Elem], view_box, tol: float) -> Optional[dict]:
+    """No plate element, but the UNION of all art is a plate shape (edge-to-edge artwork such as
+    Earth's waves filling a squircle). -> a plate record source like :func:`detect_plate` with
+    ``indices=[]`` (every element stays art), ``fullBleed`` and the plate ``fill`` colour: the
+    paint that covers most of the plate's rim, so no default white peeks out between the art and
+    the fitted plate edge."""
+    all_geoms = [e.geom(tol) for e in elems]
+    geoms = [g for g in all_geoms if not g.is_empty]
+    if not geoms:
+        return None
+    union = shapely.make_valid(shapely.union_all(geoms))
+    vb_area = view_box[2] * view_box[3]
+    if union.area < MIN_PLATE_AREA * vb_area:
+        return None
+    x0, y0, x1, y1 = union.bounds
+    w, h = x1 - x0, y1 - y0
+    if w <= 0 or h <= 0 or max(w, h) / min(w, h) > MAX_PLATE_ASPECT:
+        return None
+    if max(w, h) < FULL_BLEED_MIN_SIZE * max(view_box[2], view_box[3]):
+        return None
+    info = classify_shape(union, (x0, y0, x1, y1))
+    if info["iou"] < FULL_BLEED_MIN_IOU:
+        return None
+    return {"indices": [], "bboxSvg": [round(v, 4) for v in (x0, y0, x1, y1)], "fullBleed": True,
+            "fill": _rim_colour(elems, all_geoms, info["shape"], info["cornerRadius"], (x0, y0, x1, y1)),
+            **info}
+
+
+def _rim_colour(elems: Sequence[Elem], geoms: Sequence, shape: str, corner: float, bbox) -> str:
+    """Hex colour of the visible paint covering most of the plate's rim band."""
+    x0, y0, x1, y1 = bbox
+    size = max(x1 - x0, y1 - y0)
+    outline = Polygon(_outline_points(shape, corner, ((x0 + x1) / 2, (y0 + y1) / 2), size / 2, 0.0, 128))
+    band = outline.difference(outline.buffer(-0.04 * size))
+    above = None
+    best: Dict[str, float] = {}
+    for e, g in reversed(list(zip(elems, geoms))):   # top-most first: visible part = g - (union above)
+        if g.is_empty:
+            continue
+        try:
+            vis = g if above is None else g.difference(above)
+            a = vis.intersection(band).area
+        except shapely.errors.GEOSException:
+            a = 0.0
+        if a > 0 and e.total_opacity >= 0.5:
+            key = e.paint.get("hex") or to_hex(e.rgb)
+            best[key] = best.get(key, 0.0) + a
+        if e.opaque:
+            above = g if above is None else shapely.union(above, g)
+    if not best:
+        return elems[0].paint.get("hex") or "#ffffff"
+    return max(best, key=lambda k: best[k])
+
+
+def _outline_points(shape: str, corner: float, center, half: float, inset: float, n: int = 96) -> List[tuple]:
+    """Polygon of the canvas plate shape (PLAN §2 formulas) centred at `center` with half size
+    `half`, shrunk by `inset` (exact for square / rounded / circle, by scaling for the squircle)."""
+    cx, cy = center
+    h = max(1e-9, half - inset)
+    if shape == "circle":
+        t = np.linspace(0, 2 * math.pi, n, endpoint=False)
+        return list(zip(cx + h * np.cos(t), cy + h * np.sin(t)))
+    if shape == "squircle":
+        t = np.linspace(0, 2 * math.pi, n, endpoint=False)
+        c, s = np.cos(t), np.sin(t)
+        return list(zip(cx + h * np.sign(c) * np.abs(c) ** 0.4, cy + h * np.sign(s) * np.abs(s) ** 0.4))
+    if shape == "rounded":
+        r = max(0.0, min(1.0, corner * 2) * half - inset)
+        pts = []
+        for ax, ay, a0 in ((1, 1, 0), (-1, 1, 90), (-1, -1, 180), (1, -1, 270)):
+            ccx, ccy = cx + ax * (h - r), cy + ay * (h - r)
+            for k in range(n // 4 + 1):
+                a = math.radians(a0 + 90 * k / (n // 4))
+                pts.append((ccx + r * math.cos(a), ccy + r * math.sin(a)))
+        return pts
+    return [(cx + h, cy + h), (cx - h, cy + h), (cx - h, cy - h), (cx + h, cy - h)]
+
+
+def _outline_cubics(shape: str, corner: float, center, half: float, inset: float) -> List[tuple]:
+    """Closed chain of cubic segments ((p0, c1, c2, p1), ...) of the plate outline (art space)."""
+    cx, cy = center
+    h = max(1e-9, half - inset)
+    k = 0.5522847498
+
+    def line(p, q):
+        return (p, (p[0] + (q[0] - p[0]) / 3, p[1] + (q[1] - p[1]) / 3),
+                (p[0] + 2 * (q[0] - p[0]) / 3, p[1] + 2 * (q[1] - p[1]) / 3), q)
+
+    def arc(ccx, ccy, r, a0):   # quarter arc a0 -> a0 + 90 (degrees, ccw)
+        a, b = math.radians(a0), math.radians(a0 + 90)
+        p0 = (ccx + r * math.cos(a), ccy + r * math.sin(a))
+        p1 = (ccx + r * math.cos(b), ccy + r * math.sin(b))
+        c1 = (p0[0] - k * r * math.sin(a), p0[1] + k * r * math.cos(a))
+        c2 = (p1[0] + k * r * math.sin(b), p1[1] - k * r * math.cos(b))
+        return (p0, c1, c2, p1)
+
+    if shape == "circle":
+        return [arc(cx, cy, h, a0) for a0 in (0, 90, 180, 270)]
+    if shape == "squircle":
+        pts = np.asarray(_outline_points("squircle", corner, center, half, inset, 96))
+        n = len(pts)
+        out = []
+        for i in range(n):
+            p0, p1 = pts[i], pts[(i + 1) % n]
+            c1 = p0 + (p1 - pts[i - 1]) / 6.0
+            c2 = p1 - (pts[(i + 2) % n] - p0) / 6.0
+            out.append((tuple(p0), tuple(c1), tuple(c2), tuple(p1)))
+        return out
+    r = max(0.0, min(1.0, corner * 2) * half - inset) if shape == "rounded" else 0.0
+    out = []
+    corners = ((1, 1, 0), (-1, 1, 90), (-1, -1, 180), (1, -1, 270))
+    for i, (ax, ay, a0) in enumerate(corners):
+        ccx, ccy = cx + ax * (h - r), cy + ay * (h - r)
+        if r > 1e-9:
+            out.append(arc(ccx, ccy, r, a0))
+        nx, ny, na = corners[(i + 1) % 4]
+        end = (ccx + r * math.cos(math.radians(a0 + 90)), ccy + r * math.sin(math.radians(a0 + 90)))
+        ncx, ncy = cx + nx * (h - r), cy + ny * (h - r)
+        start = (ncx + r * math.cos(math.radians(na)), ncy + r * math.sin(math.radians(na)))
+        if math.dist(end, start) > 1e-12:
+            out.append(line(end, start))
+    return out
+
+
+def plate_clip_path(store) -> Optional[pathops.Path]:
+    """The detected (or full-bleed) plate outline, shrunk by PLATE_CLIP_INSET art units, as an
+    exact cubic pathops path in SVG space - extruded art is clipped to it. None without a plate.
+    Memoised on the store object."""
+    plate = getattr(store, "plate", None)
+    if not plate or plate.get("shape") in (None, "none"):
+        return None
+    cached = getattr(store, "_plate_clip", None)
+    key = (tuple(plate.get("bbox") or ()), plate.get("shape"), plate.get("cornerRadius"), PLATE_CLIP_INSET)
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    x0, y0, x1, y1 = plate["bbox"]
+    half = max(x1 - x0, y1 - y0) / 2
+    segs = _outline_cubics(plate["shape"], float(plate.get("cornerRadius") or 0.225),
+                           ((x0 + x1) / 2, (y0 + y1) / 2), half, PLATE_CLIP_INSET)
+    inv = store.art.inverse
+
+    def X(p):
+        return (inv.a * p[0] + inv.c * p[1] + inv.e, inv.b * p[0] + inv.d * p[1] + inv.f)
+
+    path = pathops.Path()
+    path.moveTo(*X(segs[0][0]))
+    for _p0, c1, c2, p1 in segs:
+        path.cubicTo(*X(c1), *X(c2), *X(p1))
+    path.close()
+    try:
+        path.simplify(fix_winding=True)
+    except pathops.PathOpsError:
+        pass
+    try:
+        store._plate_clip = (key, path)
+    except AttributeError:
+        pass
+    return path
+
+
+def clipped_fraction(elems: Sequence[Elem], plate: dict, art: ArtSpace, tol: float) -> float:
+    """Share of the foreground art's area that reaches past the plate outline itself (what the 3D
+    clip removes beyond its thin PLATE_CLIP_INSET band - art merely flush with the edge, like
+    Classroom's frame, does not count)."""
+    ids = set(plate.get("elementIds") or ())
+    geoms = [e.geom(tol) for e in elems if e.id not in ids and not e.geom(tol).is_empty]
+    if not geoms:
+        return 0.0
+    x0, y0, x1, y1 = plate["bbox"]
+    half = max(x1 - x0, y1 - y0) / 2
+    pts = _outline_points(plate["shape"], float(plate.get("cornerRadius") or 0.225),
+                          ((x0 + x1) / 2, (y0 + y1) / 2), half, 0.0, 192)
+    inv = art.inverse
+    outline = Polygon([(inv.a * x + inv.c * y + inv.e, inv.b * x + inv.d * y + inv.f) for x, y in pts])
+    try:
+        u = shapely.union_all(geoms)
+        return float(u.difference(outline).area / u.area) if u.area > 0 else 0.0
+    except shapely.errors.GEOSException:
+        return 0.0
+
+
 def plate_record(det: dict, elems: Sequence[Elem], art: ArtSpace) -> dict:
     """Store record for a detected plate (ids are assigned by then)."""
-    return {"elementIds": [elems[i].id for i in det["indices"]], "bboxSvg": det["bboxSvg"],
-            "bbox": [rnd(v, 6) for v in art.bbox(det["bboxSvg"])], "shape": det["shape"],
-            "cornerRadius": det["cornerRadius"], "iou": det["iou"], "scores": det["scores"]}
+    rec = {"elementIds": [elems[i].id for i in det["indices"]], "bboxSvg": det["bboxSvg"],
+           "bbox": [rnd(v, 6) for v in art.bbox(det["bboxSvg"])], "shape": det["shape"],
+           "cornerRadius": det["cornerRadius"], "iou": det["iou"], "scores": det["scores"]}
+    if det.get("fullBleed"):
+        rec["fullBleed"] = True
+        rec["fill"] = det.get("fill")
+    return rec
 
 
 def art_transform_for(plate: Optional[dict]) -> ArtTransform:
@@ -136,7 +373,9 @@ def make_canvas(plate: Optional[dict], elems_by_id: Dict[str, Elem], art: ArtSpa
     members = [elems_by_id[i] for i in plate["elementIds"] if i in elems_by_id]
     src = next((m for m in members if m.role == "fill"), members[0] if members else None)
     post = Affine2D(at.scale, 0.0, 0.0, at.scale, at.x, at.y)  # art -> canvas
-    if src is None:
+    if plate.get("fullBleed") and plate.get("fill"):
+        fill = FillSolid(color=plate["fill"])   # full-bleed art: the plate only shows at the rim
+    elif src is None:
         fill = FillSystem(type="system-light")
     else:
         fill = model_paint(src.paint, art, src.total_opacity, post=post)

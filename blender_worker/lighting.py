@@ -18,6 +18,13 @@ from .nodes import Graph, TopologyMismatch, auto_layout
 from .util import clamp, hex_to_linear, lerp, light_dir
 
 K_BASE = 350.0            # W, key energy at distance 6 (tuned for a ±1 icon)
+# Exposure calibration (QA round 2, #12): with the uncalibrated rig a white diffuse face facing the camera read
+# ~1.28 × its albedo, so under Khronos PBR Neutral every bright brand colour was pushed into the highlight
+# compression (desaturated toward white: Brave #fc3a00 rendered #f75845, mean plate ΔE76 6.9). The key + fill
+# (diffuse) energy and the world (diffuse wash + coat sheen on every face) are scaled so a face-on satin plate
+# reads ≈ its SVG colour; the grazing rim strips (edge highlights on glass) keep their energy.
+DIFFUSE_CAL = 0.85
+WORLD_CAL = 0.65
 RIG = (
     # name, angle offset, elevation (None = lighting.elevation), distance, shape, size, size_y, energy factor
     ("BIS Key", 0.0, None, 6.0, "DISK", 4.0, 4.0, 1.0),
@@ -79,12 +86,12 @@ def update_lights(scene: bpy.types.Scene, collection: bpy.types.Collection, rig:
         if name == "BIS Key":
             ld.size = size * soft
             ld.size_y = size * soft
-            energy = K_BASE * rig["key"]
+            energy = K_BASE * DIFFUSE_CAL * rig["key"]
             col = lerp((1.0, 1.0, 1.0), WARM, rig["warmth"])
         elif name == "BIS Fill":
             ld.size = size
             ld.size_y = size_y
-            energy = K_BASE * efac * rig["fill"]
+            energy = K_BASE * DIFFUSE_CAL * efac * rig["fill"]
             col = lerp((1.0, 1.0, 1.0), COOL, rig["warmth"])
         else:
             ld.size = size
@@ -129,7 +136,7 @@ def _world_graph(g: Graph, rig: dict, backdrop: tuple, strength_scale: float = 1
     col = g.mix_rgb(1.0, col, tint, blend="MULTIPLY")
     bg = g.node("ShaderNodeBackground")
     g.set(bg.inputs["Color"], col)
-    g.set(bg.inputs["Strength"], 0.6 * rig["environment"] * strength_scale)
+    g.set(bg.inputs["Strength"], 0.6 * WORLD_CAL * rig["environment"] * strength_scale)
     cam = g.node("ShaderNodeBackground")
     g.set(cam.inputs["Color"], backdrop)
     g.set(cam.inputs["Strength"], 1.0)

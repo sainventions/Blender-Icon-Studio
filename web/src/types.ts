@@ -91,7 +91,7 @@ export interface RenderSettings {
   backdrop: 'transparent' | 'color' | 'wallpaper'; backdropColor: ColorHex
   autoPreview: boolean
 }
-export interface SourceInfo { filename: string; viewBox: [number, number, number, number]; warnings: string[]; plateDetected: boolean }
+export interface SourceInfo { filename: string; viewBox: [number, number, number, number]; warnings: string[]; plateDetected: boolean; fullBleed?: boolean }
 export type SplitStrategy = 'smart' | 'group' | 'color' | 'element' | 'single'
 
 export interface Project {

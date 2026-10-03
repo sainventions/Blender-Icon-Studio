@@ -142,6 +142,84 @@ def mask_to_path(mask: np.ndarray, matrix: Affine2D, eps_px: float = 0.7,
     return grown.transform(matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f)
 
 
+TRACE_TARGET_PX = 2048   # soft masks are upsampled (integer factor <= 4) towards this size before tracing
+TRACE_SIGMA_PX = 1.0     # contour smoothing (source pixels): removes the staircase / pixel wobble
+TRACE_EPS_PX = 0.4       # polygon simplification tolerance (source pixels)
+TRACE_MIN_HOLE_FRAC = 0.01   # holes narrower than ~1 % of the traced image's longer side are filled
+
+
+def _smooth_closed(pts: np.ndarray, sigma: float) -> np.ndarray:
+    """Circular Gaussian smoothing of a closed polyline's coordinates (sigma in points)."""
+    n = len(pts)
+    if sigma <= 0 or n < 8:
+        return pts
+    r = int(min(n // 2 - 1, max(1, round(3 * sigma))))
+    k = np.exp(-0.5 * (np.arange(-r, r + 1) / sigma) ** 2)
+    k /= k.sum()
+    ext = np.concatenate([pts[-r:], pts, pts[:r]])
+    return np.stack([np.convolve(ext[:, d], k, mode="valid") for d in range(2)], axis=1)
+
+
+def soft_to_path(soft: np.ndarray, thr: float, matrix: Affine2D, *, target_px: int = TRACE_TARGET_PX,
+                 sigma_px: float = TRACE_SIGMA_PX, eps_px: float = TRACE_EPS_PX,
+                 min_area_px: float = 6.0, min_hole_frac: float = TRACE_MIN_HOLE_FRAC) -> pathops.Path:
+    """Soft mask (alpha / foreground-ness, float 0..1) -> simplified pathops.Path of its `thr`
+    iso-contour (outer contours + holes, RETR_CCOMP), mapped by `matrix` (pixel space, pixel k
+    spanning [k, k+1] -> target space).
+
+    Sub-pixel accurate: the anti-aliased edge encodes where the true outline runs, so the mask is
+    upsampled (bicubic) before thresholding and the contour is Gaussian-smoothed along its length
+    - no pixel staircase, which the round bevel would otherwise turn into a crinkled rim.
+
+    Holes smaller than (`min_hole_frac` x the image's longer side)² are filled: pinholes where a
+    faint / dithered alpha dips under the threshold (Find Device's 20 % radar sweep had ~40) are
+    noise, far narrower than any bevel, and a cluster of them collapses the layer's safe bevel
+    radius."""
+    from .paths import path_from_shapely, shapely_from_path
+
+    s = np.clip(np.asarray(soft, dtype=np.float32), 0.0, 1.0)
+    if not (s >= thr).any():
+        return pathops.Path()
+    h, w = s.shape
+    f = int(max(1, min(4, target_px // max(h, w))))
+    if f > 1:
+        s = cv2.resize(s, (w * f, h * f), interpolation=cv2.INTER_CUBIC)
+    m = (s >= thr).astype(np.uint8)
+    contours, hier = cv2.findContours(m, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
+    if hier is not None and min_hole_frac > 0:
+        min_hole = max(min_area_px, (min_hole_frac * max(h, w)) ** 2) * f * f
+        small = [c for c, hh in zip(contours, hier[0]) if hh[3] >= 0 and abs(cv2.contourArea(c)) < min_hole]
+        if small:   # fill them in the mask (an island inside a filled hole merges, it never turns into a hole)
+            cv2.drawContours(m, small, -1, 1, thickness=cv2.FILLED)
+            contours, _hier = cv2.findContours(m, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
+    path = pathops.Path()
+    path.fillType = pathops.FillType.EVEN_ODD
+    n_added = 0
+    for cnt in contours:
+        if len(cnt) < 3 or abs(cv2.contourArea(cnt)) < min_area_px * f * f:
+            continue
+        pts = _smooth_closed(cnt[:, 0, :].astype(np.float64), sigma_px * f)
+        approx = cv2.approxPolyDP(pts.astype(np.float32).reshape(-1, 1, 2), eps_px * f, True)[:, 0, :]
+        if len(approx) < 3:
+            continue
+        approx = (approx.astype(np.float64) + 0.5) / f   # up-sampled pixel centre -> source pixel edges
+        path.moveTo(float(approx[0, 0]), float(approx[0, 1]))
+        for x, y in approx[1:]:
+            path.lineTo(float(x), float(y))
+        path.close()
+        n_added += 1
+    if not n_added:
+        return pathops.Path()
+    try:
+        path.simplify(fix_winding=True)
+    except pathops.PathOpsError:
+        pass
+    # the contour runs through the centres of the boundary pixels: grow by half an (up-sampled) pixel
+    geom = shapely_from_path(path, 0.25 / f).buffer(0.5 / f, join_style="mitre", mitre_limit=2.0)
+    grown = path_from_shapely(geom)
+    return grown.transform(matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f)
+
+
 def path_to_mask(path: pathops.Path, inv_matrix: Affine2D, shape: Tuple[int, int], tol_px: float = 0.5) -> np.ndarray:
     """Rasterise a (target-space) pathops path into a pixel mask (inverse of mask_to_path)."""
     from .paths import flatten_contours
@@ -207,7 +285,7 @@ def analyse_image(data: bytes, matrix: Sequence[float]) -> Tuple[ImageAnalysis, 
     mask = (smooth >= thr).astype(np.uint8)
     m = Affine2D(*matrix)
     pix = compose(Affine2D(w / alpha_s.shape[1], 0, 0, h / alpha_s.shape[0], 0, 0), m)
-    sil = mask_to_path(mask, pix)
+    sil = soft_to_path(smooth.astype(np.float32) / 255.0, thr / 255.0, pix)
     inside = alpha_s[mask > 0]
     mean_alpha = float(inside.mean()) / 255.0 if inside.size else 0.0
     opaque = bool(inside.size) and float((inside >= 250).mean()) >= 0.97
@@ -267,7 +345,15 @@ def matte_background(rgba: np.ndarray, matrix: Sequence[float], region: pathops.
     if frac < 0.01 or frac > 0.9:
         return None
     bg_rgb = np.median(rgb[band].astype(np.float64), axis=0) / 255.0
-    return (float(bg_rgb[0]), float(bg_rgb[1]), float(bg_rgb[2])), mask_to_path(fg, pix)
+    # trace the colour distance itself (soft: 0.5 at `min_delta_e`): anti-aliased edge pixels are
+    # blends of foreground and background, so its iso-line sits at the true sub-pixel outline.
+    # Only the kept components (no specks) and their 2 px neighbourhood count; holes (the U of a
+    # house, the gaps between wi-fi arcs) stay holes (RETR_CCOMP).
+    soft = np.clip((de - 0.5 * min_delta_e) / min_delta_e, 0.0, 1.0).astype(np.float32)
+    near = cv2.dilate(fg, np.ones((5, 5), np.uint8)) > 0
+    soft[~(near & (inner > 0))] = 0.0
+    soft[cv2.erode(fg, np.ones((3, 3), np.uint8), iterations=2) > 0] = 1.0   # interior: as closed above
+    return (float(bg_rgb[0]), float(bg_rgb[1]), float(bg_rgb[2])), soft_to_path(soft, 0.5, pix)
 
 
 # ----------------------------------------------------------------------------------------------

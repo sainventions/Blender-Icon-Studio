@@ -253,6 +253,7 @@ class SourceInfo(_Model):
     viewBox: tuple[float, float, float, float]
     warnings: list[str] = []
     plateDetected: bool = False
+    fullBleed: bool = False              # art itself forms the icon shape (no separate plate in the source)
 
 
 SplitStrategy = Literal["smart", "group", "color", "element", "single"]

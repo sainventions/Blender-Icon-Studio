@@ -3,6 +3,9 @@
 import { useEffect, useReducer } from 'react'
 import * as THREE from 'three'
 import { RefCache, useCached } from '../refCache'
+import { softAlphaFraction } from './softAlpha'
+
+export { HALO_SOFT_MIN } from './softAlpha'
 
 export interface PaintStats {
   /** Linear-light luminance range over opaque pixels (mono/tint renditions stretch it to MONO_FLOOR..1). */
@@ -19,7 +22,19 @@ export interface TextureAsset {
   ready: boolean
   failed: boolean
   stats: PaintStats | null
+  /** softAlphaFraction of the loaded image (computed on first use, see assetSoftAlpha). */
+  softAlpha?: number
   listeners: Set<() => void>
+}
+
+/** softAlphaFraction of a loaded asset's image, computed once (0 while loading / failed). */
+export function assetSoftAlpha(asset: TextureAsset | null): number {
+  if (!asset?.ready) return 0
+  if (asset.softAlpha === undefined) {
+    const im = asset.texture.image as (CanvasImageSource & { width: number; height: number }) | null
+    asset.softAlpha = im ? softAlphaFraction(im) : 0
+  }
+  return asset.softAlpha
 }
 
 const loader = new THREE.TextureLoader()

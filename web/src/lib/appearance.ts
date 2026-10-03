@@ -16,6 +16,8 @@ export const INTENT_KEYS = {
   tintColor: '__tintColor',
   tintStrength: '__tintStrength',
   emissive: '__emissive',
+  /** Clear-light: share of the Liquid Glass transmission removed toward the outline (worker env `edgeDark`). */
+  edgeDark: '__edgeDark',
 } as const
 
 export interface MaterialIntent {
@@ -24,7 +26,23 @@ export interface MaterialIntent {
   tintStrength: number
   /** Extra self-illumination of the paint colour (0..1), e.g. tinted-dark glyphs. */
   emissive: number
+  /** Liquid Glass edge darkening (0 = off; clear-light rendition). */
+  edgeDark: number
 }
+
+/**
+ * Clear renditions (worker appearance.CLEAR_*): glyph glass tint (mono luminance, tint 0.5 → 94 % of the grey), the
+ * inner glow per mode, clear-light's rim darkening, drop-shadow floor and faintly smoked pale plate.
+ */
+export const CLEAR = {
+  tint: 0.5,
+  edgeDark: 0.8,
+  lightShadow: 0.8,
+  glowLight: 0.1,
+  glowDark: 0.3,
+  lightPlate: '#c9ccd6',
+  lightPlateTint: 0.4,
+} as const
 
 const DEFAULT_TINT = { color: '#3b82f6', strength: 0.8 }
 
@@ -37,7 +55,8 @@ export function readMaterialIntent(spec: MaterialSpec | null | undefined): Mater
   const tintStrength =
     typeof p[INTENT_KEYS.tintStrength] === 'number' ? (p[INTENT_KEYS.tintStrength] as number) : DEFAULT_TINT.strength
   const emissive = typeof p[INTENT_KEYS.emissive] === 'number' ? (p[INTENT_KEYS.emissive] as number) : 0
-  return { intent, tintColor, tintStrength, emissive }
+  const edgeDark = typeof p[INTENT_KEYS.edgeDark] === 'number' ? (p[INTENT_KEYS.edgeDark] as number) : 0
+  return { intent, tintColor, tintStrength, emissive, edgeDark }
 }
 
 export function isIntentParam(key: string): boolean {
@@ -205,10 +224,37 @@ export function resolveAppearance(project: Project, appearance: AppearanceId): P
   const plate = p.canvas.plate
 
   if (id === 'clear-light' || id === 'clear-dark') {
-    // Clear glass glyphs: frost follows the mono luminance (brightest art → white), plate = clear frosted pane.
-    glassLayers(p, { tint: 0, frost: 0.3, translucency: 0.35, rim: 1, specular: 'auto', [INTENT_KEYS.intent]: 'mono' }, true)
-    plate.material = { preset: 'frosted_glass', params: { tint: 0, frost: 0.42, grain: 0.04 } }
-    plate.fill = { type: 'solid', color: '#ffffff', opacity: 1 }
+    // Clear glass glyphs tinted by the mono luminance (dark parts stay dark smoked glass, brightest → white) whose
+    // frost follows it too. clear-light: a faintly smoked pale plate, a darker lensed rim (edge darkening), a deeper
+    // drop shadow and a low inner glow so the white glyph reads; clear-dark: a white frosted pane, moderate glow.
+    const dark = id === 'clear-dark'
+    glassLayers(
+      p,
+      {
+        tint: CLEAR.tint,
+        frost: 0.3,
+        translucency: 0.35,
+        rim: 1,
+        specular: 'auto',
+        glow: dark ? CLEAR.glowDark : CLEAR.glowLight,
+        [INTENT_KEYS.intent]: 'mono',
+        ...(dark ? {} : { [INTENT_KEYS.edgeDark]: CLEAR.edgeDark }),
+      },
+      true,
+    )
+    if (!dark) {
+      p.layers = p.layers.map(
+        (l): Layer =>
+          l.visible
+            ? { ...l, shadow: { kind: 'neutral', opacity: Math.max(CLEAR.lightShadow, Number(l.shadow?.opacity ?? 0.5) || 0) } }
+            : l,
+      )
+      plate.material = { preset: 'frosted_glass', params: { tint: CLEAR.lightPlateTint, frost: 0.42, grain: 0.04 } }
+      plate.fill = { type: 'solid', color: CLEAR.lightPlate, opacity: 1 }
+    } else {
+      plate.material = { preset: 'frosted_glass', params: { tint: 0, frost: 0.42, grain: 0.04 } }
+      plate.fill = { type: 'solid', color: '#ffffff', opacity: 1 }
+    }
     return p
   }
 

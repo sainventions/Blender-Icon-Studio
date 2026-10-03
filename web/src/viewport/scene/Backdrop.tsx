@@ -31,6 +31,22 @@ export function backdropKey(spec: BackdropSpec): string {
   return spec.kind === 'color' ? `color:${spec.color}` : spec.kind === 'wallpaper' ? `wall:${spec.tone}` : 'checker'
 }
 
+function wallpaperBehind(texture: THREE.Texture, tone: 'light' | 'dark'): FakeGlassBinding {
+  const color = new THREE.Color(tone === 'light' ? '#e9eafa' : '#0a1024')
+  return { map: texture, color, space: 'canvas', extent: WALLPAPER_EXTENT, tone }
+}
+
+/**
+ * The rendition wallpaper a glass plate shows through itself when the backdrop is an explicit colour: the worker keeps
+ * its (camera-invisible) wallpaper plane under the plate in the clear / tinted renditions whatever the backdrop, so only
+ * the background outside the plate takes the colour. Null when `tone` is null.
+ */
+export function useWallpaperBehind(tone: 'light' | 'dark' | null): FakeGlassBinding | null {
+  const binding = useMemo(() => (tone ? wallpaperBehind(createWallpaperTexture(tone), tone) : null), [tone])
+  useEffect(() => () => binding?.map?.dispose(), [binding])
+  return binding
+}
+
 /** Creates (and owns) the backdrop texture for `spec`. */
 export function useBackdropBinding(spec: BackdropSpec): BackdropBinding {
   const key = backdropKey(spec)
@@ -42,7 +58,7 @@ export function useBackdropBinding(spec: BackdropSpec): BackdropBinding {
     if (spec.kind === 'wallpaper') {
       const color = new THREE.Color(spec.tone === 'light' ? '#e9eafa' : '#0a1024')
       const texture = createWallpaperTexture(spec.tone)
-      return { spec, texture, color, behind: { map: texture, color, space: 'canvas', extent: WALLPAPER_EXTENT } }
+      return { spec, texture, color, behind: wallpaperBehind(texture, spec.tone) }
     }
     const color = new THREE.Color(spec.color)
     return { spec, texture: null, color, behind: { map: null, color, space: 'screen' } }

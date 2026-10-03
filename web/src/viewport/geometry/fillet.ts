@@ -1,9 +1,15 @@
-// Spline hygiene + corner fillets — a port of blender_worker/geometry.py (sanitize, max_turn_deg, fillet_corners) so
-// the three.js pill bodies get the same silhouettes as Blender's curve route (PLAN D3):
+// Spline hygiene + corner fillets — a port of blender_worker/geometry.py (sanitize, merge_collinear, max_turn_deg,
+// fillet_corners) so the three.js pill bodies get the same silhouettes as Blender's curve route (PLAN D3):
+//   · region / silhouette splines are fills: an open spline (`closed: false`, an SVG subpath without 'Z') is closed
+//     with a straight segment, as SVG fills it (the worker used to sweep it as a hollow tube);
 //   · coincident consecutive knots are merged (zero-length segments make the round bevel spike);
-//   · every corner sharper than 22° is rounded with a circular fillet of radius 1.2 × bevel (the inset outline of a
-//     tighter corner would loop); a fillet that does not fit in 45 % of the adjacent segments leaves the corner sharp;
-//   · pieces with a cusp (> 150° turn) are not filleted (the worker routes them to the GN mesh fallback).
+//   · runs of almost collinear straight segments are joined (boolean-op outlines split edges into short pieces, which
+//     limited the fillet of the corner between them);
+//   · every CONVEX corner sharper than 22° is rounded with a circular fillet of radius 1.2 × bevel (the inset outline
+//     of a tighter corner would loop); concave corners stay sharp (a fillet there grows the silhouette); a fillet that
+//     does not fit in 45 % of the adjacent segments leaves the corner sharp;
+//   · pieces with a cusp (> 150° turn) or an unfilletable convex corner sharper than 100° are not filleted (the worker
+//     routes them to the GN mesh fallback, whose angle-limited bevel keeps every corner sharp).
 // Unlike the worker, degenerate splines are kept as empty placeholders so `Spline.parent` indices stay valid.
 import type { Spline, SplinePoint, Vec2 } from '../../types'
 
@@ -11,6 +17,11 @@ export const MIN_BEVEL = 1e-4
 export const FILLET_MIN_TURN = 22
 export const FILLET_RATIO = 1.2
 export const CUSP_DEG = 150
+/** Worker ACUTE_GN_DEG: an unfilletable convex corner sharper than this sends the piece to the GN (unfilleted) route. */
+export const ACUTE_GN_DEG = 100
+/** Worker merge_collinear: max turn (degrees) at a removable joint, max distance of a removed knot from the chord. */
+export const STRAIGHT_TURN = 3
+export const STRAIGHT_TOL = 4e-4
 
 type Seg = [Vec2, Vec2, Vec2, Vec2]
 
@@ -43,7 +54,12 @@ function flatArea(pts: SplinePoint[], n = 6): number {
   return s / 2
 }
 
-/** Merge coincident consecutive knots; degenerate slivers become empty placeholders (index-preserving). */
+const third = (a: Vec2, b: Vec2): Vec2 => [a[0] + (b[0] - a[0]) / 3, a[1] + (b[1] - a[1]) / 3]
+
+/**
+ * Fills are always closed: an open spline gets a straight closing segment (its dangling end handles are meaningless).
+ * Coincident consecutive knots are merged; degenerate slivers become empty placeholders (index-preserving).
+ */
 export function sanitizeSplines(splines: Spline[], eps = 2.5e-4, minArea = 2e-7): Spline[] {
   const e2 = eps * eps
   return splines.map((s) => {
@@ -57,10 +73,107 @@ export function sanitizeSplines(splines: Spline[], eps = 2.5e-4, minArea = 2e-7)
     if (merged.length > 1 && d2(merged[0].co, merged[merged.length - 1].co) < e2) {
       const last = merged.pop()!
       merged[0] = { ...merged[0], hl: last.hl }
+    } else if (s.closed === false && merged.length > 1) {
+      const a = merged[merged.length - 1]
+      const b = merged[0]
+      merged[merged.length - 1] = { ...a, hr: third(a.co, b.co) }
+      merged[0] = { ...b, hl: third(b.co, a.co) }
     }
-    if (merged.length < 2 || Math.abs(flatArea(merged)) < minArea) return { ...s, points: [] }
-    return { ...s, points: merged }
+    if (merged.length < 2 || Math.abs(flatArea(merged)) < minArea) return { ...s, closed: true, points: [] }
+    return { ...s, closed: true, points: merged }
   })
+}
+
+function segStraight(p0: Vec2, c1: Vec2, c2: Vec2, p1: Vec2, tol: number): boolean {
+  const dx = p1[0] - p0[0]
+  const dy = p1[1] - p0[1]
+  const ln = Math.hypot(dx, dy)
+  if (ln < 1e-9) return true
+  for (const c of [c1, c2]) {
+    const rx = c[0] - p0[0]
+    const ry = c[1] - p0[1]
+    if (Math.abs(rx * dy - ry * dx) / ln > tol) return false
+    const t = (rx * dx + ry * dy) / ln
+    if (t < -tol || t > ln + tol) return false
+  }
+  return true
+}
+
+function ptLineDist(p: Vec2, a: Vec2, b: Vec2): number {
+  const dx = b[0] - a[0]
+  const dy = b[1] - a[1]
+  const l2 = dx * dx + dy * dy
+  if (l2 < 1e-24) return Math.hypot(p[0] - a[0], p[1] - a[1])
+  const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2))
+  return Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy)
+}
+
+/**
+ * Worker merge_collinear: remove knots joining two straight segments almost in line (turn < `maxTurn`) as long as
+ * every removed knot stays within `tol` of the merged chord. Curved segments are kept.
+ */
+export function mergeCollinear(splines: Spline[], maxTurn = STRAIGHT_TURN, tol = STRAIGHT_TOL): Spline[] {
+  const cosT = Math.cos((maxTurn * Math.PI) / 180)
+  return splines.map((s) => {
+    const pts = s.points
+    const m = pts.length
+    if (m < 4) return s
+    const straight = pts.map((p, i) => segStraight(p.co, p.hr, pts[(i + 1) % m].hl, pts[(i + 1) % m].co, tol))
+    const removable = (i: number): boolean => {
+      if (!(straight[(i - 1 + m) % m] && straight[i])) return false
+      const a = pts[(i - 1 + m) % m].co
+      const p = pts[i].co
+      const b = pts[(i + 1) % m].co
+      const u = unit([p[0] - a[0], p[1] - a[1]])
+      const v = unit([b[0] - p[0], b[1] - p[1]])
+      return u[0] * v[0] + u[1] * v[1] >= cosT
+    }
+    const rem = pts.map((_, i) => removable(i))
+    if (!rem.some(Boolean)) return s
+    let start = rem.findIndex((r) => !r)
+    if (start < 0) start = 0
+    const keep = [start]
+    let run: number[] = []
+    for (let k = 1; k <= m; k++) {
+      const i = (start + k) % m
+      if (k < m && rem[i]) {
+        const a = pts[keep[keep.length - 1]].co
+        const b = pts[(i + 1) % m].co
+        if ([...run, i].every((j) => ptLineDist(pts[j].co, a, b) <= tol)) {
+          run.push(i)
+          continue
+        }
+        keep.push(i) // deviation too large: keep this knot as a new anchor
+        run = []
+        continue
+      }
+      if (k < m) keep.push(i)
+      run = []
+    }
+    if (keep.length < 3 || keep.length === m) return s
+    const out: SplinePoint[] = keep.map((i) => ({ co: pts[i].co, hl: pts[i].hl, hr: pts[i].hr }))
+    const n = out.length
+    for (let k = 0; k < n; k++) {
+      const i = keep[k]
+      const j = keep[(k + 1) % n]
+      if ((((j - i) % m) + m) % m !== 1) {
+        // merged run: a straight chord with handles at thirds
+        const a = out[k]
+        const b = out[(k + 1) % n]
+        a.hr = third(a.co, b.co)
+        b.hl = third(b.co, a.co)
+      }
+    }
+    return { ...s, points: out }
+  })
+}
+
+/** Worker _material_left: the filled side is left of the travel direction (CCW outer or CW hole / odd depth). */
+function materialLeft(s: Spline): boolean {
+  const area = flatArea(s.points, 4)
+  if (area === 0) return true
+  const hole = !!s.hole || (Number(s.depth) || 0) % 2 === 1
+  return area > 0 !== hole
 }
 
 /** Largest tangent turn at any knot, degrees (180 = cusp). */
@@ -152,14 +265,24 @@ const isZero = (v: Vec2) => v[0] === 0 && v[1] === 0
 
 /**
  * Round every corner sharper than `minTurn` with an (approximately circular) fillet of `radius`. A fillet that does
- * not fit in 45 % of the adjacent segments is shrunk, or — when `minRadius` > 0 — skipped (the corner stays sharp).
+ * not fit in 45 % of the adjacent segments is shrunk, or — when `minRadius` > 0 — skipped (the corner stays sharp; its
+ * turn angle is appended to `skipped`). `convexOnly`: concave corners stay sharp (a fillet there adds material outside
+ * the outline, and the inset outline of a concave corner does not loop anyway).
  */
-export function filletCorners(splines: Spline[], radius: number, minTurn = FILLET_MIN_TURN, minRadius = 0): Spline[] {
+export function filletCorners(
+  splines: Spline[],
+  radius: number,
+  minTurn = FILLET_MIN_TURN,
+  minRadius = 0,
+  convexOnly = true,
+  skipped?: number[],
+): Spline[] {
   if (radius <= 1e-6) return splines
   return splines.map((s) => {
     const pts = s.points
     const m = pts.length
-    if (!s.closed || m < 2) return s
+    if (s.closed === false || m < 2) return s
+    const matLeft = convexOnly ? materialLeft(s) : true
     const segs: Seg[] = pts.map((p, i) => [p.co, p.hr, pts[(i + 1) % m].hl, pts[(i + 1) % m].co])
     const acc = segs.map((sg) => arclenTable(sg))
     const cut = new Array<number>(m).fill(0)
@@ -174,6 +297,7 @@ export function filletCorners(splines: Spline[], radius: number, minTurn = FILLE
       if (isZero(tout)) tout = unit([sout[2][0] - sout[0][0], sout[2][1] - sout[0][1]])
       if (isZero(tout)) tout = unit([sout[3][0] - sout[0][0], sout[3][1] - sout[0][1]])
       const ang = (Math.acos(Math.max(-1, Math.min(1, tin[0] * tout[0] + tin[1] * tout[1]))) * 180) / Math.PI
+      if (convexOnly && tin[0] * tout[1] - tin[1] * tout[0] > 0 !== matLeft) continue // concave corner
       if (ang > minTurn && ang < 175) {
         turn[i] = ang
         cut[i] = radius * Math.tan((ang * Math.PI) / 360)
@@ -184,7 +308,10 @@ export function filletCorners(splines: Spline[], radius: number, minTurn = FILLE
       if (!cut[i]) continue
       const lenIn = acc[(i - 1 + m) % m]
       const lim = 0.45 * Math.min(lenIn[lenIn.length - 1], acc[i][acc[i].length - 1])
-      if (cut[i] > lim) cut[i] = minRadius > 0 ? 0 : lim
+      if (cut[i] > lim) {
+        if (minRadius > 0) skipped?.push(turn[i])
+        cut[i] = minRadius > 0 ? 0 : lim
+      }
     }
 
     interface Knot {
@@ -233,9 +360,15 @@ export function filletCorners(splines: Spline[], radius: number, minTurn = FILLE
   })
 }
 
-/** The worker's curve-route preparation for one piece: sanitize, then fillet unless the piece has a cusp. */
+/**
+ * The worker's curve-route preparation for one piece (curve_data): sanitize (always-closed fills), join collinear runs,
+ * then fillet the convex corners — unless the piece has a cusp or an unfilletable acute convex corner (GN route: no
+ * fillets).
+ */
 export function prepareSplines(splines: Spline[], bevel: number): Spline[] {
-  const clean = sanitizeSplines(splines)
+  const clean = mergeCollinear(sanitizeSplines(splines))
   if (bevel <= MIN_BEVEL || maxTurnDeg(clean) > CUSP_DEG) return clean
-  return sanitizeSplines(filletCorners(clean, FILLET_RATIO * bevel, FILLET_MIN_TURN, bevel))
+  const skipped: number[] = []
+  const shaped = sanitizeSplines(filletCorners(clean, FILLET_RATIO * bevel, FILLET_MIN_TURN, bevel, true, skipped))
+  return skipped.some((t) => t > ACUTE_GN_DEG) ? clean : shaped
 }

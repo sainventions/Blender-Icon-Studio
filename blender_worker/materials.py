@@ -24,6 +24,7 @@ Spec keys::
                                      appearance.wallpaper_linear() — EEVEE shades frosted glass over it
     obj_scale float                  object scale (object coords -> world XY for the backdrop lookup)
     lit      float                   key-light level (1 = studio): scales Liquid Glass' self-lit fill
+    edge_dark float                  clear-light: transmission darkened toward the outline (0 = off)
 """
 from __future__ import annotations
 
@@ -70,11 +71,11 @@ def topology_key(spec: dict) -> str:
     pr = spec.get("params", {})
     paint = spec["paint"]
     flags = [
-        "v4", spec["preset"], paint["kind"], bool(paint.get("has_alpha")), bool(paint.get("uv")),
+        "v5", spec["preset"], paint["kind"], bool(paint.get("has_alpha")), bool(paint.get("uv")),
         paint["kind"] == "radial" and radial_focal(paint) is not None,
         spec.get("mono") is not None, bool(spec.get("mono") and spec["mono"].get("tint") is not None),
         bool(spec.get("clear")), bool(spec.get("alpha")), spec.get("role", "opaque"),
-        float(spec.get("inflate") or 0) > 0,
+        float(spec.get("inflate") or 0) > 0, float(spec.get("edge_dark") or 0) > 0,
         len((spec.get("eevee_backdrop") or {}).get("blobs") or []) if spec.get("eevee_backdrop") else -1,
     ]
     if spec["preset"] == "tinted_glass":
@@ -124,9 +125,15 @@ def _set_if(obj, attr: str, value) -> None:
 
 
 def _settings(mat: bpy.types.Material, spec: dict) -> None:
-    """EEVEE material settings (D7): dithered; raytraced refraction only for the 'refract' role."""
+    """EEVEE material settings (D7): dithered; raytraced refraction only for the 'refract' role. Pieces with
+    an opacity (element / layer opacity < 1, gradient or raster alpha) are alpha-BLENDED: dithered alpha over
+    16 TAA samples left heavy speckle on every translucent overlay (QA #9); both faces of the slab are blended
+    (``use_transparency_overlap``), as in Cycles."""
     role = spec.get("role", "opaque")
-    _set_if(mat, "surface_render_method", "DITHERED")
+    blended = bool(spec.get("alpha")) and role != "refract"
+    _set_if(mat, "surface_render_method", "BLENDED" if blended else "DITHERED")
+    if blended:
+        _set_if(mat, "use_transparency_overlap", True)
     _set_if(mat, "use_raytrace_refraction", role == "refract")
     _set_if(mat, "thickness_mode", "SLAB")
     _set_if(mat, "use_transparent_shadow", True)
@@ -335,13 +342,29 @@ def _mono(c: _Ctx, col):
     return out, st
 
 
-def _alpha(c: _Ctx, paint_alpha):
+def _alpha(c: _Ctx, paint_alpha, col=None):
+    """Per-SURFACE alpha of a translucent piece, so the piece composites like the SVG.
+
+    SVG blends opacity in gamma-encoded sRGB: a 33 % black overlay keeps 0.67 of the sRGB value beneath, i.e.
+    0.67^2.2 = 0.41 in linear light (a linear-light alpha of 0.33 only darkened to 0.67 — maroon lenses read
+    as plate red, QA #8); a white overlay brightens less than a linear blend. With paint perceptual luminance
+    L the equivalent linear-light alpha is ≈ 1 − (1 − a)^k, k = 2.2 − 1.5 L (exact for black, ≈ for white
+    over mid tones). A camera ray crosses two faces of the extruded slab, so each face gets
+    1 − (1 − a)^(k / 2)."""
     if not c.spec.get("alpha"):
         return None
+    g = c.g
     a = c.obj_info.outputs["Alpha"]
     if paint_alpha is not None:
-        a = c.g.math("MULTIPLY", a, paint_alpha)
-    return a
+        a = g.math("MULTIPLY", a, paint_alpha)
+    if col is None:
+        return a
+    bw = g.node("ShaderNodeRGBToBW")
+    g.set(bw.inputs[0], col)
+    lum = g.math("POWER", g.math("MAXIMUM", bw.outputs[0], 0.0), 1 / 2.2)
+    half_k = g.math("SUBTRACT", 1.1, g.math("MULTIPLY", g.math("MINIMUM", lum, 1.0), 0.75))
+    keep = g.math("POWER", g.math("SUBTRACT", 1.0, a, clamp=True), half_k)
+    return g.math("SUBTRACT", 1.0, keep, clamp=True)
 
 
 def _normal(c: _Ctx):
@@ -594,6 +617,14 @@ def _whiteness(c: _Ctx, col):
     return g.math("MULTIPLY", v, g.math("SUBTRACT", 1.0, hsv.outputs[1]), clamp=True)
 
 
+def _lightness(c: _Ctx, col):
+    """Perceptual lightness (0..1) of a paint colour socket: luminance^(1/2.2)."""
+    g = c.g
+    bw = g.node("ShaderNodeRGBToBW")
+    g.set(bw.inputs[0], col)
+    return g.math("MINIMUM", g.math("POWER", g.math("MAXIMUM", bw.outputs[0], 0.0), 1 / 2.2), 1.0)
+
+
 def _coat_only(c: _Ctx, normal, rim, coat_w):
     """Glossy clear coat + rim emission over a self-lit fill (a black, non-transmissive Principled adds
     only its dielectric reflections)."""
@@ -622,7 +653,11 @@ def b_liquid_glass(c: _Ctx, col, normal):
     mode = str(c.params.get("specular", "auto"))
     lit = float(c.spec.get("lit", 1.0))
     base_t, base_m = glass_colors(c, col, tint)
-    rim = _rim_lg(c, 5.0 * rim_amt, mode)
+    # paint lightness (perceptual): dark paints read as dark smoked glass — the light-locked rim is subdued
+    # and the inner glow carries no white (black axes / dark blades rendered as pale, bright-edged glass)
+    lum = _lightness(c, col)
+    rim = g.math("MULTIPLY", _rim_lg(c, 5.0 * rim_amt, mode),
+                 g.map_range(lum, 0.05, 0.7, 0.1, 1.0, interp="SMOOTHSTEP"))
     coat_w = 0.0 if mode == "off" else 1.0
     e, nrm = _edge(c)
     # fill share
@@ -630,14 +665,19 @@ def b_liquid_glass(c: _Ctx, col, normal):
     y = g.separate(c.tc.outputs["Object"]).outputs["Y"]
     v01 = g.map_range(y, bx[1], bx[3], 0.0, 1.0)
     white = g.math("POWER", _whiteness(c, col), 1.5)
-    f_col, f_white = clamp(1.2 - 0.9 * transl, 0.0, 1.0), clamp(1.35 - 0.6 * transl, 0.0, 0.94)
+    # white glyphs: a dense frosted-white body (QA #12: on saturated plates the lensed plate tinted them and
+    # they lost contrast); the vertical falloff is gentler for white
+    f_col, f_white = clamp(1.2 - 0.9 * transl, 0.0, 1.0), clamp(1.45 - 0.6 * transl, 0.0, 0.97)
     fill = g.math("MULTIPLY", g.map_range(white, 0.0, 1.0, f_col, f_white),
-                  g.map_range(v01, 0.0, 1.0, 0.8, 1.0))
+                  g.map_range(v01, 0.0, 1.0, g.math("ADD", 0.8, g.math("MULTIPLY", white, 0.12)), 1.0))
     if c.spec.get("clear") and c.spec.get("_lum") is not None:
         fill = g.math("MULTIPLY", fill, g.math("MULTIPLY", c.spec["_lum"], 1.15), clamp=True)
     fill = g.math("MULTIPLY", fill, g.map_range(e, 0.3, 0.8, 0.12, 1.0, interp="SMOOTHSTEP"), clamp=True)
-    coat_b = g.math("MULTIPLY", g.map_range(e, 0.08, 0.6, 0.0, 1.0), coat_w)
-    spec_b = g.map_range(e, 0.08, 0.6, 0.0, 0.4)
+    # dark smoked glass: the grazing coat / specular sheen of the bright studio world outlined every dark
+    # piece in white (DJI's near-black blades, Ti84's body) - subdued for dark paints
+    dk = g.map_range(lum, 0.0, 0.5, 0.35, 1.0)
+    coat_b = g.math("MULTIPLY", g.math("MULTIPLY", g.map_range(e, 0.08, 0.6, 0.0, 1.0), coat_w), dk)
+    spec_b = g.math("MULTIPLY", g.map_range(e, 0.08, 0.6, 0.0, 0.4), dk)
     common = {"IOR": ior, "Coat Weight": coat_b, "Coat Roughness": 0.02, "Coat IOR": 1.5,
               "Specular IOR Level": spec_b, "Emission Color": WHITE, "Emission Strength": rim}
     # glass colour per interface = paint (the studio-lit plate beneath is brighter than 1.0: a sqrt tint
@@ -645,12 +685,22 @@ def b_liquid_glass(c: _Ctx, col, normal):
     deep = g.node("ShaderNodeGamma")
     g.set(deep.inputs["Color"], base_t)
     g.set(deep.inputs["Gamma"], g.map_range(e, 0.0, 0.8, 4.0, 2.0))
-    pt = _principled(c, {**common, "Base Color": deep.outputs[0], "Roughness": frost, "Transmission Weight": 1.0},
+    deep_col = deep.outputs[0]
+    edge_dark = float(c.spec.get("edge_dark") or 0.0)
+    if edge_dark > 0:
+        # clear-light: the clear rim lenses the darker surroundings (a white frosted glyph on a pale frosted
+        # plate otherwise disappears) — transmission darkened toward the outline
+        k = g.map_range(e, 0.0, 0.6, 1.0 - edge_dark, 1.0, interp="SMOOTHSTEP")
+        deep_col = g.mix_rgb(1.0, deep_col, g.combine(k, k, k), blend="MULTIPLY")
+    pt = _principled(c, {**common, "Base Color": deep_col, "Roughness": frost, "Transmission Weight": 1.0},
                      normal)
     # self-lit fill: emission (brighter at the top) + a little diffuse response, under the coat
     fill_em = g.node("ShaderNodeEmission")
     g.set(fill_em.inputs["Color"], base_m)
-    g.set(fill_em.inputs["Strength"], g.map_range(v01, 0.0, 1.0, 0.8 * lit, 1.04 * lit))
+    # (clear-light: the frosted-white glyph face is lifted above the pale frosted plate)
+    face = 1.0 + 0.45 * float(c.spec.get("edge_dark") or 0.0)
+    g.set(fill_em.inputs["Strength"], g.math("MULTIPLY", g.map_range(v01, 0.0, 1.0, 0.8 * lit * face, 1.04 * lit * face),
+                                             g.math("ADD", 1.0, g.math("MULTIPLY", white, 0.2))))
     pc = _principled(c, {"Base Color": base_m, "Roughness": 0.35, "Specular IOR Level": 0.0}, normal)
     coat = _coat_only(c, normal, rim, coat_b)
     filled = g.add_shader(g.mix_shader(0.82, pc.outputs[0], fill_em.outputs[0]), coat)
@@ -658,12 +708,12 @@ def b_liquid_glass(c: _Ctx, col, normal):
     gband = _band(c, e, 0.3, 0.45, 0.8, 0.95)
     gdir = g.math("ADD", 0.08, g.math("MULTIPLY", _light_side(c, nrm, -1.0), 0.92))
     glow_em = g.node("ShaderNodeEmission")
-    g.set(glow_em.inputs["Color"], g.mix_rgb(0.3, base_m, WHITE))
+    g.set(glow_em.inputs["Color"], g.mix_rgb(g.math("MULTIPLY", lum, 0.3), base_m, WHITE))
     g.set(glow_em.inputs["Strength"], g.math("MULTIPLY", g.math("MULTIPLY", gband, gdir), 1.4 * glow * lit))
     cyc = g.add_shader(g.mix_shader(fill, pt.outputs[0], filled), glow_em.outputs[0])
     role = c.spec.get("role", "refract")
     # under other glass (role 'fake') the clear part becomes EEVEE's non-refractive fake glass
-    clear = _fake_glass(c, deep.outputs[0], rim, normal, frost) if role == "fake" else pt.outputs[0]
+    clear = _fake_glass(c, deep_col, rim, normal, frost) if role == "fake" else pt.outputs[0]
     ev = g.add_shader(g.mix_shader(fill, clear, g.add_shader(fill_em.outputs[0], coat)), glow_em.outputs[0])
     return cyc, ev, None
 
@@ -756,8 +806,10 @@ def b_glossy_plastic(c: _Ctx, col, normal):
 
 
 def b_satin(c: _Ctx, col, normal):
-    s = _principled(c, {"Base Color": col, "Roughness": c.prm("roughness", 0.45), "Coat Weight": c.prm("coat", 0.25),
-                        "Coat Roughness": 0.06, "Specular IOR Level": 0.45, "Sheen Weight": 0.08,
+    # specular / sheen kept low: every face-on surface mirrors the bright studio world, and that white wash
+    # desaturated saturated plates (QA #12); the coat (presets.json default 0.15) carries the gloss
+    s = _principled(c, {"Base Color": col, "Roughness": c.prm("roughness", 0.45), "Coat Weight": c.prm("coat", 0.15),
+                        "Coat Roughness": 0.06, "Specular IOR Level": 0.35, "Sheen Weight": 0.03,
                         "Sheen Roughness": 0.5}, normal).outputs[0]
     return s, s, None
 
@@ -949,7 +1001,7 @@ def _build(mat: bpy.types.Material, spec: dict, update: bool) -> None:
         cyc, ev, vol = builder(c, col, normal)
         if spec.get("role") == "backdrop":
             ev = _backdrop_glass(c, col, normal)
-        alpha = _alpha(c, paint_alpha)
+        alpha = _alpha(c, paint_alpha, col)
         _finish(c, cyc, ev, col, alpha, vol)
     finally:
         spec.pop("_lum", None)
@@ -967,10 +1019,13 @@ def make_spec(preset: str, params: Optional[dict], paint: dict, **kw) -> dict:
         "shadow": {"kind": "neutral", "opacity": 0.5},
         "role": "opaque", "thickness": 0.1, "light": (-0.45, 0.45, 0.77), "bbox": (-1, -1, 1, 1),
         "inflate": 0.0, "emission": 0.0, "eevee_backdrop": None, "obj_scale": 1.0, "lit": 1.0,
+        "edge_dark": 0.0,
     }
     spec.update(kw)
     if spec["role"] != "opaque" and spec["preset"] not in GLASS:
         spec["role"] = "opaque"
+    if spec["role"] == "refract" and spec.get("alpha"):
+        spec["role"] = "fake"          # alpha-blended in EEVEE (no raytraced refraction on blended surfaces)
     if spec["role"] == "backdrop" and not spec.get("eevee_backdrop"):
         spec["role"] = "refract"
     return spec

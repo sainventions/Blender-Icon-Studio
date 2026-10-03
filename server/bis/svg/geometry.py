@@ -1,6 +1,10 @@
 """Geometry export: pathops paths -> cubic Bezier splines in art space, occlusion-cut regions,
 silhouettes, safe bevel radius, corner-preserving polyline smoothing, layer SVGs + textures, and
-the hash-cached :class:`GeometryBundle`."""
+the hash-cached :class:`GeometryBundle`.
+
+Exported splines are fills: always closed, clipped to the (inset) plate outline when there is a
+plate, and cleaned by :mod:`.hygiene` (no micro debris, spikes, self-intersections or slivers;
+>= 3 points each)."""
 from __future__ import annotations
 
 import json
@@ -23,7 +27,8 @@ from bis.models import GeometryBundle, Layer, LayerGeometry, Project, Region, Sp
 from .common import PIPELINE_VERSION, atomic_write_bytes, atomic_write_text, sha1
 from .elements import ElementStore, Elem, model_paint
 from .paths import bounds, is_empty, op, shapely_from_path, union_all
-from . import raster, textures
+from .plate import PLATE_CLIP_INSET, plate_clip_path
+from . import hygiene, raster, textures
 
 # ----------------------------------------------------------------------------------------------
 # tunables
@@ -33,6 +38,8 @@ SMOOTH_MIN_SEGMENTS = 24      # ... with at least this many segments
 SMOOTH_STRAIGHT_FRAC = 0.95   # ... of which at least this fraction are straight lines
 SMOOTH_CORNER_DEG = 25.0      # turning angles above this stay sharp corners
 SMOOTH_MAX_BULGE = 0.006      # art units (~1.5 px on a 500 px icon): straighten if a curve bulges more
+SMOOTH_TRACED_MIN_SEGMENTS = 6     # raster traces: smooth every contour ...
+SMOOTH_TRACED_CORNER_DEG = 50.0    # ... keeping only clear corners (the trace is already sub-pixel smooth)
 SAFE_RADIUS_AREA_TOL = 0.02   # morphological opening may remove <= 2 % of the area
 SAFE_RADIUS_CAP = 0.5         # art units
 REGION_Z_STEP = 0.001         # zSub per translucent overlap level
@@ -49,15 +56,24 @@ def _lerp(a, b, t):
     return (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
 
 
+def _close(segs: List[tuple], start) -> List[tuple]:
+    """A filled contour is implicitly closed: add the closing line when the end is not the start."""
+    if segs and start is not None and math.dist(segs[-1][3], start) > 1e-9:
+        cur = segs[-1][3]
+        segs = segs + [(cur, _lerp(cur, start, 1 / 3), _lerp(cur, start, 2 / 3), start, True)]
+    return segs
+
+
 def _contours(sk: pathops.Path) -> List[Tuple[bool, List[tuple]]]:
-    """-> [(closed, [(p0, c1, c2, p1, is_line), ...]), ...] (cubic segments, SVG space)."""
+    """-> [(closed, [(p0, c1, c2, p1, is_line), ...]), ...] (cubic segments, SVG space). Every
+    contour is returned CLOSED: the geometry is filled, and fills close their subpaths."""
     out: List[Tuple[bool, List[tuple]]] = []
     segs: List[tuple] = []
     start = cur = None
     for verb, pts in sk:
         if verb == pathops.PathVerb.MOVE:
             if segs:
-                out.append((False, segs))
+                out.append((True, _close(segs, start)))
             segs = []
             start = cur = pts[0]
         elif verb == pathops.PathVerb.LINE:
@@ -81,7 +97,7 @@ def _contours(sk: pathops.Path) -> List[Tuple[bool, List[tuple]]]:
             segs = []
             cur = start
     if segs:
-        out.append((False, segs))
+        out.append((True, _close(segs, start)))
     return out
 
 
@@ -144,12 +160,20 @@ def smooth_polyline(pts: List[Tuple[float, float]], corner_deg: float = SMOOTH_C
 
 
 def path_to_splines(sk: pathops.Path, m: Affine2D, smooth: bool = SMOOTH_POLYLINES,
-                    eps: float = 1e-9, nd: int = 6) -> List[dict]:
+                    eps: float = 1e-9, nd: int = 6, clean: bool = True, traced: bool = False) -> List[dict]:
     """pathops.Path (SVG space) -> [{closed, points:[{co, hl, hr}]}] in the target space of `m`.
 
     Lines become cubics with handles at 1/3 and 2/3 (exact); quads are degree-elevated exactly.
-    Dense all-straight contours (polyline exports, traced rasters) are optionally smoothed."""
-    splines = []
+    Every contour is closed (filled geometry). Dense all-straight contours (polyline exports,
+    traced rasters) are optionally smoothed - unless smoothing makes the contour (or a sibling
+    contour) self-intersect, then the exact polygon is kept. With `clean` (the default; target
+    space = art units) micro segments, spikes, loops and slivers are removed
+    (:func:`hygiene.clean_spline`): every returned spline is closed, simple, has >= 3 points and
+    a non-degenerate area. `traced` = the path is a raster trace (sub-pixel polygon of a smooth
+    outline): every all-straight contour is smoothed, however few segments (a traced dot is a
+    ~12-gon), and only turns above SMOOTH_TRACED_CORNER_DEG stay corners."""
+    min_segs = SMOOTH_TRACED_MIN_SEGMENTS if traced else SMOOTH_MIN_SEGMENTS
+    corner_deg = SMOOTH_TRACED_CORNER_DEG if traced else SMOOTH_CORNER_DEG
     a, b, c, d, e, f = m.a, m.b, m.c, m.d, m.e, m.f
 
     def X(p):
@@ -158,28 +182,70 @@ def path_to_splines(sk: pathops.Path, m: Affine2D, smooth: bool = SMOOTH_POLYLIN
     def R(p):
         return (round(p[0], nd) + 0.0, round(p[1], nd) + 0.0)
 
-    for closed, segs in _contours(sk):
+    contours = []   # (exact points, smoothed points | None)
+    for _closed, segs in _contours(sk):
         segs = _drop_degenerate(segs, eps)
         if not segs:
             continue
+        exact = [{"co": X(p0), "hl": X(segs[k - 1][2]), "hr": X(c1)} for k, (p0, c1, _c2, _p1, _l) in enumerate(segs)]
+        sm = None
         n_lines = sum(1 for s in segs if s[4])
-        if (smooth and closed and len(segs) >= SMOOTH_MIN_SEGMENTS
-                and n_lines >= SMOOTH_STRAIGHT_FRAC * len(segs)):
-            pts = smooth_polyline([X(s[0]) for s in segs])
-            splines.append({"closed": True, "smoothed": True,
-                            "points": [{k: R(v) for k, v in p.items()} for p in pts]})
+        if smooth and len(segs) >= min_segs and n_lines >= SMOOTH_STRAIGHT_FRAC * len(segs):
+            sm = smooth_polyline([X(s[0]) for s in segs], corner_deg)
+            if n_lines < len(segs):
+                _keep_curves(sm, segs, X)
+            if not hygiene.is_simple(sm):
+                sm = None   # smoothing overshot into a loop: keep the exact polygon
+        contours.append((exact, sm))
+    if any(sm is not None for _e, sm in contours) and len(contours) > 1:
+        _unsmooth_crossing(contours)
+    splines = []
+    for exact, sm in contours:
+        pts = sm if sm is not None else exact
+        if not clean:
+            splines.append({"closed": True, "points": [{k: R(v) for k, v in p.items()} for p in pts]})
             continue
-        pts = []
-        if closed:
-            for k, (p0, c1, _c2, _p1, _l) in enumerate(segs):
-                pts.append({"co": p0, "hl": segs[k - 1][2], "hr": c1})
-        else:
-            for k, (p0, c1, _c2, _p1, _l) in enumerate(segs):
-                pts.append({"co": p0, "hl": segs[k - 1][2] if k else p0, "hr": c1})
-            pts.append({"co": segs[-1][3], "hl": segs[-1][2], "hr": segs[-1][3]})
-        splines.append({"closed": closed,
-                        "points": [{"co": R(X(p["co"])), "hl": R(X(p["hl"])), "hr": R(X(p["hr"]))} for p in pts]})
+        # micro segments of exact contours are boolean-op / rounding debris; a smoothed contour's
+        # short segments are real samples of a dense G1 curve (merging them would kink it)
+        parts = hygiene.clean_spline(pts, hygiene.MICRO if sm is None else hygiene.DEGENERATE)
+        if sm is not None and not parts:
+            parts = hygiene.clean_spline(exact)
+            sm = None
+        for q in parts:
+            splines.append({"closed": True, **({"smoothed": True} if sm is not None else {}), "points": q})
     return splines
+
+
+def _keep_curves(sm: List[dict], segs: List[tuple], X) -> None:
+    """smooth_polyline only sees the vertices: put the exact control points of the (<= 5 %) curve
+    segments of a mostly-straight contour back - e.g. the plate clip's corner arc on a traced or
+    polyline outline - instead of flattening them to their chords. In place."""
+    n = len(segs)
+    for k, (_p0, c1, c2, _p1, is_line) in enumerate(segs):
+        if not is_line:
+            sm[k]["hr"] = X(c1)
+            sm[(k + 1) % n]["hl"] = X(c2)
+
+
+def _unsmooth_crossing(contours: List[list]) -> None:
+    """A smoothed contour must not cross a sibling contour (a hole bulging through its outer
+    contour): revert both to their exact polygons. In place."""
+    rings = []
+    for exact, sm in contours:
+        p, _ = hygiene.sample(sm if sm is not None else exact, 4)
+        try:
+            rings.append(shapely.LinearRing(p) if len(p) >= 3 else None)
+        except (shapely.errors.GEOSException, ValueError):
+            rings.append(None)
+    valid = [r for r in rings if r is not None]
+    if len(valid) < 2:
+        return
+    tree = shapely.STRtree([r if r is not None else shapely.Point() for r in rings])
+    ia, ib = tree.query([r if r is not None else shapely.Point() for r in rings], predicate="intersects")
+    for i, j in zip(ia.tolist(), ib.tolist()):
+        if i < j and (contours[i][1] is not None or contours[j][1] is not None):
+            contours[i] = (contours[i][0], None)
+            contours[j] = (contours[j][0], None)
 
 
 def _bez(a, b, t):
@@ -342,6 +408,37 @@ def _region_levels(regions: List[Tuple[Elem, pathops.Path]], eps_area: float) ->
     return levels
 
 
+def clip_to_plate(paths: List[pathops.Path], clip: Optional[pathops.Path]) -> List[pathops.Path]:
+    """Intersect every path with the (inset) plate outline: art reaching over the plate edge would
+    hang off the plate - and past its bevel - once extruded. Paths entirely outside become empty.
+    No clip (no plate) or clipping that would empty EVERY path (art not on the plate at all, e.g.
+    after a user rescale): the paths are returned unchanged."""
+    if clip is None or is_empty(clip):
+        return paths
+    out = []
+    for p in paths:
+        cb = bounds(clip)
+        pb = bounds(p)
+        inside = pb[0] >= cb[0] and pb[1] >= cb[1] and pb[2] <= cb[2] and pb[3] <= cb[3]
+        if is_empty(p):
+            out.append(p)
+            continue
+        q = op(p, clip, pathops.PathOp.INTERSECTION)
+        if inside and abs(abs(q.area) - abs(p.area)) <= 1e-9 * max(1.0, abs(p.area)):
+            q = p   # untouched: keep the original contour structure
+        out.append(q)
+    if all(is_empty(q) for q in out):
+        return paths
+    return out
+
+
+def layer_regions(store: ElementStore, members: Sequence[Elem]) -> List[Tuple[Elem, pathops.Path]]:
+    """Occlusion-cut regions clipped to the plate (empty pieces dropped)."""
+    regions = occlusion_regions(members)
+    clipped = clip_to_plate([p for _m, p in regions], plate_clip_path(store))
+    return [(m, p) for (m, _p), p in zip(regions, clipped) if not is_empty(p)]
+
+
 def layer_safe_radius(store: ElementStore, element_ids: Sequence[str], mode: str = "individual") -> float:
     members = members_of(store, element_ids)
     if not members:
@@ -349,9 +446,9 @@ def layer_safe_radius(store: ElementStore, element_ids: Sequence[str], mode: str
     art = store.art
     tol = store.tolerance
     if mode == "combined":
-        paths = [union_all([m.path for m in members])]
+        paths = clip_to_plate([union_all([m.path for m in members])], plate_clip_path(store))
     else:
-        paths = [p for _m, p in occlusion_regions(members)]
+        paths = [p for _m, p in layer_regions(store, members)]
     return safe_radius([_art_scale_geom(shapely_from_path(p, tol), art.k) for p in paths])
 
 
@@ -365,10 +462,13 @@ def layer_hash(store: ElementStore, layer: Layer, texture_size: int) -> str:
     edit elsewhere never invalidates this layer's texture), mode and pipeline tunables."""
     members = members_of(store, layer.elementIds)
     grads = sorted({m.paint.get("id") for m in members if m.paint.get("id")})
+    plate = store.plate or {}
+    clip = [plate.get(k) for k in ("bbox", "shape", "cornerRadius")] + [PLATE_CLIP_INSET] if plate else None
     return sha1(PIPELINE_VERSION, list(store.view_box), [m.content_hash for m in members],
                 [store.gradients.get(g, "") for g in grads], layer.mode, SMOOTH_POLYLINES,
                 SMOOTH_MIN_SEGMENTS, SMOOTH_STRAIGHT_FRAC, SMOOTH_CORNER_DEG, SMOOTH_MAX_BULGE, SAFE_RADIUS_AREA_TOL,
-                texture_size)[:20]
+                SMOOTH_TRACED_MIN_SEGMENTS, SMOOTH_TRACED_CORNER_DEG,
+                hygiene.MICRO, hygiene.MIN_AREA, clip, texture_size)[:20]
 
 
 def _build_layer_entry(store: ElementStore, layer: Layer, h: str, cache: Path, project_dir: Path,
@@ -377,19 +477,22 @@ def _build_layer_entry(store: ElementStore, layer: Layer, h: str, cache: Path, p
     art = store.art
     M = art.matrix
     members = members_of(store, layer.elementIds)
-    regions = occlusion_regions(members)
+    clip = plate_clip_path(store)
+    regions = layer_regions(store, members)
     eps_area = art.area * 1e-6
     levels = _region_levels(regions, eps_area)
     region_out = []
     for (m, p), lvl in zip(regions, levels):
-        spl = path_to_splines(p, M)
+        spl = path_to_splines(p, M, traced=bool(m.image))
+        if not spl:
+            continue   # nothing but slivers / debris left
         annotate_holes(spl)
         region_out.append({"elementId": m.id, "paint": model_paint(m.paint, art).model_dump(),
                            "opacity": round(m.total_opacity, 6), "zSub": round(lvl * REGION_Z_STEP, 6),
                            "splines": spl})
-    sil = union_all([m.path for m in members])
+    sil = clip_to_plate([union_all([m.path for m in members])], clip)[0]
     sil.convertConicsToQuads(0.001)
-    sil_spl = path_to_splines(sil, M)
+    sil_spl = path_to_splines(sil, M, traced=bool(members) and all(m.image for m in members))
     annotate_holes(sil_spl)
     tol = store.tolerance
     if layer.mode == "combined":

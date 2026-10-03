@@ -162,10 +162,13 @@ def test_plate_only_and_no_plate(import_icon):
     res, _p, _d = import_icon(corpus("Template"))
     assert res.source.plateDetected and res.layers == []
     assert res.canvas.plate.fill.type == "solid" and res.canvas.plate.fill.color == "#ff00ff"
+    # Earth has no plate element, but its art fills the plate shape edge to edge (full-bleed): the
+    # canvas is framed to the art's outline with a plate in the art's rim colour (QA round 2, #5).
+    # A real no-plate icon keeps the System Light plate at 0.78 (test_svg_geometry).
     res, _p, _d = import_icon(corpus("Earth"))
     assert not res.source.plateDetected
-    assert res.canvas.plate.visible and res.canvas.plate.fill.type == "system-light"
-    assert res.canvas.art.scale == pytest.approx(0.78)
+    assert res.canvas.plate.visible and res.canvas.plate.fill.type == "solid"
+    assert res.canvas.art.scale == pytest.approx(2.0 / (466.0 * K500), rel=0.01)
 
 
 def test_default_layer_stack(import_icon):

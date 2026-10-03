@@ -2,9 +2,12 @@
 
 * light        — base project.
 * dark         — ``appearances.dark`` overrides (default plate fill system-dark); env × 0.6, key × 0.85.
-* clear-*      — ``appearances.mono`` overrides; every visible layer → liquid_glass (tint 0, frost 0.3)
-                 whose paint is the mono luminance (stretched to 0.25..1, brightest → white) driving the
-                 milky-white frost; plate → frosted glass (tint 0) over a wallpaper backdrop.
+* clear-*      — ``appearances.mono`` overrides; every visible layer → liquid_glass whose paint is the mono
+                 luminance (stretched to MONO_FLOOR..1, brightest → white) tinting the glass (dark parts stay
+                 dark-ish smoked glass instead of turning white) and driving the milky-white frost; plate →
+                 frosted glass (tint 0) over a wallpaper backdrop. clear-light separates the white glyph from
+                 the light plate with a darker lensed rim (env ``edgeDark``) and a deeper drop shadow; the
+                 inner glow is low on the light plate and moderate on the dark one.
 * tinted-light — mono luminance × tint colour into the glass base colour; plate = light frosted, tinted.
 * tinted-dark  — plate system-dark; foreground = mono luminance × tint (bright, slightly emissive).
 
@@ -26,6 +29,15 @@ WALLPAPERS = {
 }
 
 MONO_FLOOR = 0.3
+# clear renditions: glass colour = mono luminance (tint 0.5 -> 94 % of the grey), clear-light rim darkening
+# (fraction of the transmission removed at the outline), drop-shadow floor and inner glow per mode
+CLEAR_TINT = 0.5
+CLEAR_EDGE_DARK = 0.8
+CLEAR_LIGHT_SHADOW = 0.8
+CLEAR_GLOW_LIGHT = 0.1
+CLEAR_GLOW_DARK = 0.3
+CLEAR_LIGHT_PLATE = "#c9ccd6"
+CLEAR_LIGHT_PLATE_TINT = 0.4
 # wallpaper shader layout (object coords of the wallpaper plane == world XY): vertical gradient over
 # ±WP_Y, blobs at (x, y)·WP_POS with smoothstep radius r·WP_R mixed by WP_MIX (scene._wallpaper and the
 # EEVEE frosted-plate fallback in materials.py)
@@ -113,17 +125,28 @@ def resolve(project: dict, appearance: str, bundle: dict) -> dict:
         plate = canvas["plate"]
         if appearance.startswith("clear"):
             env.update(mono={"lo": lo, "hi": hi, "floor": MONO_FLOOR, "tint": None, "strength": 0.0},
-                       clear=True, wallpaper="dark" if dark else "light")
+                       clear=True, wallpaper="dark" if dark else "light", edgeDark=0.0 if dark else CLEAR_EDGE_DARK)
             for L in proj["layers"]:
                 if L.get("visible", True):
                     L["material"] = {"preset": "liquid_glass",
-                                     "params": {"tint": 0.0, "frost": 0.3, "translucency": 0.35,
-                                                "rim": 1.0, "specular": "auto"}}
+                                     "params": {"tint": CLEAR_TINT, "frost": 0.3, "translucency": 0.35,
+                                                "rim": 1.0, "specular": "auto",
+                                                "glow": CLEAR_GLOW_DARK if dark else CLEAR_GLOW_LIGHT}}
                     if L.get("fill", {}).get("type") == "none":
                         L["fill"] = {"type": "auto"}
                     L["glass"] = True
-            plate["material"] = {"preset": "frosted_glass", "params": {"tint": 0.0, "frost": 0.42, "grain": 0.04}}
-            plate["fill"] = {"type": "solid", "color": "#ffffff", "opacity": 1.0}
+                    if not dark:
+                        sh = dict(L.get("shadow") or {})
+                        L["shadow"] = {"kind": "neutral",
+                                       "opacity": max(CLEAR_LIGHT_SHADOW, float(sh.get("opacity", 0.5) or 0.0))}
+            if dark:
+                plate["material"] = {"preset": "frosted_glass", "params": {"tint": 0.0, "frost": 0.42, "grain": 0.04}}
+                plate["fill"] = {"type": "solid", "color": "#ffffff", "opacity": 1.0}
+            else:
+                # a faintly smoked pane: the white frosted glyph must read against the pale plate
+                plate["material"] = {"preset": "frosted_glass",
+                                     "params": {"tint": CLEAR_LIGHT_PLATE_TINT, "frost": 0.42, "grain": 0.04}}
+                plate["fill"] = {"type": "solid", "color": CLEAR_LIGHT_PLATE, "opacity": 1.0}
         elif appearance == "tinted-light":
             env.update(mono={"lo": lo, "hi": hi, "floor": MONO_FLOOR, "tint": tint_lin, "strength": strength},
                        wallpaper="light")

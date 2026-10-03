@@ -15,7 +15,8 @@ Ring = List[Tuple[float, float]]
 
 
 def skia_from_d(d: str, fill_rule: str = "nonzero", simplify: bool = True) -> pathops.Path:
-    """SVG path data -> pathops.Path (conics as quads, optionally simplified: disjoint contours)."""
+    """SVG path data -> pathops.Path (conics as quads, optionally simplified: disjoint contours).
+    Every contour of the result is closed (see :func:`close_contours`)."""
     if not d or not d.strip():
         return pathops.Path()
     sk = svg_pathops.skia_path(SVGPath(d=d).as_cmd_seq(), fill_rule)
@@ -25,7 +26,49 @@ def skia_from_d(d: str, fill_rule: str = "nonzero", simplify: bool = True) -> pa
             sk.simplify(fix_winding=True)
         except pathops.PathOpsError:
             pass
-    return sk
+    return close_contours(sk)
+
+
+def close_contours(sk: pathops.Path) -> pathops.Path:
+    """Close every open contour. A fill implicitly closes its subpaths (SVG painting rules), but
+    skia's Simplify() returns CONVEX input unchanged - an unclosed dot (``…h0`` without ``Z``) or a
+    3-point triangle stays an open contour, which the 3D builder would sweep as an open tube.
+    Returns `sk` itself when nothing needed closing."""
+    open_ = False
+    started = False
+    for verb, _pts in sk:
+        if verb == pathops.PathVerb.MOVE:
+            if started:
+                open_ = True
+                break
+            started = True
+        elif verb == pathops.PathVerb.CLOSE:
+            started = False
+    if not open_ and not started:
+        return sk
+    out = pathops.Path()
+    out.fillType = sk.fillType
+    started = False
+    for verb, pts in sk:
+        if verb == pathops.PathVerb.MOVE:
+            if started:
+                out.close()
+            out.moveTo(*pts[0])
+            started = True
+        elif verb == pathops.PathVerb.LINE:
+            out.lineTo(*pts[0])
+        elif verb == pathops.PathVerb.QUAD:
+            out.quadTo(*pts[0], *pts[1])
+        elif verb == pathops.PathVerb.CUBIC:
+            out.cubicTo(*pts[0], *pts[1], *pts[2])
+        elif verb == pathops.PathVerb.CONIC:
+            out.conicTo(*pts[0], *pts[1], pts[2] if len(pts) > 2 else 1.0)
+        elif verb == pathops.PathVerb.CLOSE:
+            out.close()
+            started = False
+    if started:
+        out.close()
+    return out
 
 
 def clean_d(sk: pathops.Path, ndigits: int = 4) -> str:

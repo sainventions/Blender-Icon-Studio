@@ -167,12 +167,21 @@ function hexLinear(hex: string): [number, number, number] {
  * The worker's wallpaper (scene.py `_wallpaper`) evaluated per pixel in linear light over world x, y ∈ ±extent:
  * vertical gradient top → bottom over y = +2.2 … −2.2, then each blob mixed in by 0.85 × smoothstep falloff from
  * its centre (x, y) × 1.6 out to r × 1.9. Texture v = 1 is world y = +extent.
+ * `frost` > 0: the wallpaper as seen through a frosted pane (worker materials._backdrop_glass): blobs spread by
+ * (1 + 1.2 · frost) and mixed by 0.85 / (1 + 0.5 · frost).
  */
-export function createWallpaperTexture(kind: 'light' | 'dark', extent = WALLPAPER_EXTENT, size = 384): THREE.DataTexture {
+export function createWallpaperTexture(
+  kind: 'light' | 'dark',
+  extent = WALLPAPER_EXTENT,
+  size = 384,
+  frost = 0,
+): THREE.DataTexture {
   const spec = WALLPAPERS[kind]
   const top = hexLinear(spec.top)
   const bottom = hexLinear(spec.bottom)
-  const blobs = spec.blobs.map((b) => ({ x: b.x * 1.6, y: b.y * 1.6, r: b.r * 1.9, c: hexLinear(b.color) }))
+  const spread = 1 + 1.2 * Math.max(0, frost)
+  const mix = 0.85 / (1 + 0.5 * Math.max(0, frost))
+  const blobs = spec.blobs.map((b) => ({ x: b.x * 1.6, y: b.y * 1.6, r: b.r * 1.9 * spread, c: hexLinear(b.color) }))
   const data = new Uint8Array(size * size * 4)
   const col = [0, 0, 0]
   for (let j = 0; j < size; j++) {
@@ -185,7 +194,7 @@ export function createWallpaperTexture(kind: 'light' | 'dark', extent = WALLPAPE
       for (const b of blobs) {
         const d = Math.hypot(x - b.x, y - b.y)
         const u = Math.max(0, Math.min(1, d / b.r))
-        const f = (1 - u * u * (3 - 2 * u)) * 0.85
+        const f = (1 - u * u * (3 - 2 * u)) * mix
         for (let k = 0; k < 3; k++) col[k] += (b.c[k] - col[k]) * f
       }
       const o = (j * size + i) * 4

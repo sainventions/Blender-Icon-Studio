@@ -84,6 +84,24 @@ def _mesh_object(name: str, data: bpy.types.Mesh, col: bpy.types.Collection,
     return ob
 
 
+def _curve_object(name: str, cu: bpy.types.Curve, col: bpy.types.Collection,
+                  parent: Optional[bpy.types.Object]) -> bpy.types.Object:
+    """Editable piece (saved .blend files): the cached curve datablock itself — live extrude / round bevel /
+    offset on the curve route; the GN route adds live Fill Curve → Solidify → Bevel modifiers."""
+    ob = bpy.data.objects.get(name)
+    if ob is not None and (ob.type != "CURVE" or ob.data != cu):
+        bpy.data.objects.remove(ob, do_unlink=True)
+        ob = None
+    if ob is None:
+        ob = bpy.data.objects.new(name, cu)
+    if ob.name not in col.objects:
+        col.objects.link(ob)
+    if ob.parent != parent:
+        ob.parent = parent
+        ob.matrix_parent_inverse = Matrix.Identity(4)
+    return ob
+
+
 def _set_material(ob: bpy.types.Object, mat: bpy.types.Material) -> None:
     if len(ob.material_slots) == 0:
         ob.data.materials.append(None)
@@ -185,6 +203,35 @@ def image_quad(im: dict, fallback_bbox) -> list:
     return [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
 
 
+HALO_SOFT_MIN = 0.25         # share of the visible pixels that are soft (0.02 < alpha < 0.6)
+_SOFT_ALPHA: dict = {}
+
+
+def soft_alpha_fraction(path: str) -> float:
+    """Share of an image's visible pixels (alpha > 0.02) that are only partly opaque (alpha < 0.6) around a
+    solid core: glow halos that an alpha-traced extrusion drops (0 without a solid core). Cached by path +
+    mtime."""
+    try:
+        key = (os.path.normcase(os.path.abspath(path)), os.path.getmtime(path))
+    except OSError:
+        return 0.0
+    hit = _SOFT_ALPHA.get(key)
+    if hit is not None:
+        return hit
+    frac = 0.0
+    img = materials.load_image(path)
+    if img is not None and img.size[0] * img.size[1] > 0:
+        px = np.empty(img.size[0] * img.size[1] * 4, dtype=np.float32)
+        img.pixels.foreach_get(px)
+        a = px[3::4]
+        vis = int((a > 0.02).sum())
+        frac = float(((a > 0.02) & (a < 0.6)).sum()) / vis if vis else 0.0
+        if vis and float((a >= 0.6).sum()) / vis < 0.1:
+            frac = 0.0          # no solid core (a translucent shading overlay, e.g. Find Device): no halo
+    _SOFT_ALPHA[key] = frac
+    return frac
+
+
 def paint_rgb(paint: dict) -> tuple:
     """Representative LINEAR colour of a region paint (object-colour fallback, previews)."""
     t = paint.get("type")
@@ -207,6 +254,9 @@ class SceneBuilder:
         self.warnings: list[str] = []
         self.info: dict = {}
         self._specs: list[dict] = []
+        self.editable = False
+        self._hidden: set = set()
+        self._cover_cache: dict = {}
 
     # -------------------------------------------------------------------------- setup
     @property
@@ -228,9 +278,12 @@ class SceneBuilder:
     # -------------------------------------------------------------------------- main entry
     def build(self, project: dict, bundle: dict, appearance: str = "light", *, camera: Optional[dict] = None,
               full_bleed: bool = False, backdrop: Optional[str] = None, backdrop_color: Optional[str] = None,
-              overrides: Optional[dict] = None) -> dict:
-        """Build/update the scene. ``overrides`` (animations): {'lightAngle', 'explode', 'layerZ': {id: dz}}."""
+              overrides: Optional[dict] = None, editable: bool = False) -> dict:
+        """Build/update the scene. ``overrides`` (animations): {'lightAngle', 'explode', 'layerZ': {id: dz}}.
+        ``editable`` (save_blend): pieces become live curve objects (round bevel / GN modifier stack) instead
+        of the baked meshes renders use, so the .blend can be tweaked in Blender."""
         self.warnings = []
+        self.editable = bool(editable)
         overrides = overrides or {}
         proj = norm_project(project)
         bnd = norm_bundle(bundle)
@@ -287,6 +340,10 @@ class SceneBuilder:
             above = [o for o in glass_ids[i + 1:] if _bbox_intersects(boxes[lid], boxes[o])]
             roles[lid] = "fake" if any(self._overlaps(by_id[lid], by_id[o], geo_by_id, canvas["art"])
                                        for o in above) else "refract"
+
+        # ---- pieces the SVG hides completely under opaque higher art (Translate's magenta shadow-caster under
+        # the blue card): glass above must not reveal them (they still cast shadows / show their sides) --------
+        self._hidden = self._covered_pieces(layers, geo_by_id, canvas["art"])
 
         # ---- plate ---------------------------------------------------------------------------------
         plate = canvas["plate"]
@@ -487,9 +544,13 @@ class SceneBuilder:
         bevel_req = max(0.0, float(plate.get("bevel", 0.04)))
         bevel, route = geometry.effective_bevel(bevel_req, th, 1.0)
         splines = geometry.plate_outline(shape, corner_radius)
-        data, route = geometry.solid_mesh({"plate": shape, "cr": round(corner_radius, 4)}, splines, th, bevel,
-                                          route, 8, gn_bevel=bevel_req)
-        ob = _mesh_object("BIS Plate", data, col, None)
+        kp = {"plate": shape, "cr": round(corner_radius, 4)}
+        data, route = geometry.solid_mesh(kp, splines, th, bevel, route, 8, gn_bevel=bevel_req)
+        if self.editable:
+            cu, route = geometry.curve_data(kp, splines, th, bevel, route, 8, bevel_req)
+            ob = _curve_object("BIS Plate", cu, col, None)
+        else:
+            ob = _mesh_object("BIS Plate", data, col, None)
         ob.location = (0.0, 0.0, -th / 2.0)
         # full-bleed masters: push the bevelled rim just outside the 2.0-wide frame (flat face edge to edge)
         grow = 1.0 + (bevel + 0.01 if full_bleed else 0.0)
@@ -506,6 +567,8 @@ class SceneBuilder:
         )
         mat = materials.ensure("BIS Mat Plate", spec)
         _set_material(ob, mat)
+        if self.editable:
+            geometry.apply_route(ob, route, th, float(cu.get("bis_gb", 0.0) or 0.0), 8, mat)
         self._specs.append(spec)
         ob.visible_shadow = True
 
@@ -525,6 +588,77 @@ class SceneBuilder:
         except Exception as ex:  # never let a heuristic break a render
             log("overlap test failed:", ex)
             return True
+
+    def _covered_pieces(self, layers: list, geos: dict, art: dict) -> set:
+        """{(layer id, region index)} of pieces completely covered (≥ 99.7 % on a 64² raster of the piece) by
+        the union of opaque regions of HIGHER visible layers (normal blend, opacity 1). In the SVG they are
+        invisible; through the translucent glass above they would show (e.g. as a magenta band)."""
+        key = stable_hash([[L["id"], geo_key(geos[L["id"]], L["id"]) if L["id"] in geos else None, L.get("transform"),
+                            L.get("opacity", 1.0), L.get("blendMode", "normal"), L.get("mode")] for L in layers] + [art])
+        hit = self._cover_cache.get(key)
+        if hit is not None:
+            return hit
+        sa, ax, ay = float(art.get("scale", 1.0)), float(art.get("x", 0.0)), float(art.get("y", 0.0))
+
+        def canvas_rings(L, region):
+            tr = L.get("transform") or {}
+            sl, tx, ty = float(tr.get("scale", 1.0)), float(tr.get("x", 0.0)), float(tr.get("y", 0.0))
+            out = []
+            for sp in region.get("splines") or []:
+                ring = geometry._flatten_ring(sp.get("points") or [], True, 4)
+                if len(ring) >= 3:
+                    out.append((np.asarray(ring) * sa + np.array([ax, ay])) * sl + np.array([tx, ty]))
+            return out
+
+        def opaque(L, r):
+            p = r.get("paint") or {}
+            return float(r.get("opacity", 1.0)) >= 0.99 and not any(
+                float(st.get("opacity", 1.0)) < 0.99 for st in p.get("stops") or [])
+
+        hidden = set()
+        for i, L in enumerate(layers):
+            g = geos.get(L["id"])
+            if g is None or L.get("mode") == "combined":
+                continue
+            cover = []
+            for U in layers[i + 1:]:
+                gu = geos.get(U["id"])
+                if gu is None or float(U.get("opacity", 1.0)) < 0.99 or U.get("blendMode", "normal") != "normal":
+                    continue
+                if U.get("mode") == "combined":
+                    cover.append(canvas_rings(U, {"splines": gu.get("silhouette") or []}))
+                else:
+                    cover += [canvas_rings(U, r) for r in gu.get("regions") or [] if opaque(U, r)]
+            cover = [c for c in cover if c]
+            if not cover:
+                continue
+            for k, r in enumerate(g.get("regions") or []):
+                rings = canvas_rings(L, r)
+                if not rings:
+                    continue
+                allr = np.vstack(rings)
+                (x0, y0), (x1, y1) = allr.min(axis=0), allr.max(axis=0)
+                h = max(x1 - x0, y1 - y0) / 64.0
+                if h <= 1e-9:
+                    continue
+                xs, ys = np.arange(x0 + h / 2, x1, h), np.arange(y0 + h / 2, y1, h)
+                mine = geometry._scan_inside(geometry._ring_segments(rings), xs, ys)
+                n = int(mine.sum())
+                if n < 16:
+                    continue
+                left = mine.copy()
+                for c in cover:
+                    cx = np.vstack(c)
+                    if cx[:, 0].max() < x0 or cx[:, 0].min() > x1 or cx[:, 1].max() < y0 or cx[:, 1].min() > y1:
+                        continue
+                    left &= ~geometry._scan_inside(geometry._ring_segments(c), xs, ys)
+                    if left.sum() <= 0.003 * n:
+                        hidden.add((L["id"], k))
+                        break
+        if len(self._cover_cache) > 32:
+            self._cover_cache.clear()
+        self._cover_cache[key] = hidden
+        return hidden
 
     @staticmethod
     def _canvas_bbox(bbox, art: dict, tr: dict):
@@ -582,6 +716,10 @@ class SceneBuilder:
                                paint_rgb(r.get("paint") or {}), images.get(r["elementId"])))
         region_ids = {r["elementId"] for r in g["regions"]}
         cards = [im for eid, im in images.items() if eid not in region_ids]
+        # raster regions are extruded along their alpha-traced contour, which cuts off soft alpha (a neon
+        # tube's glow halo, a soft shadow disc): such images also get a flat halo card under the piece
+        cards += [im for eid, im in images.items() if eid in region_ids and not im.get("opaque")
+                  and soft_alpha_fraction(im["path"]) > HALO_SOFT_MIN]
 
         # ---- material ----------------------------------------------------------------------------------
         bbox = tuple(g.get("bbox") or (-1, -1, 1, 1))
@@ -593,6 +731,7 @@ class SceneBuilder:
         spec = materials.make_spec(
             preset, mpar if preset == Lr["material"]["preset"] else {}, paint,
             mono=env.get("mono"), clear=bool(env.get("clear")), alpha=alpha,
+            edge_dark=float(env.get("edgeDark", 0.0) or 0.0),
             shadow=dict(Lr.get("shadow") or {}), role=role, thickness=th_local, light=L, bbox=bbox,
             inflate=float(dp.get("inflate", 0.0)), emission=boost, lit=getattr(self, "_lit", 1.0),
             preview_color=pieces[0][4] if pieces else (0.8, 0.8, 0.8),
@@ -605,6 +744,12 @@ class SceneBuilder:
         mats = {mat_name}
 
         key_base = {"h": geo_key(g, lid), "lid": lid}
+        n_open = sum(geometry.count_open(p[1] or []) for p in pieces)
+        if n_open:
+            # fills are always closed (an SVG fill closes an open subpath); a flag left open used to sweep the
+            # round bevel along the outline as a hollow tube
+            log(f"layer {lid}: {n_open} open spline(s) treated as closed fills")
+            stats["openSplines"] = stats.get("openSplines", 0) + n_open
         for pid, splines, zoff, op, rgb, raster in pieces:
             if not splines:
                 continue
@@ -624,25 +769,42 @@ class SceneBuilder:
             # traced, slightly wobbly contours) always take the GN route: a round curve bevel lenses every
             # wobble of the trace into crinkled highlights, the angle-limited Bevel modifier keeps them clean.
             want = "gn" if raster is not None else route
-            data, proute = geometry.solid_mesh({**key_base, "p": pid, "n": len(splines)}, splines, th_local,
-                                               bevel_local, want, segments,
-                                               gn_bevel=bevel_local_req if route == "gn" else bevel_local)
+            kp = {**key_base, "p": pid, "n": len(splines)}
+            gbev = bevel_local_req if route == "gn" else bevel_local
+            data, proute = geometry.solid_mesh(kp, splines, th_local, bevel_local, want, segments, gn_bevel=gbev)
             if proute != route:
                 stats["gnFallback"] += 1
-            ob = _mesh_object(f"BIS {lid} {pid}", data, col, lay)
+            if self.editable:
+                cu, proute = geometry.curve_data(kp, splines, th_local, bevel_local, want, segments, gbev)
+                ob = _curve_object(f"BIS {lid} {pid}", cu, col, lay)
+            else:
+                ob = _mesh_object(f"BIS {lid} {pid}", data, col, lay)
             ob.location = (0.0, 0.0, (thickness / 2.0 + zoff) / S)
             ob.scale = (1.0, 1.0, 1.0)
             ob.color = (*rgb, max(0.0, min(1.0, op)))
+            covered = pid.startswith("r") and (lid, int(pid[1:])) in self._hidden
+            if ob.visible_transmission == covered:
+                ob.visible_transmission = not covered
+                ob.visible_glossy = not covered
+            if covered:
+                stats["hiddenPieces"] = stats.get("hiddenPieces", 0) + 1
             _set_material(ob, pmat)
+            if self.editable:
+                geometry.apply_route(ob, proute, th_local, float(cu.get("bis_gb", 0.0) or 0.0), segments, pmat)
             names.add(ob.name)
             stats["pieces"] += 1
 
         for k, im in enumerate(cards):
             bb = im.get("bbox") or bbox
             quad = image_quad(im, bbox)
-            data, _ = geometry.solid_mesh({"card": im.get("path"), "quad": [list(p) for p in quad]},
-                                          [geometry.poly_spline(quad)], CARD_THICKNESS / S, 0.0, "gn", 1)
-            ob = _mesh_object(f"BIS {lid} img{k}", data, col, lay)
+            ckp = {"card": im.get("path"), "quad": [list(p) for p in quad]}
+            cspl = [geometry.poly_spline(quad)]
+            data, _ = geometry.solid_mesh(ckp, cspl, CARD_THICKNESS / S, 0.0, "gn", 1)
+            if self.editable:
+                ccu, _r = geometry.curve_data(ckp, cspl, CARD_THICKNESS / S, 0.0, "gn", 1)
+                ob = _curve_object(f"BIS {lid} img{k}", ccu, col, lay)
+            else:
+                ob = _mesh_object(f"BIS {lid} img{k}", data, col, lay)
             ob.location = (0.0, 0.0, (CARD_THICKNESS / 2.0 + 0.0005) / S)
             ob.color = (1.0, 1.0, 1.0, max(0.0, min(1.0, float(im.get("opacity", 1.0)) * layer_opacity)))
             cpaint = {"kind": "texture", "image": im["path"], "uv": image_uv(im, bbox), "has_alpha": True}
@@ -652,6 +814,8 @@ class SceneBuilder:
             cname = f"BIS Mat {lid} img{k}"
             cmat = materials.ensure(cname, cspec)
             _set_material(ob, cmat)
+            if self.editable:
+                geometry.apply_route(ob, _r, CARD_THICKNESS / S, 0.0, 1, cmat)
             names.add(ob.name)
             mats.add(cname)
             self._specs.append(cspec)

@@ -14,7 +14,7 @@ from typing import Callable, Optional
 
 import bpy
 
-from . import VERSION, gpu
+from . import VERSION, geometry, gpu
 from . import render as R
 from . import swatches as SW
 from .defaults import APPEARANCE_IDS, QUALITIES, norm_project
@@ -231,8 +231,10 @@ def cmd_save_blend(ctx: Context, args: dict, progress) -> dict:
     appearance = _appearance(args, project)
     quality = _quality(args, project, "final")
     backdrop = _backdrop(project, args)
+    # editable pieces: live curves (round bevel) / GN modifier stacks instead of the baked render meshes,
+    # so bevels, extrusion and modifiers can be tweaked in Blender
     info = ctx.builder.build(project, bundle, appearance, camera=args.get("camera"),
-                             full_bleed=bool(args.get("fullBleed", False)), backdrop=backdrop)
+                             full_bleed=bool(args.get("fullBleed", False)), backdrop=backdrop, editable=True)
     scene = bpy.context.scene
     R.configure(scene, quality, args.get("size"), transparent=info["backdrop"] == "transparent",
                 color_mode=project["render"].get("colorMode", "neutral"), max_frost=info["maxFrost"],
@@ -255,8 +257,14 @@ def cmd_save_blend(ctx: Context, args: dict, progress) -> dict:
             img.unpack(method="REMOVE")
         except Exception:
             pass
+    pieces = [ob for ob in bpy.data.objects if ob.name.startswith("BIS ") and ob.type in ("CURVE", "MESH")
+              and ob.name != "BIS Wallpaper"]
     return {"path": os.path.abspath(out), "packed": len(packed), "appearance": info["appearance"],
-            "quality": quality}
+            "quality": quality,
+            "editable": {"curves": sum(ob.type == "CURVE" for ob in pieces),
+                         "bevelCurves": sum(ob.type == "CURVE" and ob.data.bevel_depth > 0 for ob in pieces),
+                         "modifierStacks": sum(ob.type == "CURVE" and len(ob.modifiers) > 0 for ob in pieces),
+                         "meshes": sum(ob.type == "MESH" for ob in pieces)}}
 
 
 def cmd_swatches(ctx: Context, args: dict, progress) -> dict:
@@ -275,7 +283,8 @@ def cmd_scene_info(ctx: Context, args: dict, progress) -> dict:
             nodes = m.node_tree.nodes
             mats[m.name] = {"key": m.get("bis_key", ""), "preset": m.get("bis_preset", ""), "role": m.get("bis_role", ""),
                             "nodes": len(nodes), "nodeIds": sum(n.as_pointer() % 1000003 for n in nodes),
-                            "raytraceRefraction": bool(m.use_raytrace_refraction), "users": m.users}
+                            "raytraceRefraction": bool(m.use_raytrace_refraction), "users": m.users,
+                            "renderMethod": m.surface_render_method}
     objs = []
     for ob in bpy.data.objects:
         if ob.name.startswith("BIS"):
@@ -283,7 +292,17 @@ def cmd_scene_info(ctx: Context, args: dict, progress) -> dict:
                          "route": ob.data.get("bis_route") if ob.type in ("CURVE", "MESH") and ob.data else None,
                          "material": ob.material_slots[0].material.name if ob.material_slots and
                          ob.material_slots[0].material else None,
-                         "location": [round(v, 5) for v in ob.matrix_world.translation]})
+                         "location": [round(v, 5) for v in ob.matrix_world.translation],
+                         "reason": (bpy.data.curves.get(ob.data.get("bis_curve", "")) or {}).get("bis_reason", "")
+                         if ob.type == "MESH" and ob.data else "",
+                         "visibleTransmission": bool(ob.visible_transmission)})
+            if args.get("check") and ob.type == "MESH" and ob.data and ob.data.get("bis_curve"):
+                cu = bpy.data.curves.get(ob.data["bis_curve"])
+                if cu is not None and cu.get("bis_outline"):
+                    # the baked piece vs its true outline: missing / inverted caps, geometry outside it
+                    objs[-1]["check"] = geometry.check_piece(ob.data, geometry.curve_splines(cu),
+                                                             float(cu.get("bis_bevel", 0.0) or 0.0),
+                                                             json.loads(cu["bis_outline"]))
     return {"materials": mats, "objects": objs, "curves": len(bpy.data.curves), "images": len(bpy.data.images),
             "engine": bpy.context.scene.render.engine, "info": {k: v for k, v in ctx.builder.info.items()
                                                                 if k in ("appearance", "backdrop", "stats")}}

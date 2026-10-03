@@ -17,6 +17,15 @@ export interface Rig {
   intensity: number
 }
 
+/**
+ * Worker lighting.DIFFUSE_CAL / WORLD_CAL (exposure calibration, QA round 2 #12): the key + fill (diffuse) energy and
+ * the world (dome wash, its key softbox spot and front term — diffuse wash + coat sheen on every face) are scaled so a
+ * face-on satin plate reads ≈ its SVG colour instead of being pushed into the tone mapper's highlight compression
+ * (washed-out brand colours); the grazing rim strips (glass edge highlights) keep their energy.
+ */
+export const DIFFUSE_CAL = 0.85
+export const WORLD_CAL = 0.65
+
 /** Linear-light colours used by the worker for warm keys and cool fills. */
 export const WARM = new THREE.Color(1.0, 0.82, 0.64)
 export const COOL = new THREE.Color(0.72, 0.84, 1.0)

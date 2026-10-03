@@ -6,7 +6,7 @@ import type { AppearanceId, Fill, GeometryBundle, LayerTransform, Presets, Proje
 import { appearanceWallpaper, isDarkAppearance } from '../../lib/appearance'
 import { plateOutline } from '../../lib/shapes'
 import { liquidGlassLit, type FakeGlassBinding } from '../../lib/materials3d'
-import { Backdrop, useBackdropBinding, type BackdropSpec } from './Backdrop'
+import { Backdrop, useBackdropBinding, useWallpaperBehind, type BackdropSpec } from './Backdrop'
 import { CameraRig } from './CameraRig'
 import { Effects } from './Effects'
 import { GridOverlay } from './GridOverlay'
@@ -93,6 +93,10 @@ export function SceneRoot(p: SceneRootProps) {
   const plateVisible = canvas.plate.visible && canvas.shape !== 'none' && !platePaint.none
 
   const backdropBehind = backdrop.behind
+  // Like the worker, a clear / tinted rendition keeps its wallpaper under a glass plate even when the backdrop is an
+  // explicit colour (only the background outside the plate takes the colour).
+  const plateWall = useWallpaperBehind(bspec.kind === 'color' ? appearanceWallpaper(p.appearance) : null)
+  const plateBackdrop = plateWall ?? backdropBehind
   const plateBehind = useMemo<FakeGlassBinding>(() => {
     if (!plateVisible) return backdropBehind
     return { map: platePaint.binding.map, color: platePaint.binding.color.clone(), space: 'canvas' }
@@ -149,7 +153,7 @@ export function SceneRoot(p: SceneRootProps) {
             canvas={canvas}
             presets={presets}
             paint={platePaint}
-            behind={backdropBehind}
+            behind={plateBackdrop}
             rimDir={rimDir}
             lit={lit}
           />

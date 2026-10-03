@@ -31,7 +31,8 @@ from .normalize import extract_elements, matte_opaque_image_plate, normalize
 from .ops import ZOrderError, fresh_layers
 from . import ops as _ops
 from .paths import bounds, clean_d, islands, skia_from_d
-from .plate import detect_plate, make_canvas, plate_record
+from .plate import (CLIP_WARN_FRACTION, clipped_fraction, detect_full_bleed, detect_plate, make_canvas,
+                    plate_record)
 from .prepass import Options, auto_name, prepass
 from .split import compute_analysis
 from . import raster, textures
@@ -93,6 +94,8 @@ def import_svg(svg_bytes: bytes, filename: str, project_dir: Path, strategy: Spl
     vb = pre.view_box
     tol = ex.tolerance
     det = detect_plate(elems, vb, tol)
+    if det is None:
+        det = detect_full_bleed(elems, vb, tol)   # edge-to-edge art: frame the canvas to its outline
     plate_idx = set(det["indices"]) if det else set()
 
     # a single compound foreground shape (icon-font glyph): one element per island
@@ -137,6 +140,14 @@ def import_svg(svg_bytes: bytes, filename: str, project_dir: Path, strategy: Spl
     edges, gaps, inside = compute_analysis(elems, vb, tol)
     art = ArtSpace(vb)
     plate = plate_record(det, elems, art) if det else None
+    if plate and plate.get("fullBleed"):
+        pre.warnings.append(f"no plate element: the art fills a {plate['shape']} edge to edge, so the canvas "
+                            f"plate is fitted to the art's outline (IoU {plate['iou']:.2f}, fill {plate['fill']})")
+    if plate:
+        cut = clipped_fraction(elems, plate, art, tol)
+        if cut > CLIP_WARN_FRACTION:
+            pre.warnings.append(f"{cut * 100:.1f}% of the art reaches past the plate edge: its 3D geometry is "
+                                f"clipped to the plate outline")
     warnings = dedupe(pre.warnings)
     store = ElementStore(filename=filename, view_box=vb, elems=elems, gradients=ex.gradients, plate=plate,
                          warnings=warnings, edges=edges, gaps=gaps, inside=inside, tolerance=tol,
@@ -149,7 +160,7 @@ def import_svg(svg_bytes: bytes, filename: str, project_dir: Path, strategy: Spl
     canvas = make_canvas(plate, {e.id: e for e in elems}, art)
     if not elems:
         warnings = dedupe(warnings + ["no paintable shapes found"])
-    source = SourceInfo(filename=filename, viewBox=tuple(vb), warnings=warnings, plateDetected=plate is not None)
+    source = SourceInfo(filename=filename, viewBox=tuple(vb), warnings=warnings, plateDetected=plate is not None and not plate.get("fullBleed"))
     return ImportResult(source=source, elements=[to_model(e, art) for e in elems], layers=layers,
                         canvas=canvas, warnings=warnings)
 

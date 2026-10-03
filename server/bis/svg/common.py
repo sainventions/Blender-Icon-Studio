@@ -16,7 +16,7 @@ from typing import Any, Iterable, Optional, Sequence, Tuple
 from picosvg.svg_transform import Affine2D
 
 #: Bump whenever the output of the pipeline changes for the same input (invalidates caches).
-PIPELINE_VERSION = "bis-svg-1.1"
+PIPELINE_VERSION = "bis-svg-1.3"
 
 SVG_NS = "http://www.w3.org/2000/svg"
 XLINK_NS = "http://www.w3.org/1999/xlink"

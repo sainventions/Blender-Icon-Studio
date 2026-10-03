@@ -170,9 +170,19 @@ def silhouette_tile(bundle, project: Project, base: np.ndarray, size: int) -> np
 
 
 def spline_error(bundle, project: Project, store, size: int) -> float:
-    """% of pixels where silhouette splines and the layer's flat mask disagree by > 25 % coverage."""
+    """% of pixels where silhouette splines and the layer's flat mask (clipped to the plate like
+    the 3D geometry) disagree by > 25 % coverage."""
+    from bis.svg.paths import clean_d
+    from bis.svg.plate import plate_clip_path
+
     worst = 0.0
     sq = store.art.square_view_box()
+    clip = plate_clip_path(store)
+    clip_mask = None
+    if clip is not None:
+        cs = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{" ".join(fmt(v, 6) for v in sq)}" '
+              f'width="{size}" height="{size}"><path fill="#000" d="{clean_d(clip, 4)}"/></svg>')
+        clip_mask = raster.render_svg(cs, size, size)[..., 3].astype(int)
     for L in project.layers:
         lg = bundle.layers.get(L.id)
         if lg is None:
@@ -180,6 +190,8 @@ def spline_error(bundle, project: Project, store, size: int) -> float:
         members = [store.get(e) for e in L.elementIds if e in store.index]
         mask_svg = textures.layer_svg(members, store.gradients, sq, None, size=(size, size), silhouette="#000")
         alpha = raster.render_svg(mask_svg, size, size)[..., 3].astype(int)
+        if clip_mask is not None:
+            alpha = alpha * clip_mask // 255
         d = splines_to_d(lg.silhouette)
         svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="-1 -1 2 2" width="{size}" height="{size}">'
                f'<path transform="scale(1 -1)" fill="#000" d="{d}"/></svg>')

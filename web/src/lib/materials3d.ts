@@ -87,15 +87,19 @@ export interface IconMaterialSpec {
 const WHITE: RGB = [1, 1, 1]
 
 /**
- * Worker b_liquid_glass (art-directed Icon Composer look), mirrored term by term in the shader (BIS_LG):
- *  · face = mix(clear glass, self-lit fill, fill) with fill = mix(fCol, fWhite, whiteness^1.5) · (0.8 → 1.0 bottom →
+ * Worker b_liquid_glass (art-directed Icon Composer look), mirrored term by term in the shader (BIS_LG). With
+ * w = whiteness(paint)^1.5 and L = perceptual lightness of the paint (luminance^(1/2.2); dark paints → smoked glass):
+ *  · face = mix(clear glass, self-lit fill, fill) with fill = mix(fCol, fWhite, w) · ((0.8 + 0.12 w) → 1.0 bottom →
  *    top) [· clamp(1.15 · mono lum) in clear renditions] · (0.12 → 1 smoothstep over e 0.3 → 0.8), where
- *    e = 1 − |N.xy| (0 = silhouette, 1 = cap), fCol = clamp(1.2 − 0.9·transl), fWhite = clamp(1.35 − 0.6·transl, ≤ 0.94);
- *  · self-lit fill = 0.18 · diffuse(body) + 0.82 · emission(body · (0.8 → 1.04 bottom → top) · lit) under the coat;
+ *    e = 1 − |N.xy| (0 = silhouette, 1 = cap), fCol = clamp(1.2 − 0.9·transl), fWhite = clamp(1.45 − 0.6·transl, ≤ 0.97);
+ *  · self-lit fill = 0.18 · diffuse(body) + 0.82 · emission(body · (0.8 → 1.04 bottom → top) · lit · face · (1 + 0.2 w))
+ *    under the coat, face = 1 + 0.45 · edgeDark;
  *  · clear glass tinted body^k, k = 4 → 2 per interface over e 0 → 0.8 (deeper toward the outline; three.js tints a
- *    path once: LG_DEEP), specular level 0.4 and coat both faded out toward the silhouette (e 0.08 → 0.6);
- *  · rim = 5 · rim · (key² + 0.16 · back²) · band(e, RIM_BANDS[specular]), key/back = ±dot(N.xy, L.xy) normalised;
- *  · glow = mix(body, white, 0.3) · band(e, 0.3, 0.45, 0.8, 0.95) · (0.08 + 0.92 · back) · 1.4 · glow · lit;
+ *    path once: LG_DEEP) [× (1 − edgeDark → 1, smoothstep over e 0 → 0.6) in clear-light], specular level 0.4 and coat
+ *    both faded out toward the silhouette (e 0.08 → 0.6) and × dk = (0.35 → 1 over L 0 → 0.5) for dark paints;
+ *  · rim = 5 · rim · (key² + 0.16 · back²) · band(e, RIM_BANDS[specular]) · (0.1 → 1, smoothstep over L 0.05 → 0.7),
+ *    key/back = ±dot(N.xy, L.xy) normalised;
+ *  · glow = mix(body, white, 0.3 L) · band(e, 0.3, 0.45, 0.8, 0.95) · (0.08 + 0.92 · back) · 1.4 · glow · lit;
  *  · lit = clamp(0.55 + 0.45 · key light, 0.4, 1.4) (MaterialContext.lit).
  */
 export interface LiquidGlassModel {
@@ -107,6 +111,8 @@ export interface LiquidGlassModel {
   band: [number, number, number, number]
   /** Inner glow amount (preset `glow`). */
   glow: number
+  /** Clear-light edge darkening of the clear glass toward the outline (0 = off; appearance intent `edgeDark`). */
+  edgeDark: number
 }
 
 /** Worker RIM_BANDS (specular placement of the Liquid Glass rim over e = 1 − |N.xy|). */
@@ -242,10 +248,11 @@ export function describeMaterial(spec: MaterialSpec, presets: Presets | null | u
       s.clearcoatRoughness = 0.02
       s.specularIntensity = LG_SPECULAR
       s.lg = {
-        fill: [clamp(1.2 - 0.9 * transl, 0, 1), clamp(1.35 - 0.6 * transl, 0, 0.94)],
+        fill: [clamp(1.2 - 0.9 * transl, 0, 1), clamp(1.45 - 0.6 * transl, 0, 0.97)],
         rim: specular === 'off' ? 0 : 5 * num('rim', 1),
         band: LG_RIM_BANDS[specular] ?? LG_RIM_BANDS.auto,
         glow: num('glow', 0.35),
+        edgeDark: clamp(intent.edgeDark, 0, 1),
       }
       break
     }
@@ -322,11 +329,14 @@ export function describeMaterial(spec: MaterialSpec, presets: Presets | null | u
       s.rim = { key: 0.07, back: 0.03, glow: 0 }
       break
     case 'satin':
+      // Worker b_satin: Specular IOR Level 0.35 (three.js specularIntensity 1 ≙ Blender 0.5), sheen 0.03 — kept low so
+      // the mirrored studio world does not wash saturated plates out; the coat (presets.json default 0.15) carries
+      // the gloss.
       s.roughness = num('roughness', 0.45)
-      s.clearcoat = num('coat', 0.25)
+      s.clearcoat = num('coat', 0.15)
       s.clearcoatRoughness = 0.06
-      s.specularIntensity = 0.9
-      s.sheen = 0.08
+      s.specularIntensity = 0.7
+      s.sheen = 0.03
       s.sheenRoughness = 0.5
       break
     case 'candy': {
@@ -472,6 +482,15 @@ export interface FakeGlassBinding {
   space: 'canvas' | 'screen'
   /** Canvas space only: the map covers world x, y ∈ ±extent (default 1 = the plate square). */
   extent?: number
+  /** The map is the rendition wallpaper of this tone (worker WALLPAPERS). */
+  tone?: 'light' | 'dark'
+  /**
+   * A glass PLATE over the wallpaper (worker role 'backdrop', its EEVEE stand-in `_backdrop_glass`, which matches the
+   * Cycles render): the wallpaper straight below × the glass colour, desaturated toward grey on the dark wallpaper,
+   * whitened by the frost's forward scatter (screen with (0.1 + 0.35 · frost) · (dark ? 0.32 : 1)), as emission over a
+   * black, coated dielectric. Needs `tone`.
+   */
+  backdropGlass?: boolean
 }
 
 export interface MaterialContext {
@@ -525,6 +544,8 @@ function createUniforms() {
     bisBehindScale: { value: 0.5 },
     bisFakeTransmit: { value: 0 },
     bisFakeRefract: { value: 0 },
+    bisBdScatter: { value: 0 },
+    bisBdDesat: { value: 0 },
     bisMilk: { value: 0 },
     bisMilkRange: { value: new THREE.Vector2(-1, 1) },
     bisCenter: { value: new THREE.Vector2() },
@@ -535,6 +556,7 @@ function createUniforms() {
     bisLgBand: { value: new THREE.Vector4(0.015, 0.06, 0.24, 0.4) },
     bisLgGlow: { value: 0 },
     bisLgLit: { value: 1 },
+    bisLgEdgeDark: { value: 0 },
   }
 }
 
@@ -596,6 +618,8 @@ varying vec4 vBisClip;
   uniform float bisBehindScale;
   uniform float bisFakeTransmit;
   uniform float bisFakeRefract;
+  uniform float bisBdScatter;
+  uniform float bisBdDesat;
   #ifdef BIS_BEHIND_MAP
     uniform sampler2D bisBehindMap;
   #endif
@@ -609,6 +633,7 @@ varying vec4 vBisClip;
   uniform vec4 bisLgBand;
   uniform float bisLgGlow;
   uniform float bisLgLit;
+  uniform float bisLgEdgeDark;
   // Worker _band: smoothstep(a0, a1, e) · (1 − smoothstep(b0, b1, e)).
   float bisBand( vec4 b, float e ) { return smoothstep( b.x, b.y, e ) * ( 1.0 - smoothstep( b.z, b.w, e ) ); }
   // Worker _whiteness: perceptual HSV value × (1 − saturation).
@@ -621,6 +646,13 @@ varying vec4 vBisClip;
 #endif
 // Stretched mono level of the last paint sample (worker _lum, clear renditions).
 float bisLumSt = 1.0;
+// Extra tint of the transmitted (refracted / fake-glass) light on top of the diffuse colour (Liquid Glass: deeper toward
+// the outline, clear-light edge darkening; the diffuse lobe keeps the body colour, like the worker's fill Principled).
+vec3 bisTransTint = vec3( 1.0 );
+// Worker _lightness: perceptual lightness of a (linear) paint colour, luminance^(1/2.2) clamped to 0..1.
+float bisLightness( vec3 c ) {
+  return min( pow( max( dot( c, vec3( 0.2126, 0.7152, 0.0722 ) ), 0.0 ), 1.0 / 2.2 ), 1.0 );
+}
 
 vec3 bisPaintSample() {
   #ifdef BIS_PAINT_MAP
@@ -670,7 +702,11 @@ vec3 bisP = bisPaintSample();
   vec3 bisN0 = inverseTransformDirection( normalize( vNormal ), viewMatrix );
   float bisE = clamp( 1.0 - length( bisN0.xy ), 0.0, 1.0 );
   float bisV01 = clamp( ( vBisArt.y - bisMilkRange.x ) / max( bisMilkRange.y - bisMilkRange.x, 1e-4 ), 0.0, 1.0 );
-  float bisFill = mix( bisLgFill.x, bisLgFill.y, pow( bisWhiteness( bisP ), 1.5 ) ) * mix( 0.8, 1.0, bisV01 );
+  // Paint lightness (dark paints read as dark smoked glass) and whiteness (white glyphs: a dense frosted-white body
+  // with a gentler vertical falloff).
+  float bisLum = bisLightness( bisP );
+  float bisWh = pow( bisWhiteness( bisP ), 1.5 );
+  float bisFill = mix( bisLgFill.x, bisLgFill.y, bisWh ) * mix( 0.8 + 0.12 * bisWh, 1.0, bisV01 );
   #if BIS_INTENT == 1
     bisFill = clamp( bisFill * bisLumSt * 1.15, 0.0, 1.0 );
   #endif
@@ -682,8 +718,12 @@ vec3 bisP = bisPaintSample();
 #if BIS_PAINT_MODE != 2
   #ifdef BIS_LG
     // Clear-glass tint deepens toward the outline (worker: body^(4 → 2) per interface over e 0 → 0.8). three.js
-    // tints a transmitted path once; body^(LG_DEEP) over the same range matches the Cycles renders.
-    diffuseColor.rgb *= pow( max( bisPm, vec3( 0.0 ) ), vec3( mix( ${LG_DEEP[0].toFixed(2)}, ${LG_DEEP[1].toFixed(2)}, clamp( bisE / 0.8, 0.0, 1.0 ) ) ) );
+    // tints a transmitted path once; body^(LG_DEEP) over the same range matches the Cycles renders. The diffuse share
+    // of the self-lit fill keeps the plain body colour (worker: fill Principled on base_m).
+    diffuseColor.rgb *= bisPm;
+    bisTransTint = pow( max( bisPm, vec3( 1e-4 ) ), vec3( mix( ${LG_DEEP[0].toFixed(2)}, ${LG_DEEP[1].toFixed(2)}, clamp( bisE / 0.8, 0.0, 1.0 ) ) - 1.0 ) );
+    // Clear-light: the clear rim lenses darker surroundings so the white frosted glyph separates from the pale plate.
+    bisTransTint *= mix( 1.0 - bisLgEdgeDark, 1.0, smoothstep( 0.0, 0.6, bisE ) );
   #else
     diffuseColor.rgb *= bisPm;
   #endif
@@ -691,9 +731,19 @@ vec3 bisP = bisPaintSample();
 #ifdef BIS_PAINT_ALPHA
   diffuseColor.a *= texture2D( bisPaintMap, bisPaintCoord() ).a;
 #endif
+#ifdef BIS_SRGB_ALPHA
+  // Worker _alpha: SVG composites opacity in gamma-encoded sRGB (a 33 % black overlay keeps 0.67 of the sRGB value,
+  // 0.41 in linear light); the linear-light equivalent is 1 − (1 − a)^k, k = 2.2 − 1.5 · L (L = paint lightness).
+  // Only the front face is drawn here, so the whole k applies (the worker splits it over the slab's two faces).
+  diffuseColor.a = 1.0 - pow( clamp( 1.0 - diffuseColor.a, 0.0, 1.0 ), 2.2 - 1.5 * bisLightness( bisP ) );
+#endif
 #ifdef BIS_FAKE_GLASS
-  vec3 bisGlassColor = diffuseColor.rgb;
-  float bisFakeT = bisFakeTransmit * ( 1.0 - bisMilkV );
+  vec3 bisGlassColor = diffuseColor.rgb * bisTransTint;
+  #ifdef BIS_BACKDROP_GLASS
+    float bisFakeT = 1.0; // black dielectric: everything seen is the (emitted) wallpaper below
+  #else
+    float bisFakeT = bisFakeTransmit * ( 1.0 - bisMilkV );
+  #endif
   diffuseColor.rgb *= 1.0 - bisFakeT;
 #endif
 `
@@ -714,9 +764,11 @@ float bisNV = saturate( dot( normal, bisV ) );
   float bisNl = length( bisN0.xy );
   float bisLs = bisNl > 1e-5 ? dot( bisN0.xy / bisNl, bisLxy ) : 0.0;
   float bisBackSide = max( -bisLs, 0.0 );
-  totalEmissiveRadiance += bisRimColor * ( pow( max( bisLs, 0.0 ), 2.0 ) + 0.16 * bisBackSide * bisBackSide ) * bisBand( bisLgBand, bisE ) * bisLgRim;
-  totalEmissiveRadiance += mix( bisPm, vec3( 1.0 ), 0.3 ) * bisBand( vec4( 0.3, 0.45, 0.8, 0.95 ), bisE ) * ( 0.08 + 0.92 * bisBackSide ) * bisLgGlow;
-  totalEmissiveRadiance += bisPm * bisFill * ${(1 - LG_FILL_DIFFUSE).toFixed(4)} * mix( 0.8, 1.04, bisV01 ) * bisLgLit;
+  // Dark paints: the light-locked rim is subdued and the inner glow carries no white (smoked glass).
+  float bisRimL = mix( 0.1, 1.0, smoothstep( 0.05, 0.7, bisLum ) );
+  totalEmissiveRadiance += bisRimColor * ( pow( max( bisLs, 0.0 ), 2.0 ) + 0.16 * bisBackSide * bisBackSide ) * bisBand( bisLgBand, bisE ) * bisLgRim * bisRimL;
+  totalEmissiveRadiance += mix( bisPm, vec3( 1.0 ), 0.3 * bisLum ) * bisBand( vec4( 0.3, 0.45, 0.8, 0.95 ), bisE ) * ( 0.08 + 0.92 * bisBackSide ) * bisLgGlow;
+  totalEmissiveRadiance += bisPm * bisFill * ${(1 - LG_FILL_DIFFUSE).toFixed(4)} * mix( 0.8, 1.04, bisV01 ) * bisLgLit * ( 1.0 + 0.45 * bisLgEdgeDark ) * ( 1.0 + 0.2 * bisWh );
 #else
   // Light-angle-locked rim (glass doc §3.2): (max(N·L,0)^3 + 0.45·max(−N·L,0)^3) × Fresnel
   vec3 bisNW = inverseTransformDirection( normal, viewMatrix );
@@ -738,8 +790,15 @@ float bisNV = saturate( dot( normal, bisV ) );
   #else
     vec3 bisBehind = bisBehindColor;
   #endif
-  float bisF = 0.04 + 0.96 * pow( 1.0 - bisNV, 5.0 );
-  totalEmissiveRadiance += bisBehind * bisGlassColor * bisFakeT * ( 1.0 - bisF ) * 0.9;
+  #ifdef BIS_BACKDROP_GLASS
+    // Worker _backdrop_glass: wallpaper × glass colour, greyed on the dark wallpaper, screened with the frost scatter.
+    vec3 bisSeen = bisBehind * bisGlassColor;
+    bisSeen = mix( bisSeen, vec3( dot( bisSeen, vec3( 0.2126, 0.7152, 0.0722 ) ) ), bisBdDesat );
+    totalEmissiveRadiance += 1.0 - ( 1.0 - clamp( bisSeen, 0.0, 1.0 ) ) * ( 1.0 - bisBdScatter );
+  #else
+    float bisF = 0.04 + 0.96 * pow( 1.0 - bisNV, 5.0 );
+    totalEmissiveRadiance += bisBehind * bisGlassColor * bisFakeT * ( 1.0 - bisF ) * 0.9;
+  #endif
 #endif
 `
 
@@ -748,7 +807,9 @@ float bisNV = saturate( dot( normal, bisV ) );
 const LG_LIGHTS = /* glsl */ `
 #include <lights_physical_fragment>
 #ifdef BIS_LG
-  float bisTame = clamp( ( bisE - 0.08 ) / 0.52, 0.0, 1.0 );
+  // Dark smoked glass: the grazing coat / specular sheen of the bright studio world would outline every dark piece in
+  // white — subdued by dk = 0.35 → 1 over L 0 → 0.5 (worker).
+  float bisTame = clamp( ( bisE - 0.08 ) / 0.52, 0.0, 1.0 ) * mix( 0.35, 1.0, clamp( bisLum / 0.5, 0.0, 1.0 ) );
   material.specularColor *= bisTame;
   material.specularColorBlended *= bisTame;
   material.specularF90 *= bisTame;
@@ -797,6 +858,11 @@ function patchShader(shader: THREE.WebGLProgramParametersWithUniforms, uniforms:
   )
   transmission = inject(
     transmission,
+    'material.roughness, material.diffuseContribution, material.specularColorBlended',
+    'material.roughness, material.diffuseContribution * bisTransTint, material.specularColorBlended',
+  )
+  transmission = inject(
+    transmission,
     'material.attenuationColor = attenuationColor;',
     'material.attenuationColor = mix( attenuationColor, clamp( bisP, vec3( 0.002 ), vec3( 1.0 ) ), bisAttenuationMix );',
   )
@@ -824,7 +890,7 @@ export class IconMaterial extends THREE.MeshPhysicalMaterial {
   }
 
   override customProgramCacheKey(): string {
-    return 'bis-icon-v3'
+    return 'bis-icon-v4'
   }
 }
 
@@ -863,10 +929,13 @@ export function applyIconMaterial(m: IconMaterial, s: IconMaterialSpec, ctx: Mat
   }
   if (ctx.paint.map) defines.BIS_PAINT_MAP = ''
   if (paintAlpha) defines.BIS_PAINT_ALPHA = ''
+  // Translucent bodies composite like the SVG (sRGB-space opacity, see BIS_SRGB_ALPHA).
+  if (paintAlpha || ctx.opacity < 0.999) defines.BIS_SRGB_ALPHA = ''
   if (fake) {
     defines.BIS_FAKE_GLASS = ''
     defines.BIS_BEHIND_SPACE = fake.space === 'canvas' ? 0 : 1
     if (fake.map) defines.BIS_BEHIND_MAP = ''
+    if (fake.backdropGlass && fake.tone) defines.BIS_BACKDROP_GLASS = ''
   }
   const inflate = ctx.inflate ?? 0
   if (inflate > 1e-4) defines.BIS_INFLATE = ''
@@ -944,6 +1013,9 @@ export function applyIconMaterial(m: IconMaterial, s: IconMaterialSpec, ctx: Mat
   u.bisBehindScale.value = 0.5 / Math.max(1e-3, fake?.extent ?? 1)
   u.bisFakeTransmit.value = fake ? clamp(s.transmission, 0, 1) * 0.92 : 0
   u.bisFakeRefract.value = fake ? 0.035 * (s.ior - 1) : 0
+  const darkWall = fake?.tone === 'dark'
+  u.bisBdScatter.value = clamp((0.1 + 0.35 * s.roughness) * (darkWall ? 0.32 : 1), 0, 1)
+  u.bisBdDesat.value = darkWall ? 0.45 : 0
   u.bisCenter.value.set(ctx.center?.[0] ?? 0, ctx.center?.[1] ?? 0)
   u.bisRadius.value = ctx.radius ?? 1
   u.bisInflate.value = inflate
@@ -956,6 +1028,7 @@ export function applyIconMaterial(m: IconMaterial, s: IconMaterialSpec, ctx: Mat
     u.bisLgBand.value.set(s.lg.band[0], s.lg.band[1], s.lg.band[2], s.lg.band[3])
     u.bisLgGlow.value = 1.4 * s.lg.glow * lit
     u.bisLgLit.value = lit
+    u.bisLgEdgeDark.value = s.lg.edgeDark
   }
 
   const topology = [

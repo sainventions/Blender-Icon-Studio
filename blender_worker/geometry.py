@@ -14,6 +14,13 @@ not used.
 Curve datablocks are cached by (layer hash, piece, depth params, route) so re-renders after material /
 lighting edits never rebuild geometry.
 
+Robustness (QA round 2): region / silhouette splines are fills, so they are always closed (an open subpath
+was swept as a hollow tube); collinear runs are joined before only CONVEX corners are filleted (a concave
+fillet grew the silhouette); and every build is validated by casting camera rays at the evaluated mesh
+(:func:`check_piece`: no missing / inverted / folded cap, nothing outside the outline). A failing build
+falls back to the GN route, then to a bevel clamped to the piece's own safe radius, then to a plain
+extrusion. The saved .blend (``save_blend``) uses the curves themselves (live bevel / modifier stack).
+
 Baked meshes (:func:`solid_mesh`): the scene renders MESH objects whose data is the curve (or the GN
 route's Fill Curve → Solidify → Bevel stack) evaluated ONCE and cached. A render with persistent data off
 evaluates every object from scratch, so live curve bevels / modifier stacks were re-evaluated on every
@@ -22,13 +29,14 @@ Splines get an adaptive ``resolution_u`` (dense traced contours need no 12× sub
 """
 from __future__ import annotations
 
+import json
 import math
 from collections import OrderedDict
 from typing import Iterable, Optional
 
 import bpy
 
-from .util import stable_hash
+from .util import log, stable_hash
 
 FALLBACK_RATIO = 0.30
 MIN_BEVEL = 1e-4
@@ -75,27 +83,132 @@ def _flat_area(pts: list, closed: bool, n: int = 6) -> float:
     return 0.5 * sum(ring[i - 1][0] * ring[i][1] - ring[i][0] * ring[i - 1][1] for i in range(len(ring)))
 
 
+def count_open(splines: list) -> int:
+    """Splines flagged ``closed: false`` (SVG subpaths without 'Z', e.g. ending in 'h0')."""
+    return sum(1 for s in splines if not s.get("closed", True) and len(s.get("points") or []) > 1)
+
+
 def sanitize(splines: list, eps: float = 2.5e-4, min_area: float = 2e-7) -> list:
-    """Merge coincident consecutive points (zero-length segments make the curve bevel shoot spikes
-    along an undefined normal) and drop degenerate slivers."""
+    """Region / silhouette splines are FILLS: every spline comes back closed (an open subpath is filled by
+    SVG as if closed — a flag left open made the curve bevel sweep a hollow tube along the outline). A
+    first point that coincides with the last is merged into it; otherwise an open spline is closed with a
+    straight segment. Coincident consecutive points are merged (zero-length segments make the curve bevel
+    shoot spikes along an undefined normal) and degenerate slivers are dropped."""
     out = []
     e2 = eps * eps
     for s in splines:
         pts = [{"co": list(p["co"]), "hl": list(p.get("hl") or p["co"]), "hr": list(p.get("hr") or p["co"])}
                for p in s.get("points") or []]
-        closed = bool(s.get("closed", True))
+        was_open = not bool(s.get("closed", True))
         merged: list = []
         for p in pts:
             if merged and _d2(p["co"], merged[-1]["co"]) < e2:
                 merged[-1]["hr"] = p["hr"]
             else:
                 merged.append(p)
-        if closed and len(merged) > 1 and _d2(merged[0]["co"], merged[-1]["co"]) < e2:
+        if len(merged) > 1 and _d2(merged[0]["co"], merged[-1]["co"]) < e2:
             last = merged.pop()
             merged[0]["hl"] = last["hl"]
-        if len(merged) < 2 or (closed and abs(_flat_area(merged, closed)) < min_area):
+        elif was_open and len(merged) > 1:
+            # implicit straight closing segment (the open path's dangling end handles are meaningless)
+            a, b = merged[-1], merged[0]
+            a["hr"] = [a["co"][0] + (b["co"][0] - a["co"][0]) / 3, a["co"][1] + (b["co"][1] - a["co"][1]) / 3]
+            b["hl"] = [b["co"][0] + (a["co"][0] - b["co"][0]) / 3, b["co"][1] + (a["co"][1] - b["co"][1]) / 3]
+        if len(merged) < 2 or abs(_flat_area(merged, True)) < min_area:
             continue
-        out.append({**s, "points": merged})
+        out.append({**s, "closed": True, "points": merged})
+    return out
+
+
+# ------------------------------------------------------------------------------------------------
+# collinear runs: boolean-op outlines split straight edges into many short collinear segments. Fillets
+# are limited by the adjacent segment lengths, so a sharp corner between two such runs stayed unfilleted
+# (miter-pinched round bevel: dark specks / glints at acute corners — Home, Drive). Joining the runs
+# first lets the corner get its full fillet.
+# ------------------------------------------------------------------------------------------------
+STRAIGHT_TURN = 3.0        # degrees: a joint between straight segments that turns less is removable
+STRAIGHT_TOL = 4e-4        # max distance of a removed point / handle from the merged chord (local units)
+
+
+def _seg_straight(p0, c1, c2, p1, tol: float) -> bool:
+    dx, dy = p1[0] - p0[0], p1[1] - p0[1]
+    ln = math.hypot(dx, dy)
+    if ln < 1e-9:
+        return True
+    for c in (c1, c2):
+        rx, ry = c[0] - p0[0], c[1] - p0[1]
+        if abs(rx * dy - ry * dx) / ln > tol:
+            return False
+        t = (rx * dx + ry * dy) / ln
+        if t < -tol or t > ln + tol:
+            return False
+    return True
+
+
+def _pt_line_dist(p, a, b) -> float:
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    ln = math.hypot(dx, dy)
+    if ln < 1e-12:
+        return math.dist(p, a)
+    t = max(0.0, min(1.0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (ln * ln)))
+    return math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy)
+
+
+def merge_collinear(splines: list, max_turn: float = STRAIGHT_TURN, tol: float = STRAIGHT_TOL) -> list:
+    """Remove points joining two straight segments almost in line (turn < ``max_turn``) as long as every
+    removed point stays within ``tol`` of the merged chord. Closed splines only; curved segments are kept."""
+    cos_t = math.cos(math.radians(max_turn))
+    out = []
+    for s in splines:
+        pts = s["points"]
+        m = len(pts)
+        if m < 4:
+            out.append(s)
+            continue
+        straight = [_seg_straight(pts[i]["co"], pts[i]["hr"], pts[(i + 1) % m]["hl"], pts[(i + 1) % m]["co"], tol)
+                    for i in range(m)]
+
+        def removable(i):
+            if not (straight[i - 1] and straight[i]):
+                return False
+            a, p, b = pts[i - 1]["co"], pts[i]["co"], pts[(i + 1) % m]["co"]
+            u = _unit((p[0] - a[0], p[1] - a[1]))
+            v = _unit((b[0] - p[0], b[1] - p[1]))
+            return u[0] * v[0] + u[1] * v[1] >= cos_t
+
+        rem = [removable(i) for i in range(m)]
+        if not any(rem):
+            out.append(s)
+            continue
+        start = next((i for i in range(m) if not rem[i]), 0)
+        keep = [start]
+        run: list = []
+        for k in range(1, m + 1):
+            i = (start + k) % m
+            if k < m and rem[i]:
+                a = pts[keep[-1]]["co"]
+                b = pts[(i + 1) % m]["co"]
+                if all(_pt_line_dist(pts[j]["co"], a, b) <= tol for j in run + [i]):
+                    run.append(i)
+                    continue
+                keep.append(i)          # deviation too large: keep this point as a new anchor
+                run = []
+                continue
+            if k < m:
+                keep.append(i)
+            run = []
+        if len(keep) < 3 or len(keep) == m:
+            out.append(s)
+            continue
+        new = [{"co": list(pts[i]["co"]), "hl": list(pts[i]["hl"]), "hr": list(pts[i]["hr"])} for i in keep]
+        n = len(new)
+        for k in range(n):
+            i, j = keep[k], keep[(k + 1) % n]
+            if (j - i) % m != 1:        # merged run: straight chord with handles at thirds
+                a, b = new[k], new[(k + 1) % n]
+                a["hr"] = [a["co"][0] + (b["co"][0] - a["co"][0]) / 3, a["co"][1] + (b["co"][1] - a["co"][1]) / 3]
+                b["hl"] = [b["co"][0] + (a["co"][0] - b["co"][0]) / 3, b["co"][1] + (a["co"][1] - b["co"][1]) / 3]
+        out.append({**s, "points": new})
     return out
 
 
@@ -184,10 +297,25 @@ def _unit(v):
     return (v[0] / n, v[1] / n) if n > 1e-12 else (0.0, 0.0)
 
 
-def fillet_corners(splines: list, radius: float, min_turn: float = FILLET_MIN_TURN, min_radius: float = 0.0) -> list:
+def _material_left(s: dict) -> bool:
+    """True when the filled side of a closed spline is on the left of its direction of travel (CCW outer
+    or CW hole; a hole is an odd nesting depth)."""
+    ring = _flatten_ring(s["points"], True, 4)
+    if len(ring) < 3:
+        return True
+    area = 0.5 * sum(ring[i - 1][0] * ring[i][1] - ring[i][0] * ring[i - 1][1] for i in range(len(ring)))
+    hole = bool(s.get("hole")) or int(s.get("depth", 0) or 0) % 2 == 1
+    return (area > 0) != hole
+
+
+def fillet_corners(splines: list, radius: float, min_turn: float = FILLET_MIN_TURN, min_radius: float = 0.0,
+                   convex_only: bool = True, skipped: Optional[list] = None) -> list:
     """Round every corner sharper than ``min_turn`` with an (approximately circular) fillet of
     ``radius``. A fillet that does not fit in 45 % of the adjacent segments is shrunk, or — when
-    ``min_radius`` > 0 — skipped (the corner stays sharp). Closed splines only."""
+    ``min_radius`` > 0 — skipped (the corner stays sharp; its turn angle is appended to ``skipped``).
+    ``convex_only``: concave corners are left sharp — a fillet there adds material outside the outline
+    (the silhouette grew into the inner corners of a '+'), and the inset outline of a concave corner
+    does not loop anyway. Closed splines only."""
     if radius <= 1e-6:
         return splines
     out = []
@@ -197,6 +325,7 @@ def fillet_corners(splines: list, radius: float, min_turn: float = FILLET_MIN_TU
         if not s.get("closed", True) or m < 2:
             out.append(s)
             continue
+        mat_left = _material_left(s) if convex_only else True
         segs = [(tuple(pts[i]["co"]), tuple(pts[i]["hr"]), tuple(pts[(i + 1) % m]["hl"]), tuple(pts[(i + 1) % m]["co"]))
                 for i in range(m)]
         acc = [_arclen_table(sg) for sg in segs]
@@ -216,6 +345,10 @@ def fillet_corners(splines: list, radius: float, min_turn: float = FILLET_MIN_TU
             if tout == (0.0, 0.0):
                 tout = _unit((sout[3][0] - sout[0][0], sout[3][1] - sout[0][1]))
             ang = math.degrees(math.acos(max(-1.0, min(1.0, tin[0] * tout[0] + tin[1] * tout[1]))))
+            if convex_only:
+                left_turn = tin[0] * tout[1] - tin[1] * tout[0] > 0
+                if left_turn != mat_left:
+                    continue            # concave corner
             if min_turn < ang < 175.0:
                 turn[i] = ang
                 cut[i] = radius * math.tan(math.radians(ang) / 2)
@@ -229,6 +362,8 @@ def fillet_corners(splines: list, radius: float, min_turn: float = FILLET_MIN_TU
             if cut[i] > lim:
                 # a fillet tighter than the requested radius would make the bevel's inset outline loop
                 # (offset of an arc with radius < offset distance) -> leave this corner sharp
+                if min_radius > 0 and skipped is not None:
+                    skipped.append(turn[i])
                 cut[i] = 0.0 if min_radius > 0 else lim
         new_pts = []
         for i in range(m):
@@ -268,6 +403,77 @@ def fillet_corners(splines: list, radius: float, min_turn: float = FILLET_MIN_TU
             final.append({"co": p["co"], "hl": p["hl"] if p["hl"] is not None else p["co"],
                           "hr": p["hr"] if p["hr"] is not None else p["co"]})
         out.append({**s, "points": final})
+    return out
+
+
+GUARD_RATIO = 1.0     # guard point distance from a sharp corner, relative to the bevel
+
+
+def _seg_tangents(pts: list, i: int) -> tuple:
+    """(incoming, outgoing) unit tangents at point i of a closed spline."""
+    m = len(pts)
+    a, p, b = pts[i - 1], pts[i], pts[(i + 1) % m]
+    tin = (0.0, 0.0)
+    for q in (p["hl"], a["hr"], a["co"]):
+        tin = _unit((p["co"][0] - q[0], p["co"][1] - q[1]))
+        if tin != (0.0, 0.0):
+            break
+    tout = (0.0, 0.0)
+    for q in (p["hr"], b["hl"], b["co"]):
+        tout = _unit((q[0] - p["co"][0], q[1] - p["co"][1]))
+        if tout != (0.0, 0.0):
+            break
+    return tin, tout
+
+
+def guard_corners(splines: list, dist: float, min_turn: float = FILLET_MIN_TURN) -> list:
+    """Split the STRAIGHT segments next to every corner left sharp (concave corners — fillet_corners keeps
+    them sharp so the silhouette never grows — and unfilletable convex ones) at ``dist`` from the corner.
+
+    The round curve bevel mitres a sharp corner and its smooth vertex normal points along the bisector. A
+    straight edge is a single quad strip (resolution 1 on all-straight splines), so that diagonal normal was
+    interpolated along the WHOLE edge: skewed, wedge-shaped shading on every edge of a rectangular hole
+    (Sheets' cells, Slides' frame). A guard point confines the mitre normal to ``dist`` of the corner; the
+    outline is unchanged. Closed splines only."""
+    if dist <= 1e-6:
+        return splines
+    out = []
+    for s in splines:
+        pts = s["points"]
+        m = len(pts)
+        if not s.get("closed", True) or m < 3:
+            out.append(s)
+            continue
+        sharp = []
+        for i in range(m):
+            tin, tout = _seg_tangents(pts, i)
+            ang = math.degrees(math.acos(max(-1.0, min(1.0, tin[0] * tout[0] + tin[1] * tout[1]))))
+            sharp.append(min_turn < ang < 175.0)
+        if not any(sharp):
+            out.append(s)
+            continue
+        cp = [{"co": list(p["co"]), "hl": list(p["hl"]), "hr": list(p["hr"])} for p in pts]
+        new = []
+        for i in range(m):
+            p, q = cp[i], cp[(i + 1) % m]
+            new.append(p)
+            if not (sharp[i] or sharp[(i + 1) % m]):
+                continue
+            if not _seg_straight(p["co"], p["hr"], q["hl"], q["co"], STRAIGHT_TOL):
+                continue
+            ln = math.dist(p["co"], q["co"])
+            d = min(dist, 0.3 * ln)
+            if d < 1e-3 * max(ln, 1e-9) or d < 1e-4:
+                continue
+            ts = ([d / ln] if sharp[i] else []) + ([1.0 - d / ln] if sharp[(i + 1) % m] else [])
+            mids = [{"co": [p["co"][0] + (q["co"][0] - p["co"][0]) * t, p["co"][1] + (q["co"][1] - p["co"][1]) * t]}
+                    for t in ts]
+            chain = [p] + mids + [q]
+            for u, v in zip(chain, chain[1:]):
+                u["hr"] = [u["co"][0] + (v["co"][0] - u["co"][0]) / 3, u["co"][1] + (v["co"][1] - u["co"][1]) / 3]
+                v["hl"] = [v["co"][0] + (u["co"][0] - v["co"][0]) / 3, v["co"][1] + (u["co"][1] - v["co"][1]) / 3]
+            new.extend(mids)
+        out.append({**s, "points": new})
     return out
 
 
@@ -325,32 +531,12 @@ def _fill_splines(cu: bpy.types.Curve, splines: Iterable[dict]) -> int:
 
 CUSP_DEG = 150.0     # sharper tips than this make the round curve bevel overshoot -> GN route
 FILLET_RATIO = 1.2   # corner fillet radius relative to the bevel (≥ 1: the inset outline must not loop)
+ACUTE_GN_DEG = 100.0  # an unfilletable convex corner sharper than this pinches the round bevel -> GN route
+_PENDING_MESH: dict = {}   # curve key -> name of the mesh evaluated (and validated) on the cache miss
 
 
-def curve_data(key_parts: dict, splines: list, thickness: float, bevel: float, route: str,
-               segments: int = 6) -> tuple[bpy.types.Curve, str]:
-    """Cached 2D curve datablock in LOCAL units (z centred on 0, spans ±thickness/2).
-
-    Returns ``(curve, route)``; the route may switch from 'curve' to 'gn' when the (sanitised) splines
-    contain cusps. Splines are only processed on a cache miss."""
-    key = stable_hash({**key_parts, "t": round(thickness, 6), "b": round(bevel, 6), "r": route, "s": segments})
-    hit = _CURVE_CACHE.get(key)
-    cu = bpy.data.curves.get(hit[0]) if hit else None
-    if cu is not None:
-        _CURVE_CACHE.move_to_end(key)
-        return cu, hit[1]
-    clean = sanitize(splines)
-    final_route = route
-    if route == "curve" and bevel > MIN_BEVEL and max_turn_deg(clean) > CUSP_DEG:
-        final_route = "gn"
-    if final_route == "curve" and bevel > MIN_BEVEL:
-        clean = sanitize(fillet_corners(clean, FILLET_RATIO * bevel, min_radius=bevel))
-    cu = bpy.data.curves.new(f"BIS~{key[:10]}", "CURVE")
-    cu.dimensions = "2D"
-    cu.resolution_u = 12
-    cu.twist_mode = "MINIMUM"
-    _fill_splines(cu, clean)
-    if final_route == "curve":
+def _set_curve_route(cu: bpy.types.Curve, route: str, thickness: float, bevel: float, segments: int) -> None:
+    if route == "curve":
         cu.fill_mode = "BOTH"
         cu.extrude = max(thickness / 2.0 - bevel, 0.0)
         cu.bevel_mode = "ROUND"
@@ -363,65 +549,317 @@ def curve_data(key_parts: dict, splines: list, thickness: float, bevel: float, r
         cu.extrude = 0.0
         cu.bevel_depth = 0.0
         cu.offset = 0.0
-    cu.materials.append(None)
-    if final_route == "curve" and bevel > MIN_BEVEL and not _caps_ok(cu, clean, bevel, thickness):
-        # the inset (offset = −bevel) outline self-intersected and scanfill dropped the caps
-        # (blocky traced contours, small notches): rebuild through Fill Curve + Solidify + Bevel
-        final_route = "gn"
-        cu.fill_mode = "NONE"
-        cu.extrude = 0.0
-        cu.bevel_depth = 0.0
-        cu.offset = 0.0
-    cu["bis_key"] = key
-    cu["bis_route"] = final_route
-    _CURVE_CACHE[key] = (cu.name, final_route)
-    _evict()
-    return cu, final_route
 
 
-def _ring_metrics(splines: list) -> tuple[float, float]:
-    """(even-odd filled area, total perimeter) of flattened splines."""
-    area = 0.0
-    perim = 0.0
-    for s in splines:
-        ring = _flatten_ring(s["points"], bool(s.get("closed", True)), 6)
-        if len(ring) < 3:
-            continue
-        a = abs(0.5 * sum(ring[i - 1][0] * ring[i][1] - ring[i][0] * ring[i - 1][1] for i in range(len(ring))))
-        perim += sum(math.dist(ring[i - 1], ring[i]) for i in range(len(ring)))
-        area += -a if s.get("hole") else a
-    return abs(area), perim
-
-
-def _caps_ok(cu: bpy.types.Curve, splines: list, bevel: float, thickness: float) -> bool:
-    """Evaluate the bevelled curve once and check that its front cap exists (≥ 45 % of the expected
-    inset area). Runs only on a curve-cache miss."""
-    area, perim = _ring_metrics(splines)
-    expected = area - perim * bevel
-    if expected <= 0.08 * area or area < 1e-6:
-        return True            # too thin to judge; the clamp already protects thin features
-    # an UNLINKED original object: new_from_object evaluates just this curve (extrude/bevel/offset are curve
-    # data, not modifiers). Linking it into the scene + depsgraph update re-evaluated the scene's relations
-    # on every cache miss (2.5x slower on 40-piece icons, identical cap areas).
-    ob = bpy.data.objects.new("BIS~capcheck", cu)
+def _evaluate(cu: bpy.types.Curve, route: str, thickness: float, gb: float, segments: int) -> bpy.types.Mesh:
+    """Evaluate a piece once into a new mesh: the bevelled curve (curve route) or Fill Curve → Solidify →
+    Bevel (GN route, ``gb`` = Bevel modifier width)."""
+    ob = bpy.data.objects.new("BIS~bake", cu)
     try:
-        me = bpy.data.meshes.new_from_object(ob)
-        try:
-            import numpy as np
-            n = len(me.polygons)
-            nrm = np.empty(n * 3, dtype=np.float32)
-            ctr = np.empty(n * 3, dtype=np.float32)
-            ar = np.empty(n, dtype=np.float32)
-            me.polygons.foreach_get("normal", nrm)
-            me.polygons.foreach_get("center", ctr)
-            me.polygons.foreach_get("area", ar)
-            front = (nrm[2::3] > 0.999) & (ctr[2::3] >= thickness / 2.0 - 1e-5)
-            cap = float(ar[front].sum())
-        finally:
-            bpy.data.meshes.remove(me)
+        if route != "gn":
+            # extrude / bevel / offset are curve data: an UNLINKED original object evaluates just this curve
+            # (linking it into the icon scene re-evaluated the scene's relations on every cache miss)
+            return bpy.data.meshes.new_from_object(ob)
+        sc = _bake_scene()
+        sc.collection.objects.link(ob)
+        apply_route(ob, "gn", thickness, gb, segments, None)
+        with bpy.context.temp_override(scene=sc, view_layer=sc.view_layers[0]):
+            dg = bpy.context.evaluated_depsgraph_get()     # the bake scene's own depsgraph
+            return bpy.data.meshes.new_from_object(ob.evaluated_get(dg))
     finally:
         bpy.data.objects.remove(ob, do_unlink=True)
-    return cap >= 0.45 * expected
+        sc = bpy.data.scenes.get(BAKE_SCENE)
+        if sc is not None and sc != bpy.context.scene:     # keep saved .blend files free of it
+            bpy.data.scenes.remove(sc)
+
+
+def piece_safe_radius(splines: list, res: int = 128, keep: float = 0.985) -> float:
+    """Largest radius whose morphological opening keeps ``keep`` of the piece's area (raster, numpy only):
+    the bevel a single piece can take without inverting its thin features. The layer ``safeRadius`` is
+    measured on the layer union, where a thin ring merged with its neighbours can look thick (Ti73's pie)."""
+    import numpy as np
+    rings = [np.asarray(_flatten_ring(s["points"], True, 6), dtype=np.float64) for s in splines]
+    rings = [r for r in rings if len(r) >= 3]
+    if not rings:
+        return 0.0
+    allr = np.vstack(rings)
+    x0, y0 = allr.min(axis=0)
+    x1, y1 = allr.max(axis=0)
+    h = max(x1 - x0, y1 - y0) / res
+    if h <= 1e-9:
+        return 0.0
+    xs = np.arange(x0 - 2 * h, x1 + 2 * h, h)
+    ys = np.arange(y0 - 2 * h, y1 + 2 * h, h)
+    inside = _scan_inside(_ring_segments(rings), xs, ys)
+    area = int(inside.sum())
+    if area < 8:
+        return 0.0
+
+    def step(m, grow, square):
+        o = m.copy()
+        op = np.logical_or if grow else np.logical_and
+        o[1:, :] = op(o[1:, :], m[:-1, :])
+        o[:-1, :] = op(o[:-1, :], m[1:, :])
+        o[:, 1:] = op(o[:, 1:], m[:, :-1])
+        o[:, :-1] = op(o[:, :-1], m[:, 1:])
+        if square:
+            o[1:, 1:] = op(o[1:, 1:], m[:-1, :-1])
+            o[:-1, :-1] = op(o[:-1, :-1], m[1:, 1:])
+            o[1:, :-1] = op(o[1:, :-1], m[:-1, 1:])
+            o[:-1, 1:] = op(o[:-1, 1:], m[1:, :-1])
+        return o
+
+    def opened(rp: int) -> int:
+        m = inside
+        for i in range(rp):            # alternating cross / square: an octagon ~ a disc of radius rp
+            m = step(m, False, i % 2 == 1)
+        for i in range(rp):
+            m = step(m, True, i % 2 == 1)
+        return int((m & inside).sum())
+
+    lo, hi = 0, max(1, res // 2)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if opened(mid) >= keep * area:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo * h
+
+
+def _badness(rep: dict) -> float:
+    return rep["holes"] + rep["grow"]
+
+
+def curve_data(key_parts: dict, splines: list, thickness: float, bevel: float, route: str,
+               segments: int = 6, gn_bevel: Optional[float] = None) -> tuple[bpy.types.Curve, str]:
+    """Cached 2D curve datablock in LOCAL units (z centred on 0, spans ±thickness/2).
+
+    Returns ``(curve, route)``. Splines are only processed on a cache miss: sanitised (always closed
+    fills), collinear runs joined, convex corners filleted for the round bevel. Every candidate build is
+    evaluated once and validated with :func:`check_piece` (no missing / inverted cap, nothing outside the
+    outline); the first one that passes wins and its mesh is handed to :func:`solid_mesh`:
+
+    1. 'curve' — round curve bevel, ``offset = −bevel`` (skipped for cusps / unfilletable acute corners);
+    2. 'gn' — Fill Curve → Solidify → Bevel modifier (``gn_bevel``; clamps itself, never grows);
+    3. 'curve' with the bevel clamped to the piece's own safe radius (thin rings whose layer safeRadius was
+       measured on a thick union; Fill Curve can also fail on holes that nearly touch the outline);
+    4. 'curve' without bevel (plain extrusion).
+    If all fail, the least bad one is kept. ``cu['bis_bevel']`` / ``cu['bis_gb']`` record the bevel used."""
+    gb = bevel if gn_bevel is None else gn_bevel
+    key = stable_hash({**key_parts, "t": round(thickness, 6), "b": round(bevel, 6), "r": route, "s": segments,
+                       "gb": round(gb, 6), "v": 5})
+    hit = _CURVE_CACHE.get(key)
+    cu = bpy.data.curves.get(hit[0]) if hit else None
+    if cu is not None:
+        _CURVE_CACHE.move_to_end(key)
+        return cu, hit[1]
+    clean = merge_collinear(sanitize(splines))
+    reasons = []
+    cands = []
+    if route == "curve" and bevel > MIN_BEVEL:
+        if max_turn_deg(clean) > CUSP_DEG:
+            reasons.append("cusp")
+        else:
+            skipped: list = []
+            shaped = guard_corners(sanitize(fillet_corners(clean, FILLET_RATIO * bevel, min_radius=bevel,
+                                                           skipped=skipped)), GUARD_RATIO * bevel)
+            if any(t > ACUTE_GN_DEG for t in skipped):
+                reasons.append("acute corner")
+            else:
+                cands.append(("curve", bevel, shaped))
+    cands.append(("gn", gb, clean))
+    cu = bpy.data.curves.new(f"BIS~{key[:10]}", "CURVE")
+    cu.dimensions = "2D"
+    cu.resolution_u = 12
+    cu.twist_mode = "MINIMUM"
+    cu.materials.append(None)
+    best = None            # (badness, route, bevel, splines, mesh)
+    k = 0
+    tried_safe = False
+    while k < len(cands):
+        r_route, r_bev, r_spl = cands[k]
+        k += 1
+        cu.splines.clear()
+        _fill_splines(cu, r_spl)
+        _set_curve_route(cu, r_route, thickness, r_bev, segments)
+        me = _evaluate(cu, r_route, thickness, r_bev, segments)
+        rep = check_piece(me, r_spl, r_bev if r_route == "curve" else 0.0, clean)
+        if piece_ok(rep):
+            if best is not None:
+                bpy.data.meshes.remove(best[4])
+            best = (0.0, r_route, r_bev, r_spl, me)
+            break
+        reasons.append(f"{r_route} {r_bev:.3f} check (holes {rep['holes']:.3f}, outside {rep['grow']:.3f})")
+        if best is None or _badness(rep) < best[0]:
+            if best is not None:
+                bpy.data.meshes.remove(best[4])
+            best = (_badness(rep), r_route, r_bev, r_spl, me)
+        else:
+            bpy.data.meshes.remove(me)
+        if k == len(cands) and not tried_safe:
+            tried_safe = True
+            sr = 0.9 * piece_safe_radius(clean)
+            b2 = min(bevel if bevel > MIN_BEVEL else gb, sr, thickness / 2.0)
+            if b2 > MIN_BEVEL:
+                cands.append(("curve", b2, guard_corners(sanitize(fillet_corners(clean, FILLET_RATIO * b2,
+                                                                                  min_radius=b2)), GUARD_RATIO * b2)))
+            cands.append(("curve", 0.0, clean))
+    _, f_route, f_bev, f_spl, me = best
+    cu.splines.clear()
+    _fill_splines(cu, f_spl)
+    _set_curve_route(cu, f_route, thickness, f_bev, segments)
+    if reasons:
+        cu["bis_reason"] = "; ".join(reasons)
+        if best[0] > 0:
+            log("piece kept with defects:", key_parts.get("lid", ""), key_parts.get("p", ""), cu["bis_reason"])
+    cu["bis_key"] = key
+    cu["bis_route"] = f_route
+    cu["bis_outline"] = json.dumps([{"points": sp["points"], "hole": bool(sp.get("hole"))} for sp in clean],
+                                   separators=(",", ":"))        # true fill outline (scene_info checks)
+    cu["bis_bevel"] = f_bev if f_route == "curve" else 0.0
+    cu["bis_gb"] = f_bev if f_route == "gn" else 0.0
+    _PENDING_MESH[key] = me.name
+    _CURVE_CACHE[key] = (cu.name, f_route)
+    _evict()
+    return cu, f_route
+
+
+CHECK_GRID = 44          # samples along the longer side of a piece for check_piece
+HOLE_MAX = 0.006         # tolerated fraction of inside samples without a front-facing surface
+GROW_MAX = 0.004         # tolerated outside hits (fraction of the inside sample count)
+
+
+def _ring_segments(rings: list):
+    import numpy as np
+    return np.vstack([np.hstack([r, np.roll(r, -1, axis=0)]) for r in rings])
+
+
+def _scan_inside(segs, xs, ys):
+    """Even-odd raster (len(ys), len(xs)) of closed polylines given as segments (E, 4): one scanline per
+    row (crossings sorted + searchsorted) — O(rows · E) instead of O(points · E)."""
+    import numpy as np
+    xa, ya, xb, yb = segs[:, 0], segs[:, 1], segs[:, 2], segs[:, 3]
+    out = np.zeros((len(ys), len(xs)), dtype=bool)
+    for j, y in enumerate(ys):
+        c = (ya > y) != (yb > y)
+        if not c.any():
+            continue
+        xc = xa[c] + (y - ya[c]) * (xb[c] - xa[c]) / (yb[c] - ya[c])
+        xc.sort()
+        out[j] = (np.searchsorted(xc, xs) % 2) == 1
+    return out
+
+
+def _near_mask(segs, gx0: float, gy0: float, h: float, shape: tuple, tol: float):
+    """Cells (centres gx0 + i·h, gy0 + j·h) that may lie within ``tol`` of the polylines (conservative:
+    the outline is sampled every h/4; a cell centre within ``tol`` of a sample lies at most
+    floor(tol/h + 0.625) cells (Chebyshev) from that sample's cell)."""
+    import numpy as np
+    x0, y0 = segs[:, 0], segs[:, 1]
+    dx, dy = segs[:, 2] - x0, segs[:, 3] - y0
+    n = np.maximum(1, np.ceil(np.hypot(dx, dy) / (0.25 * h)).astype(int))
+    idx = np.repeat(np.arange(len(segs)), n)
+    t = (np.arange(int(n.sum())) - np.repeat(np.cumsum(n) - n, n)) / np.repeat(n, n)
+    qx = x0[idx] + t * dx[idx]
+    qy = y0[idx] + t * dy[idx]
+    ny, nx = shape
+    ix = np.clip(np.round((qx - gx0) / h).astype(int), 0, nx - 1)
+    iy = np.clip(np.round((qy - gy0) / h).astype(int), 0, ny - 1)
+    m = np.zeros(shape, dtype=bool)
+    m[iy, ix] = True
+    for _ in range(int(np.floor(tol / h + 0.625))):
+        o = m.copy()
+        o[1:, :] |= m[:-1, :]
+        o[:-1, :] |= m[1:, :]
+        o[:, 1:] |= m[:, :-1]
+        o[:, :-1] |= m[:, 1:]
+        o[1:, 1:] |= m[:-1, :-1]
+        o[:-1, :-1] |= m[1:, 1:]
+        o[1:, :-1] |= m[:-1, 1:]
+        o[:-1, 1:] |= m[1:, :-1]
+        m = o
+    return m
+
+
+def check_piece(me: bpy.types.Mesh, splines: list, bevel: float, outline: Optional[list] = None) -> dict:
+    """Validate a baked piece against its outline by casting camera rays (+Z → −Z) on a grid:
+
+    * ``holes`` — fraction of the samples inside the outline whose first hit is missing or back-facing:
+      the front cap is missing / inverted, or the bevel folded over itself (the piece renders hollow —
+      Scandit's bracket and 'D' — or with dark specks / glints at pinched corners);
+    * ``grow`` — hits on samples outside the outline (relative to the inside count): the bevel inverted a
+      thin feature or overshot a corner, so the piece pokes out past its silhouette (DJI's blades).
+    ``splines`` is the shape actually built (filleted corners), ``outline`` the true silhouette (default:
+    the same) — fillets only remove material. Samples near either outline are ignored."""
+    import bmesh
+    import numpy as np
+    from mathutils import Vector
+    from mathutils.bvhtree import BVHTree
+
+    def _rings(spl):
+        rr = [np.asarray(_flatten_ring(s["points"], True, 6), dtype=np.float64) for s in spl]
+        return [r for r in rr if len(r) >= 3]
+
+    rings = _rings(splines)
+    orings = _rings(outline) if outline is not None else rings
+    nv = len(me.vertices)
+    if not rings or nv < 3:
+        return {"holes": 1.0 if rings else 0.0, "grow": 0.0, "n": 0, "holesN": 0, "growN": 0}
+    co = np.empty(nv * 3, dtype=np.float64)
+    me.vertices.foreach_get("co", co)
+    co = co.reshape(-1, 3)
+    allr = np.vstack(rings + orings)
+    x0 = min(allr[:, 0].min(), co[:, 0].min())
+    x1 = max(allr[:, 0].max(), co[:, 0].max())
+    y0 = min(allr[:, 1].min(), co[:, 1].min())
+    y1 = max(allr[:, 1].max(), co[:, 1].max())
+    h = max(x1 - x0, y1 - y0) / CHECK_GRID
+    if h <= 1e-9:
+        return {"holes": 0.0, "grow": 0.0, "n": 0, "holesN": 0, "growN": 0}
+    xs = np.arange(x0 + h / 2, x1, h)
+    ys = np.arange(y0 + h / 2, y1, h)
+    tol = max(0.0025, 0.12 * bevel, 0.35 * h)
+    segs = _ring_segments(rings)
+    test_in = _scan_inside(segs, xs, ys) & ~_near_mask(segs, xs[0], ys[0], h, (len(ys), len(xs)), tol)
+    osegs = segs if orings is rings else _ring_segments(orings)
+    o_in = _scan_inside(osegs, xs, ys)
+    test_out = ~o_in & ~_near_mask(osegs, xs[0], ys[0], h, (len(ys), len(xs)), tol)
+    X, Y = np.meshgrid(xs, ys)
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    tree = BVHTree.FromBMesh(bm)
+    bm.free()
+    ztop = float(co[:, 2].max()) + 1.0
+    down = Vector((0.0, 0.0, -1.0))
+    holes = 0
+    n_in = int(test_in.sum())
+    jit = (0.0, 0.0), (0.013 * h, 0.021 * h), (-0.017 * h, -0.011 * h)
+    for x, y in zip(X[test_in], Y[test_in]):
+        for jx, jy in jit:        # a ray exactly on a triangle edge of a grid-aligned cap can slip through
+            loc, nor, _i, _d = tree.ray_cast(Vector((x + jx, y + jy, ztop)), down)
+            if loc is not None and nor.z > 0.02:
+                break
+        else:
+            holes += 1
+    grow = 0
+    for x, y in zip(X[test_out], Y[test_out]):
+        loc, _n, _i, _d = tree.ray_cast(Vector((x, y, ztop)), down)
+        if loc is not None:
+            grow += 1
+    return {"holes": holes / max(1, n_in), "grow": grow / max(1, n_in), "n": n_in,
+            "holesN": holes, "growN": grow}
+
+
+def curve_splines(cu: bpy.types.Curve) -> list:
+    """Contract-style splines of a curve datablock (the shape actually built)."""
+    return [{"closed": True, "points": [{"co": list(bp.co[:2]), "hl": list(bp.handle_left[:2]),
+                                         "hr": list(bp.handle_right[:2])} for bp in sp.bezier_points]}
+            for sp in cu.splines]
+
+
+def piece_ok(r: dict) -> bool:
+    return not ((r["holes"] > HOLE_MAX and r.get("holesN", 0) >= 2) or (r["grow"] > GROW_MAX and r.get("growN", 0) >= 2))
 
 
 def _evict() -> None:
@@ -457,33 +895,24 @@ def solid_mesh(key_parts: dict, splines: list, thickness: float, bevel: float, r
                gn_bevel: Optional[float] = None) -> tuple[bpy.types.Mesh, str]:
     """Cached MESH datablock of a piece: the bevelled curve (curve route) or the evaluated GN fallback stack
     (Fill Curve → Solidify → Bevel with ``gn_bevel``, default ``bevel``). Local units, z centred on 0.
-    Returns ``(mesh, route)`` (the route may switch to 'gn', see :func:`curve_data`)."""
-    gb = bevel if gn_bevel is None else gn_bevel
-    cu, final_route = curve_data(key_parts, splines, thickness, bevel, route, segments)
-    key = stable_hash({"cu": cu.get("bis_key", cu.name), "route": final_route, "gb": round(gb, 6), "s": segments,
-                       "t": round(thickness, 6), "v": "m1"})
+    Returns ``(mesh, route)`` (the route may switch, see :func:`curve_data`)."""
+    cu, final_route = curve_data(key_parts, splines, thickness, bevel, route, segments, gn_bevel)
+    key = stable_hash({"cu": cu.get("bis_key", cu.name), "route": final_route, "s": segments,
+                       "t": round(thickness, 6), "v": "m2"})
     hit = _MESH_CACHE.get(key)
     me = bpy.data.meshes.get(hit[0]) if hit else None
+    pending = _PENDING_MESH.pop(cu.get("bis_key", ""), None)
+    pme = bpy.data.meshes.get(pending) if pending else None
     if me is not None:
         _MESH_CACHE.move_to_end(key)
+        if pme is not None and pme.users == 0 and pme != me:
+            bpy.data.meshes.remove(pme)
         return me, hit[1]
-    ob = bpy.data.objects.new("BIS~bake", cu)
-    try:
-        if final_route != "gn":
-            # extrude / bevel / offset are curve data: an unlinked original object evaluates just this curve
-            me = bpy.data.meshes.new_from_object(ob)
-        else:
-            sc = _bake_scene()
-            sc.collection.objects.link(ob)
-            apply_route(ob, "gn", thickness, gb, segments, None)
-            with bpy.context.temp_override(scene=sc, view_layer=sc.view_layers[0]):
-                dg = bpy.context.evaluated_depsgraph_get()     # the bake scene's own depsgraph
-                me = bpy.data.meshes.new_from_object(ob.evaluated_get(dg))
-    finally:
-        bpy.data.objects.remove(ob, do_unlink=True)
-        sc = bpy.data.scenes.get(BAKE_SCENE)
-        if sc is not None and sc != bpy.context.scene:     # keep saved .blend files free of it
-            bpy.data.scenes.remove(sc)
+    if pme is not None:
+        me = pme                 # evaluated + validated by curve_data on this cache miss
+    else:
+        gb = float(cu.get("bis_gb", 0.0) or 0.0) if final_route == "gn" else 0.0
+        me = _evaluate(cu, final_route, thickness, gb, segments)
     me.name = f"BIS~{key[:10]}"
     if len(me.materials) == 0:
         me.materials.append(None)
@@ -492,6 +921,7 @@ def solid_mesh(key_parts: dict, splines: list, thickness: float, bevel: float, r
             me.materials[i] = None          # the object-linked slot carries the material
     me["bis_key"] = key
     me["bis_route"] = final_route
+    me["bis_curve"] = cu.name
     _MESH_CACHE[key] = (me.name, final_route)
     _evict()
     return me, final_route
@@ -516,6 +946,7 @@ def reset_caches() -> None:
     _CURVE_CACHE.clear()
     _MESH_CACHE.clear()
     _OCC_CACHE.clear()
+    _PENDING_MESH.clear()
 
 
 def purge_unused_curves(all_unused: bool = False) -> int:

@@ -5,7 +5,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { useThree } from '@react-three/fiber'
 import * as THREE from 'three'
-import { COOL, WARM, lightDir, type Rig } from './rig'
+import { COOL, DIFFUSE_CAL, WARM, lightDir, type Rig } from './rig'
 import { StudioEnvironment } from './studioEnvironment'
 
 interface Props {
@@ -110,7 +110,7 @@ export function StudioLighting({ rig, shadowStrength, shadows }: Props) {
       <spotLight
         ref={keyRef}
         position={[keyDir.x * KEY_DISTANCE, keyDir.y * KEY_DISTANCE, keyDir.z * KEY_DISTANCE]}
-        intensity={KEY_POWER * rig.key}
+        intensity={KEY_POWER * DIFFUSE_CAL * rig.key}
         color={keyColor}
         angle={KEY_ANGLE}
         penumbra={1}
@@ -120,7 +120,7 @@ export function StudioLighting({ rig, shadowStrength, shadows }: Props) {
       />
       <directionalLight
         position={[fillDir.x * 10, fillDir.y * 10, fillDir.z * 10]}
-        intensity={0.35 * rig.fill}
+        intensity={0.35 * DIFFUSE_CAL * rig.fill}
         color={fillColor}
       />
     </>

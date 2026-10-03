@@ -28,7 +28,7 @@ import {
 import { useCached } from '../refCache'
 import { effectiveDepth, geometryCache, layerBodyParts, layerScale, type BodyPart } from '../geometry/layerGeometry'
 import { fillPreviewColor } from '../textures/fillTextures'
-import { useTextureAsset } from '../textures/layerTextures'
+import { assetSoftAlpha, HALO_SOFT_MIN, useTextureAsset } from '../textures/layerTextures'
 import { EXPLODE_SPREAD, useViewportStore } from './store'
 import { usePaint } from './usePaint'
 
@@ -442,9 +442,15 @@ export const LayerBody = memo(function LayerBody(p: LayerBodyProps) {
 
   const castShadow = layer.shadow.kind !== 'none' && layer.shadow.opacity > 0.01
   const cards = useMemo(() => {
-    // Like the worker: images whose element has no extruded region (no alpha contour) become flat cards.
+    // Like the worker: images whose element has no extruded region (no alpha contour) become flat cards; a raster
+    // region extruded along its alpha-traced contour (which cuts off soft alpha: a neon tube's glow halo) also gets a
+    // flat halo card under the piece when its image is soft enough (decided once the image is loaded: `halo`).
     const covered = new Set((lg.regions ?? []).map((r) => r.elementId))
-    return (lg.images ?? []).filter((c) => c && c.url && !covered.has(c.elementId))
+    const images = (lg.images ?? []).filter((c) => c && c.url)
+    return [
+      ...images.filter((c) => !covered.has(c.elementId)).map((card) => ({ card, halo: false })),
+      ...images.filter((c) => covered.has(c.elementId) && !c.opaque).map((card) => ({ card, halo: true })),
+    ]
   }, [lg])
 
   return (
@@ -473,10 +479,11 @@ export const LayerBody = memo(function LayerBody(p: LayerBodyProps) {
           route={entry.routeBlended}
         />
       ))}
-      {cards.map((c, i) => (
+      {cards.map(({ card: c, halo }, i) => (
         <RasterCardMesh
-          key={`${c.elementId}:${c.url}:${i}`}
+          key={`${c.elementId}:${c.url}:${halo ? 'halo' : i}`}
           card={c}
+          halo={halo}
           z={CARD_Z / depth.scale}
           opacity={layer.opacity}
           layerId={layer.id}
@@ -682,6 +689,7 @@ const CARD_FALLBACK = new THREE.Color(0.5, 0.5, 0.5)
 
 function RasterCardMesh({
   card,
+  halo,
   z,
   opacity,
   layerId,
@@ -693,6 +701,8 @@ function RasterCardMesh({
   route,
 }: {
   card: RasterCard
+  /** Halo card of an extruded raster region: drawn only when its image has a soft-alpha halo (worker HALO_SOFT_MIN). */
+  halo?: boolean
   z: number
   opacity: number
   layerId: string
@@ -736,11 +746,13 @@ function RasterCardMesh({
     }
     invalidate()
   }, [material, spec, asset, ready, placement, lumRange, rimDir, opacity, card.opacity, route, invalidate])
+  const show = !halo || assetSoftAlpha(ready ? asset : null) > HALO_SOFT_MIN
   useLayoutEffect(() => {
     const m = meshRef.current
     if (!m) return
     store.addMesh(layerId, m)
     return () => store.removeMesh(layerId, m)
-  }, [store, layerId])
+  }, [store, layerId, show])
+  if (!show) return null
   return <mesh ref={meshRef} geometry={geometry} material={material} position-z={z} renderOrder={order} />
 }
