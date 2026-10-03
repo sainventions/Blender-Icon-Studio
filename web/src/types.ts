@@ -205,7 +205,7 @@ export interface Presets {
 }
 
 // ---------------------------------------------------------------- styles / looks / batch ("Icon Pack")
-export interface StyleLayerDefaults { material: MaterialSpec; depth: LayerDepth; shadow: LayerShadow; mode: 'individual' | 'combined' }
+export interface StyleLayerDefaults { material: MaterialSpec; depth: LayerDepth; shadow: LayerShadow; mode?: 'individual' | 'combined' | null }
 export interface StylePlate { material: MaterialSpec; thickness: number; bevel: number; fill?: Fill | null; shape?: PlateShape | null }
 export interface StyleSpec {
   layerDefaults: StyleLayerDefaults

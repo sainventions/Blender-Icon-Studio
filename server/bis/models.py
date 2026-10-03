@@ -358,7 +358,7 @@ class StyleLayerDefaults(_Model):
     material: MaterialSpec = MaterialSpec()
     depth: LayerDepth = LayerDepth()
     shadow: LayerShadow = LayerShadow()
-    mode: Literal["individual", "combined"] = "individual"
+    mode: Optional[Literal["individual", "combined"]] = None   # None = keep each layer's own (tiling-derived) mode
 
 
 class StylePlate(_Model):

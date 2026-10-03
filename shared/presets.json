@@ -945,8 +945,7 @@
           "shadow": {
             "kind": "neutral",
             "opacity": 0.5
-          },
-          "mode": "individual"
+          }
         },
         "plate": {
           "material": {
@@ -989,8 +988,7 @@
           "shadow": {
             "kind": "chromatic",
             "opacity": 0.6
-          },
-          "mode": "individual"
+          }
         },
         "plate": {
           "material": {
@@ -1033,8 +1031,7 @@
           "shadow": {
             "kind": "neutral",
             "opacity": 0.45
-          },
-          "mode": "individual"
+          }
         },
         "plate": {
           "material": {
@@ -1077,8 +1074,7 @@
           "shadow": {
             "kind": "chromatic",
             "opacity": 0.55
-          },
-          "mode": "individual"
+          }
         },
         "plate": {
           "material": {
@@ -1119,8 +1115,7 @@
           "shadow": {
             "kind": "chromatic",
             "opacity": 0.5
-          },
-          "mode": "individual"
+          }
         },
         "plate": {
           "material": {
@@ -1161,8 +1156,7 @@
           "shadow": {
             "kind": "neutral",
             "opacity": 0.55
-          },
-          "mode": "individual"
+          }
         },
         "plate": {
           "material": {
@@ -1205,8 +1199,7 @@
           "shadow": {
             "kind": "neutral",
             "opacity": 0.55
-          },
-          "mode": "individual"
+          }
         },
         "plate": {
           "material": {
@@ -1247,8 +1240,7 @@
           "shadow": {
             "kind": "none",
             "opacity": 0.0
-          },
-          "mode": "individual"
+          }
         },
         "plate": {
           "material": {
@@ -1296,8 +1288,7 @@
           "shadow": {
             "kind": "neutral",
             "opacity": 0.5
-          },
-          "mode": "individual"
+          }
         },
         "plate": {
           "material": {
@@ -1341,8 +1332,7 @@
           "shadow": {
             "kind": "neutral",
             "opacity": 0.35
-          },
-          "mode": "individual"
+          }
         },
         "plate": {
           "material": {
