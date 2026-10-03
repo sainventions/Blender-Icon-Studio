@@ -1,7 +1,8 @@
 <#
 .SYNOPSIS
   Launch Blender Icon Studio: prepare the Python venv and the web build if needed, start the server on
-  http://127.0.0.1:8420 (or reuse a running one) and open it as an Edge app window.
+  http://127.0.0.1:8420 (or reuse a running one) and open it in your default browser - as a chromeless app
+  window when that browser is Chromium-based (Brave, Chrome, Vivaldi, Opera, Chromium, Edge).
 
 .DESCRIPTION
   Used by "Blender Icon Studio.cmd". This console window hosts the server: close it (or press Ctrl+C)
@@ -9,6 +10,8 @@
 
 .PARAMETER Port      HTTP port (default 8420).
 .PARAMETER NoBrowser Do not open a browser window.
+.PARAMETER Browser   Override the browser: 'default' (system default, the default), 'brave', 'chrome', 'vivaldi',
+                     'opera', 'edge', 'firefox', or a full path to a browser exe.
 .PARAMETER Rebuild   Force `npm run build` of the web UI.
 .PARAMETER SkipBuild Never build the web UI (use web/dist as it is).
 .PARAMETER Fake      Run without Blender (BIS_FAKE_BLENDER=1): flat Pillow previews, for UI work without a GPU.
@@ -18,6 +21,7 @@
 param(
     [int]$Port = 8420,
     [switch]$NoBrowser,
+    [string]$Browser = 'default',
     [switch]$Rebuild,
     [switch]$SkipBuild,
     [switch]$Fake,
@@ -40,17 +44,58 @@ function Test-Studio([int]$P) {
     } catch { return $false }
 }
 
+# Chromium-family browsers accept --app=<url> for a chromeless, app-like window.
+$ChromiumExes = @('brave.exe', 'chrome.exe', 'vivaldi.exe', 'opera.exe', 'launcher.exe', 'chromium.exe', 'msedge.exe', 'arc.exe')
+
+function Get-DefaultBrowserExe {
+    # The user's https handler (ProgId) -> its shell\open\command -> the exe path.
+    try {
+        $progId = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice' -ErrorAction Stop).ProgId
+    } catch { return $null }
+    foreach ($hive in @('HKCU:\Software\Classes', 'Registry::HKEY_CLASSES_ROOT')) {
+        $key = Join-Path $hive "$progId\shell\open\command"
+        try {
+            $cmd = (Get-ItemProperty -LiteralPath $key -ErrorAction Stop).'(default)'
+            if ($cmd -match '^\s*"([^"]+\.exe)"' -or $cmd -match '^\s*(\S+\.exe)') {
+                if (Test-Path $Matches[1]) { return $Matches[1] }
+            }
+        } catch { }
+    }
+    return $null
+}
+
+function Resolve-BrowserExe([string]$Name) {
+    if ($Name -and (Test-Path $Name)) { return $Name }   # explicit path
+    $known = @{
+        'brave'   = @("$env:ProgramFiles\BraveSoftware\Brave-Browser\Application\brave.exe",
+                      "${env:ProgramFiles(x86)}\BraveSoftware\Brave-Browser\Application\brave.exe",
+                      "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\Application\brave.exe")
+        'chrome'  = @("$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
+                      "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe",
+                      "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe")
+        'vivaldi' = @("$env:LOCALAPPDATA\Vivaldi\Application\vivaldi.exe", "$env:ProgramFiles\Vivaldi\Application\vivaldi.exe")
+        'opera'   = @("$env:LOCALAPPDATA\Programs\Opera\launcher.exe", "$env:LOCALAPPDATA\Programs\Opera GX\launcher.exe")
+        'edge'    = @("${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe", "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe")
+        'firefox' = @("$env:ProgramFiles\Mozilla Firefox\firefox.exe", "${env:ProgramFiles(x86)}\Mozilla Firefox\firefox.exe")
+    }
+    $key = $Name.ToLowerInvariant()
+    if ($known.ContainsKey($key)) {
+        return $known[$key] | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+    }
+    return $null
+}
+
 function Open-StudioWindow([string]$Target) {
     if ($NoBrowser) { return }
-    $candidates = @(
-        (Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Edge\Application\msedge.exe'),
-        (Join-Path $env:ProgramFiles 'Microsoft\Edge\Application\msedge.exe'),
-        (Join-Path $env:LOCALAPPDATA 'Microsoft\Edge\Application\msedge.exe')
-    )
-    $edge = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
-    if ($edge) {
-        Write-Step "Opening Blender Icon Studio (Edge app window)"
-        Start-Process -FilePath $edge -ArgumentList "--app=$Target", '--window-size=1680,1050'
+    $exe = if ($Browser -and $Browser -ne 'default') { Resolve-BrowserExe $Browser } else { Get-DefaultBrowserExe }
+    if (-not $exe -and $Browser -ne 'default') { Write-Warn "Browser '$Browser' not found - using the system default" }
+    if ($exe -and ($ChromiumExes -contains [IO.Path]::GetFileName($exe).ToLowerInvariant())) {
+        $name = [IO.Path]::GetFileNameWithoutExtension($exe)
+        Write-Step "Opening Blender Icon Studio ($name app window)"
+        Start-Process -FilePath $exe -ArgumentList "--app=$Target", '--window-size=1680,1050'
+    } elseif ($exe) {
+        Write-Step "Opening $Target in $([IO.Path]::GetFileNameWithoutExtension($exe))"
+        Start-Process -FilePath $exe -ArgumentList $Target
     } else {
         Write-Step "Opening $Target in the default browser"
         Start-Process $Target

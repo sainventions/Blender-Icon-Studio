@@ -33,7 +33,8 @@ set for iOS, macOS, watchOS, Android, Windows and the web.
    - creates `.venv` and installs `requirements.txt`;
    - runs `npm install` and builds the web UI into `web/dist`;
    - starts the server on <http://127.0.0.1:8420>;
-   - opens the app in an Edge app window (or your default browser if Edge is missing).
+   - opens the app in your default browser — as a chromeless app window for Chromium browsers
+     (Brave, Chrome, Vivaldi, Opera, Edge). Override with `scripts/start.ps1 -Browser chrome` (or a path).
 2. Pick a sample or drop an SVG anywhere on the home screen.
 3. Edit layers, materials and lighting — the live view, the EEVEE draft and the Cycles preview follow.
 4. Click **Export**, choose the targets and download the zip.
@@ -327,7 +328,7 @@ cd web; npx tsc -b --noEmit; npx vite build                              # type 
 | "Web UI not built" page | Run `Blender Icon Studio.cmd -Rebuild`, or `cd web; npm run build`. |
 | Port 8420 is busy | `Blender Icon Studio.cmd -Port 8430` |
 | Export fails with "path is too long for Windows" | Move the repo (or just the data: set `BIS_WORKSPACE`) to a shorter folder, or enable Win32 long paths (`LongPathsEnabled`). |
-| Edge doesn't open | The launcher falls back to the default browser; you can also open <http://127.0.0.1:8420> yourself. |
+| No browser window opens | Run `scripts/start.ps1 -Browser brave` (or `chrome`, `firefox`, a path), or open <http://127.0.0.1:8420> yourself. |
 | `.icon` won't open in Icon Composer | The format is community-documented, so the export is **beta**. Import the layer SVGs from `Assets/` manually. |
 
 Server log: `workspace/logs/server.log` · Blender output: `workspace/logs/blender.log`.
