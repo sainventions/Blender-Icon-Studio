@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Icon-font style glyph: ONE compound path (evenodd) containing a battery frame with a hole,
+       a bolt island inside the hole, a terminal nub and a separate plus sign. Original test art. -->
+  <path fill="#0F766E" fill-rule="evenodd" d="
+    M64 144 h320 a32 32 0 0 1 32 32 v160 a32 32 0 0 1 -32 32 h-320 a32 32 0 0 1 -32 -32 v-160 a32 32 0 0 1 32 -32 z
+    M80 176 v160 h288 v-160 z
+    M236 192 L156 268 h56 l-28 52 l84 -80 h-56 l28 -48 z
+    M428 216 h20 a12 12 0 0 1 12 12 v56 a12 12 0 0 1 -12 12 h-20 z
+    M416 48 h24 v40 h40 v24 h-40 v40 h-24 v-40 h-40 v-24 h40 z"/>
+</svg>

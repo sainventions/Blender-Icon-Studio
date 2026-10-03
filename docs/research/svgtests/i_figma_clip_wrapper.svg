@@ -1,0 +1,14 @@
+<svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+<!-- Mimics a Figma export: whole-icon clip-path wrapper, clip0_ ids, fill-rule/clip-rule evenodd on every path -->
+<g clip-path="url(#clip0_12_34)">
+<rect width="48" height="48" rx="12" fill="#111827"/>
+<path fill-rule="evenodd" clip-rule="evenodd" d="M24 8C15.163 8 8 15.163 8 24C8 32.837 15.163 40 24 40C32.837 40 40 32.837 40 24C40 15.163 32.837 8 24 8ZM24 14C18.477 14 14 18.477 14 24C14 29.523 18.477 34 24 34C29.523 34 34 29.523 34 24C34 18.477 29.523 14 24 14Z" fill="#A3E635"/>
+<path d="M24 19L28.33 26.5H19.67L24 19Z" fill="#F43F5E"/>
+<path d="M44 44L52 52" stroke="#FFFFFF" stroke-width="4"/>
+</g>
+<defs>
+<clipPath id="clip0_12_34">
+<rect width="48" height="48" fill="white"/>
+</clipPath>
+</defs>
+</svg>

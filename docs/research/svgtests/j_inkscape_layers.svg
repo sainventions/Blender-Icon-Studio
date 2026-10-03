@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd" width="128" height="128" viewBox="0 0 128 128">
+  <!-- Mimics Inkscape: named layers via inkscape:groupmode/label, sodipodi metadata -->
+  <sodipodi:namedview id="base" pagecolor="#ffffff" inkscape:zoom="4"/>
+  <g inkscape:groupmode="layer" id="layer1" inkscape:label="Plate">
+    <rect x="8" y="8" width="112" height="112" rx="28" style="fill:#FDE047;stroke:none"/>
+  </g>
+  <g inkscape:groupmode="layer" id="layer2" inkscape:label="Face">
+    <circle cx="44" cy="54" r="9" style="fill:#422006"/>
+    <circle cx="84" cy="54" r="9" style="fill:#422006"/>
+    <path d="M38 80 Q64 104 90 80" style="fill:none;stroke:#422006;stroke-width:8;stroke-linecap:round"/>
+  </g>
+  <g inkscape:groupmode="layer" id="layer3" inkscape:label="Shine">
+    <ellipse cx="40" cy="30" rx="18" ry="8" transform="rotate(-25 40 30)" style="fill:#ffffff;fill-opacity:0.55"/>
+  </g>
+</svg>

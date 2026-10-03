@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- (a) Colorful multi-layer app icon: nested <g>, transforms, group opacity, a gradient bg. Original artwork for Blender Icon Studio tests. -->
+  <title>Weather landscape test icon</title>
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4FACFE"/>
+      <stop offset="1" stop-color="#2B5CE6"/>
+    </linearGradient>
+  </defs>
+  <g id="background">
+    <rect width="1024" height="1024" rx="230" fill="url(#bgGrad)"/>
+  </g>
+  <g id="sun" transform="translate(690 330)">
+    <circle id="sun-disc" r="120" fill="#FFD43B"/>
+    <g id="sun-rays" fill="#FFB703">
+      <rect x="-12" y="-205" width="24" height="60" rx="12"/>
+      <rect x="-12" y="-205" width="24" height="60" rx="12" transform="rotate(45)"/>
+      <rect x="-12" y="-205" width="24" height="60" rx="12" transform="rotate(90)"/>
+      <rect x="-12" y="-205" width="24" height="60" rx="12" transform="rotate(135)"/>
+      <rect x="-12" y="-205" width="24" height="60" rx="12" transform="rotate(180)"/>
+      <rect x="-12" y="-205" width="24" height="60" rx="12" transform="rotate(225)"/>
+      <rect x="-12" y="-205" width="24" height="60" rx="12" transform="rotate(270)"/>
+      <rect x="-12" y="-205" width="24" height="60" rx="12" transform="rotate(315)"/>
+    </g>
+  </g>
+  <g id="mountains">
+    <path id="mountain-back" d="M110 800 L390 410 L560 640 L700 500 L930 800 Z" fill="#1E3A8A"/>
+    <path id="mountain-front" d="M40 820 L320 520 L560 820 Z" fill="#172554"/>
+    <path id="snowcap" d="M390 410 L452 496 L420 484 L392 512 L360 482 L330 494 Z" fill="#FFFFFF"/>
+  </g>
+  <g id="cloud" transform="translate(500 400) scale(1.1)">
+    <g id="cloud-puffs" fill="#FFFFFF" opacity="0.92">
+      <circle cx="0" cy="40" r="60"/>
+      <circle cx="75" cy="5" r="80"/>
+      <circle cx="160" cy="45" r="55"/>
+      <rect x="0" y="40" width="160" height="60"/>
+    </g>
+  </g>
+  <g id="birds" fill="none" stroke="#0F172A" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" transform="translate(180 230) rotate(-8) skewX(10)">
+    <path d="M0 0 q25 -22 50 0 q25 -22 50 0"/>
+    <path d="M80 70 q18 -16 36 0 q18 -16 36 0"/>
+  </g>
+  <g id="ground">
+    <path d="M0 780 H1024 V794 C1024 921 921 1024 794 1024 H230 C103 1024 0 921 0 794 Z" fill="#16A34A"/>
+  </g>
+</svg>

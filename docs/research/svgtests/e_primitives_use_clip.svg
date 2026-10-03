@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="200" viewBox="0 0 200 200">
+  <!-- (e) Primitives + <use>/<defs>/<symbol>/clip-path -->
+  <defs>
+    <clipPath id="clipCircle">
+      <circle cx="150" cy="50" r="40"/>
+    </clipPath>
+    <g id="pip">
+      <circle r="8"/>
+      <rect x="-3" y="8" width="6" height="12" rx="2"/>
+    </g>
+    <symbol id="star" viewBox="0 0 20 20">
+      <polygon points="10,1 12.6,7 19,7.4 14,11.6 15.6,18 10,14.4 4.4,18 6,11.6 1,7.4 7.4,7"/>
+    </symbol>
+  </defs>
+  <rect id="tile" x="10" y="10" width="80" height="80" rx="16" ry="16" fill="#E11D48"/>
+  <g id="striped-ball" clip-path="url(#clipCircle)">
+    <rect x="100" y="0" width="100" height="100" fill="#0EA5E9"/>
+    <rect x="100" y="30" width="100" height="14" fill="#F8FAFC"/>
+    <rect x="100" y="60" width="100" height="14" fill="#F8FAFC"/>
+  </g>
+  <ellipse id="leaf" cx="50" cy="150" rx="40" ry="25" fill="#22C55E"/>
+  <polygon id="tri" points="20,190 50,120 80,190" fill="#F59E0B" opacity="0.85"/>
+  <polyline id="zigzag" points="100,110 115,125 130,110 145,125 160,110" fill="none" stroke="#6366F1" stroke-width="6" stroke-linejoin="miter"/>
+  <line id="rule" x1="100" y1="195" x2="195" y2="195" stroke="#334155" stroke-width="4"/>
+  <use href="#pip" x="120" y="140" fill="#334155"/>
+  <use xlink:href="#pip" x="150" y="140" fill="#64748B" transform="rotate(15 150 150)"/>
+  <use href="#star" x="160" y="150" width="34" height="34" fill="#FACC15"/>
+</svg>

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200" viewBox="0 0 300 200">
+  <!-- (c) Holes: evenodd vs nonzero, winding direction, self-intersection, 3-level nesting -->
+  <!-- donut, both subpaths same winding, evenodd => hole -->
+  <path id="donut-evenodd" fill="#7C3AED" fill-rule="evenodd"
+        d="M50 10 A40 40 0 0 1 50 90 A40 40 0 0 1 50 10 Z M50 30 A20 20 0 0 1 50 70 A20 20 0 0 1 50 30 Z"/>
+  <!-- frame, nonzero, inner subpath wound opposite => hole -->
+  <path id="frame-nonzero-opposite" fill="#DB2777"
+        d="M110 10 H190 V90 H110 Z M130 30 V70 H170 V30 Z"/>
+  <!-- frame, nonzero, inner subpath SAME winding => NO hole (filled) -->
+  <path id="frame-nonzero-same" fill="#EA580C"
+        d="M210 10 H290 V90 H210 Z M230 30 H270 V70 H230 Z"/>
+  <!-- self-intersecting pentagram, evenodd => pentagon hole in centre -->
+  <path id="star-evenodd" fill="#0891B2" fill-rule="evenodd"
+        d="M50 105 L73.5 177.4 L11.9 132.6 L88.1 132.6 L26.5 177.4 Z"/>
+  <!-- same pentagram, nonzero => fully filled -->
+  <path id="star-nonzero" fill="#0D9488"
+        d="M150 105 L173.5 177.4 L111.9 132.6 L188.1 132.6 L126.5 177.4 Z"/>
+  <!-- three-level nesting: square / hole / island, evenodd -->
+  <path id="nested-island" fill="#65A30D" fill-rule="evenodd"
+        d="M210 110 h80 v80 h-80 z M222 122 h56 v56 h-56 z M238 138 h24 v24 h-24 z"/>
+</svg>

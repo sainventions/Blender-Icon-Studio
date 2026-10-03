@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="256" height="256" viewBox="0 0 256 256">
+  <!-- (d) Gradients: objectBoundingBox vs userSpaceOnUse, gradientTransform, radial focal point, href templates, stop-opacity, gradient on a stroke, gradient on a transformed shape -->
+  <defs>
+    <linearGradient id="sunset" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F97316"/>
+      <stop offset="0.5" stop-color="#EC4899"/>
+      <stop offset="1" stop-color="#8B5CF6"/>
+    </linearGradient>
+    <linearGradient id="userLin" gradientUnits="userSpaceOnUse" x1="140" y1="20" x2="240" y2="20" gradientTransform="rotate(30 190 70)">
+      <stop offset="0" stop-color="#22D3EE"/>
+      <stop offset="1" stop-color="#2563EB" stop-opacity="0.4"/>
+    </linearGradient>
+    <radialGradient id="orb" cx="0.5" cy="0.5" r="0.5" fx="0.35" fy="0.3">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.35" stop-color="#A7F3D0"/>
+      <stop offset="1" stop-color="#047857"/>
+    </radialGradient>
+    <radialGradient id="orbTemplated" xlink:href="#orb" cx="0.6" fx="0.6" fy="0.6"/>
+    <linearGradient id="strokeGrad" x1="0" y1="0" x2="1" y2="0" spreadMethod="reflect">
+      <stop offset="0" stop-color="#FACC15"/>
+      <stop offset="1" stop-color="#DC2626"/>
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="100" height="100" rx="24" fill="url(#sunset)"/>
+  <path d="M140 20 h100 v100 h-100 z" fill="url(#userLin)"/>
+  <circle cx="66" cy="190" r="50" fill="url(#orb)"/>
+  <g transform="translate(190 190) rotate(20) scale(1.4 0.8)">
+    <ellipse rx="40" ry="40" fill="url(#orbTemplated)"/>
+  </g>
+  <path d="M30 135 C 80 115, 180 155, 230 135" fill="none" stroke="url(#strokeGrad)" stroke-width="8" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,16 @@
+# Backend (Python 3.13). Install: .venv/Scripts/python.exe -m pip install -r requirements.txt
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic>=2
+picosvg
+skia-pathops
+shapely
+resvg-py
+lxml
+pillow
+numpy
+opencv-python-headless
+# tests
+pytest
+httpx
