@@ -1,3 +1,56 @@
+import { lazy, Suspense, useEffect } from 'react'
+import { useRoute } from './lib/route'
+import { isTypingTarget } from './lib/hooks'
+import { startAppServices } from './store/app'
+import { useUi } from './store/ui'
+import HomePage from './features/home/HomePage'
+import { EditorSkeleton } from './features/editor/EditorSkeleton'
+import { ImportDialog } from './features/dialogs/ImportDialog'
+import { ShortcutsDialog } from './features/dialogs/ShortcutsDialog'
+import { ConfirmHost, Toaster, TooltipLayer } from './components/ui'
+
+// The editor pulls in three.js — keep it out of the home screen bundle.
+const EditorPage = lazy(() => import('./features/editor/EditorPage'))
+
 export default function App() {
-  return <div className="h-screen grid place-items-center bg-neutral-950 text-neutral-200">Blender Icon Studio</div>
+  const route = useRoute()
+
+  useEffect(() => {
+    startAppServices()
+  }, [])
+
+  // Global: "?" opens the shortcut sheet anywhere.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (isTypingTarget(e.target)) return
+      if (e.key === '?' && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault()
+        const ui = useUi.getState()
+        ui.openDialog(ui.dialog === 'shortcuts' ? null : 'shortcuts')
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  useEffect(() => {
+    document.title = route.name === 'home' ? 'Blender Icon Studio' : 'Editor · Blender Icon Studio'
+  }, [route])
+
+  return (
+    <>
+      {route.name === 'home' ? (
+        <HomePage />
+      ) : (
+        <Suspense fallback={<EditorSkeleton />}>
+          <EditorPage key={route.projectId} projectId={route.projectId} />
+        </Suspense>
+      )}
+      <ImportDialog />
+      <ShortcutsDialog />
+      <ConfirmHost />
+      <Toaster />
+      <TooltipLayer />
+    </>
+  )
 }

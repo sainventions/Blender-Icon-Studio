@@ -4,7 +4,14 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#09090c" />
+    <meta name="description" content="Turn flat SVG icons into layered Liquid Glass icons rendered by Blender 5.0." />
     <title>Blender Icon Studio</title>
+    <style>
+      /* Paint the app background before CSS loads (no white flash in the Edge --app window). */
+      html, body { background: #09090c; margin: 0; height: 100%; }
+    </style>
   </head>
   <body>
     <div id="root"></div>
