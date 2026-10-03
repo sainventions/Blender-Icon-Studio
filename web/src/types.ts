@@ -116,7 +116,11 @@ export interface Project {
 export interface SplinePoint { co: Vec2; hl: Vec2; hr: Vec2 }
 export interface Spline { closed: boolean; hole: boolean; parent: number; depth: number; points: SplinePoint[] }
 export interface Region { elementId: string; paint: Paint; opacity: number; zSub: number; splines: Spline[] }
-export interface RasterCard { elementId: string; path: string; url: string; bbox: BBox; opacity: number }
+export interface RasterCard {
+  elementId: string; path: string; url: string; bbox: BBox; opacity: number
+  matrix?: [number, number, number, number, number, number] // image pixel -> art space
+  width?: number; height?: number; opaque?: boolean
+}
 export interface LayerGeometry {
   layerId: string
   hash: string
@@ -148,7 +152,7 @@ export interface AnimateRequest {
 }
 export type ExportTarget = 'ios' | 'macos' | 'watchos' | 'android' | 'windows' | 'web' | 'marketing' | 'icon' | 'blend'
 export interface ExportRequest { targets: ExportTarget[]; appearances: AppearanceId[]; quality: Quality }
-export type JobKind = 'render' | 'animate' | 'export' | 'blend' | 'swatches'
+export type JobKind = 'render' | 'animate' | 'export' | 'blend' | 'swatches' | 'batch'
 export type JobState = 'queued' | 'running' | 'done' | 'error' | 'cancelled'
 export interface Job {
   id: string
@@ -197,7 +201,32 @@ export interface Presets {
   appearances: Record<AppearanceId, { label: string; short: string }>
   quality: Record<Quality, QualitySpec>
   colorModes: Record<string, { label: string; viewTransform: string; look: string }>
+  looks: Record<string, Look>
 }
+
+// ---------------------------------------------------------------- styles / looks / batch ("Icon Pack")
+export interface StyleLayerDefaults { material: MaterialSpec; depth: LayerDepth; shadow: LayerShadow; mode: 'individual' | 'combined' }
+export interface StylePlate { material: MaterialSpec; thickness: number; bevel: number; fill?: Fill | null; shape?: PlateShape | null }
+export interface StyleSpec {
+  layerDefaults: StyleLayerDefaults
+  layerMaterials?: MaterialSpec[] | null
+  zGap?: number | null
+  plate: StylePlate
+  lighting?: Lighting | null
+  camera?: CameraSpec | null
+  colorMode?: RenderSettings['colorMode'] | null
+  tint?: Tint | null
+}
+export interface Look { label: string; description: string; style: Partial<StyleSpec> }
+export interface StyleRequest { look?: string; style?: StyleSpec; fromProject?: string }
+export interface BatchSource { sample?: string; projectId?: string }
+export interface BatchRequest {
+  sources: BatchSource[]
+  look?: string; style?: StyleSpec; fromProject?: string
+  strategy?: SplitStrategy; quality?: Quality; size?: number; appearance?: AppearanceId
+  export?: ExportRequest | null
+}
+export interface BatchItemResult { source: BatchSource; projectId?: string; name: string; renderUrl?: string; error?: string }
 
 // ---------------------------------------------------------------- system
 export interface SystemStatus {
@@ -209,7 +238,7 @@ export interface SystemStatus {
   }
   queue: { queued: number; running: number }
 }
-export interface SampleIcon { name: string; file: string; url: string }
+export interface SampleIcon { name: string; file: string; url: string; thumbnail?: string; collection?: string }
 export interface ProjectSummary { id: string; name: string; updatedAt: string; thumbnail?: string | null; layerCount: number }
 
 // ---------------------------------------------------------------- websocket events (/ws)

@@ -7,15 +7,78 @@
       "category": "Glass",
       "description": "Apple-style Liquid Glass: thick pill-edged glass with a crisp wet coat, light-locked rim highlights, frost and soft shadows.",
       "paint": "tint",
-      "engines": { "cycles": "full", "eevee": "good" },
+      "engines": {
+        "cycles": "full",
+        "eevee": "good"
+      },
       "params": {
-        "tint":         { "label": "Tint",          "type": "number", "min": 0, "max": 1,   "step": 0.01, "default": 0.45, "help": "How strongly the layer colour tints the glass." },
-        "frost":        { "label": "Frost / Blur",  "type": "number", "min": 0, "max": 0.5, "step": 0.01, "default": 0.12, "help": "Surface roughness of the transmission (Icon Composer 'Blur')." },
-        "translucency": { "label": "Translucency",  "type": "number", "min": 0, "max": 1,   "step": 0.01, "default": 0.6,  "help": "How see-through the glass is (Icon Composer 'Translucency')." },
-        "ior":          { "label": "Refraction",    "type": "number", "min": 1.0, "max": 1.8, "step": 0.01, "default": 1.45, "unit": "IOR", "help": "Index of refraction — lensing strength at the rounded edges." },
-        "specular":     { "label": "Specular",      "type": "enum", "options": ["off", "auto", "inside", "outside"], "default": "auto", "help": "Edge highlight placement (Icon Composer 2.0)." },
-        "rim":          { "label": "Rim Highlight", "type": "number", "min": 0, "max": 3,   "step": 0.05, "default": 0.8,  "help": "Light-angle-locked rim emission strength." },
-        "glow":         { "label": "Inner Glow",    "type": "number", "min": 0, "max": 2,   "step": 0.05, "default": 0.0,  "help": "Lit-from-within glow near the edges." }
+        "tint": {
+          "label": "Tint",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.45,
+          "help": "How strongly the layer colour tints the glass."
+        },
+        "frost": {
+          "label": "Frost / Blur",
+          "type": "number",
+          "min": 0,
+          "max": 0.5,
+          "step": 0.01,
+          "default": 0.12,
+          "help": "Surface roughness of the transmission (Icon Composer 'Blur')."
+        },
+        "translucency": {
+          "label": "Translucency",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.6,
+          "help": "How see-through the glass is (Icon Composer 'Translucency')."
+        },
+        "ior": {
+          "label": "Refraction",
+          "type": "number",
+          "min": 1.0,
+          "max": 1.8,
+          "step": 0.01,
+          "default": 1.45,
+          "unit": "IOR",
+          "help": "Index of refraction — lensing strength at the rounded edges."
+        },
+        "specular": {
+          "label": "Specular",
+          "type": "enum",
+          "options": [
+            "off",
+            "auto",
+            "inside",
+            "outside"
+          ],
+          "default": "auto",
+          "help": "Edge highlight placement (Icon Composer 2.0)."
+        },
+        "rim": {
+          "label": "Rim Highlight",
+          "type": "number",
+          "min": 0,
+          "max": 3,
+          "step": 0.05,
+          "default": 0.8,
+          "help": "Light-angle-locked rim emission strength."
+        },
+        "glow": {
+          "label": "Inner Glow",
+          "type": "number",
+          "min": 0,
+          "max": 2,
+          "step": 0.05,
+          "default": 0.0,
+          "help": "Lit-from-within glow near the edges."
+        }
       }
     },
     "clear_glass": {
@@ -23,11 +86,36 @@
       "category": "Glass",
       "description": "Crystal-clear, perfectly smooth glass.",
       "paint": "tint",
-      "engines": { "cycles": "full", "eevee": "good" },
+      "engines": {
+        "cycles": "full",
+        "eevee": "good"
+      },
       "params": {
-        "tint":  { "label": "Tint",       "type": "number", "min": 0, "max": 1,   "step": 0.01, "default": 0.1 },
-        "frost": { "label": "Roughness",  "type": "number", "min": 0, "max": 0.3, "step": 0.01, "default": 0.0 },
-        "ior":   { "label": "Refraction", "type": "number", "min": 1.0, "max": 2.0, "step": 0.01, "default": 1.5, "unit": "IOR" }
+        "tint": {
+          "label": "Tint",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.1
+        },
+        "frost": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 0.3,
+          "step": 0.01,
+          "default": 0.0
+        },
+        "ior": {
+          "label": "Refraction",
+          "type": "number",
+          "min": 1.0,
+          "max": 2.0,
+          "step": 0.01,
+          "default": 1.5,
+          "unit": "IOR"
+        }
       }
     },
     "frosted_glass": {
@@ -35,13 +123,52 @@
       "category": "Glass",
       "description": "Sandblasted glass with a glossy top coat and micro grain.",
       "paint": "tint",
-      "engines": { "cycles": "full", "eevee": "good" },
+      "engines": {
+        "cycles": "full",
+        "eevee": "good"
+      },
       "params": {
-        "tint":  { "label": "Tint",       "type": "number", "min": 0, "max": 1,   "step": 0.01, "default": 0.25 },
-        "frost": { "label": "Frost",      "type": "number", "min": 0.05, "max": 0.7, "step": 0.01, "default": 0.35 },
-        "grain": { "label": "Grain",      "type": "number", "min": 0, "max": 0.3, "step": 0.01, "default": 0.08 },
-        "coat":  { "label": "Gloss Coat", "type": "number", "min": 0, "max": 1,   "step": 0.01, "default": 1.0 },
-        "ior":   { "label": "Refraction", "type": "number", "min": 1.0, "max": 2.0, "step": 0.01, "default": 1.5, "unit": "IOR" }
+        "tint": {
+          "label": "Tint",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.25
+        },
+        "frost": {
+          "label": "Frost",
+          "type": "number",
+          "min": 0.05,
+          "max": 0.7,
+          "step": 0.01,
+          "default": 0.35
+        },
+        "grain": {
+          "label": "Grain",
+          "type": "number",
+          "min": 0,
+          "max": 0.3,
+          "step": 0.01,
+          "default": 0.08
+        },
+        "coat": {
+          "label": "Gloss Coat",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0
+        },
+        "ior": {
+          "label": "Refraction",
+          "type": "number",
+          "min": 1.0,
+          "max": 2.0,
+          "step": 0.01,
+          "default": 1.5,
+          "unit": "IOR"
+        }
       }
     },
     "dispersive_crystal": {
@@ -49,13 +176,45 @@
       "category": "Glass",
       "description": "High-index crystal with chromatic dispersion — rainbow fringes at the edges (Cycles).",
       "paint": "tint",
-      "engines": { "cycles": "full", "eevee": "fallback" },
+      "engines": {
+        "cycles": "full",
+        "eevee": "fallback"
+      },
       "eeveeNote": "EEVEE shows plain clear glass; render with Cycles to see dispersion.",
       "params": {
-        "tint":       { "label": "Tint",       "type": "number", "min": 0, "max": 1,   "step": 0.01, "default": 0.05 },
-        "ior":        { "label": "Refraction", "type": "number", "min": 1.3, "max": 2.4, "step": 0.01, "default": 1.6, "unit": "IOR" },
-        "dispersion": { "label": "Dispersion", "type": "number", "min": 0, "max": 0.15, "step": 0.005, "default": 0.06 },
-        "frost":      { "label": "Roughness",  "type": "number", "min": 0, "max": 0.2, "step": 0.01, "default": 0.0 }
+        "tint": {
+          "label": "Tint",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.05
+        },
+        "ior": {
+          "label": "Refraction",
+          "type": "number",
+          "min": 1.3,
+          "max": 2.4,
+          "step": 0.01,
+          "default": 1.6,
+          "unit": "IOR"
+        },
+        "dispersion": {
+          "label": "Dispersion",
+          "type": "number",
+          "min": 0,
+          "max": 0.15,
+          "step": 0.005,
+          "default": 0.06
+        },
+        "frost": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 0.2,
+          "step": 0.01,
+          "default": 0.0
+        }
       }
     },
     "tinted_glass": {
@@ -63,13 +222,46 @@
       "category": "Glass",
       "description": "Deeply coloured glass that casts coloured (chromatic) shadows.",
       "paint": "tint",
-      "engines": { "cycles": "full", "eevee": "good" },
+      "engines": {
+        "cycles": "full",
+        "eevee": "good"
+      },
       "eeveeNote": "EEVEE shadows are grey; coloured shadows need Cycles.",
       "params": {
-        "tint":       { "label": "Tint",       "type": "number", "min": 0, "max": 1,   "step": 0.01, "default": 0.95 },
-        "frost":      { "label": "Roughness",  "type": "number", "min": 0, "max": 0.4, "step": 0.01, "default": 0.04 },
-        "ior":        { "label": "Refraction", "type": "number", "min": 1.0, "max": 2.0, "step": 0.01, "default": 1.5, "unit": "IOR" },
-        "absorption": { "label": "Depth Tint", "type": "number", "min": 0, "max": 12,  "step": 0.1,  "default": 0.0, "help": "Beer-Lambert volume absorption (Cycles): thicker = deeper colour." }
+        "tint": {
+          "label": "Tint",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.95
+        },
+        "frost": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 0.4,
+          "step": 0.01,
+          "default": 0.04
+        },
+        "ior": {
+          "label": "Refraction",
+          "type": "number",
+          "min": 1.0,
+          "max": 2.0,
+          "step": 0.01,
+          "default": 1.5,
+          "unit": "IOR"
+        },
+        "absorption": {
+          "label": "Depth Tint",
+          "type": "number",
+          "min": 0,
+          "max": 12,
+          "step": 0.1,
+          "default": 0.0,
+          "help": "Beer-Lambert volume absorption (Cycles): thicker = deeper colour."
+        }
       }
     },
     "glossy_plastic": {
@@ -77,11 +269,35 @@
       "category": "Solid",
       "description": "Saturated injection-moulded plastic with a clear coat.",
       "paint": "base",
-      "engines": { "cycles": "full", "eevee": "full" },
+      "engines": {
+        "cycles": "full",
+        "eevee": "full"
+      },
       "params": {
-        "roughness":     { "label": "Roughness",      "type": "number", "min": 0, "max": 1,   "step": 0.01, "default": 0.35 },
-        "coat":          { "label": "Clear Coat",     "type": "number", "min": 0, "max": 1,   "step": 0.01, "default": 1.0 },
-        "coatRoughness": { "label": "Coat Roughness", "type": "number", "min": 0, "max": 0.5, "step": 0.01, "default": 0.03 }
+        "roughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.35
+        },
+        "coat": {
+          "label": "Clear Coat",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0
+        },
+        "coatRoughness": {
+          "label": "Coat Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 0.5,
+          "step": 0.01,
+          "default": 0.03
+        }
       }
     },
     "satin": {
@@ -89,10 +305,27 @@
       "category": "Solid",
       "description": "Soft satin paint — the default for icon plates.",
       "paint": "base",
-      "engines": { "cycles": "full", "eevee": "full" },
+      "engines": {
+        "cycles": "full",
+        "eevee": "full"
+      },
       "params": {
-        "roughness": { "label": "Roughness",  "type": "number", "min": 0, "max": 1, "step": 0.01, "default": 0.45 },
-        "coat":      { "label": "Clear Coat", "type": "number", "min": 0, "max": 1, "step": 0.01, "default": 0.25 }
+        "roughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.45
+        },
+        "coat": {
+          "label": "Clear Coat",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.25
+        }
       }
     },
     "candy": {
@@ -100,12 +333,43 @@
       "category": "Solid",
       "description": "Translucent sugar candy with subsurface glow.",
       "paint": "base",
-      "engines": { "cycles": "full", "eevee": "good" },
+      "engines": {
+        "cycles": "full",
+        "eevee": "good"
+      },
       "params": {
-        "roughness":    { "label": "Roughness",    "type": "number", "min": 0, "max": 1, "step": 0.01, "default": 0.15 },
-        "subsurface":   { "label": "Subsurface",   "type": "number", "min": 0, "max": 1, "step": 0.01, "default": 1.0 },
-        "transmission": { "label": "Transmission", "type": "number", "min": 0, "max": 1, "step": 0.01, "default": 0.0 },
-        "coat":         { "label": "Clear Coat",   "type": "number", "min": 0, "max": 1, "step": 0.01, "default": 1.0 }
+        "roughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.15
+        },
+        "subsurface": {
+          "label": "Subsurface",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0
+        },
+        "transmission": {
+          "label": "Transmission",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0
+        },
+        "coat": {
+          "label": "Clear Coat",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0
+        }
       }
     },
     "gummy": {
@@ -113,11 +377,35 @@
       "category": "Solid",
       "description": "Soft gummy-bear subsurface material.",
       "paint": "base",
-      "engines": { "cycles": "full", "eevee": "good" },
+      "engines": {
+        "cycles": "full",
+        "eevee": "good"
+      },
       "params": {
-        "roughness":      { "label": "Roughness",      "type": "number", "min": 0, "max": 1,   "step": 0.01, "default": 0.2 },
-        "subsurfaceScale":{ "label": "Softness",       "type": "number", "min": 0, "max": 1,   "step": 0.01, "default": 0.3 },
-        "coat":           { "label": "Clear Coat",     "type": "number", "min": 0, "max": 1,   "step": 0.01, "default": 0.6 }
+        "roughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.2
+        },
+        "subsurfaceScale": {
+          "label": "Softness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.3
+        },
+        "coat": {
+          "label": "Clear Coat",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.6
+        }
       }
     },
     "jelly": {
@@ -125,13 +413,45 @@
       "category": "Glass",
       "description": "Wobbly translucent jelly with a scattering volume (Cycles).",
       "paint": "tint",
-      "engines": { "cycles": "full", "eevee": "fallback" },
+      "engines": {
+        "cycles": "full",
+        "eevee": "fallback"
+      },
       "eeveeNote": "EEVEE falls back to Gummy (volumes are not visible through refraction).",
       "params": {
-        "density": { "label": "Density",   "type": "number", "min": 0, "max": 20,  "step": 0.1,  "default": 8 },
-        "scatter": { "label": "Scatter",   "type": "number", "min": 0, "max": 10,  "step": 0.1,  "default": 4 },
-        "frost":   { "label": "Roughness", "type": "number", "min": 0, "max": 0.4, "step": 0.01, "default": 0.08 },
-        "ior":     { "label": "Refraction","type": "number", "min": 1.0, "max": 1.8, "step": 0.01, "default": 1.35, "unit": "IOR" }
+        "density": {
+          "label": "Density",
+          "type": "number",
+          "min": 0,
+          "max": 20,
+          "step": 0.1,
+          "default": 8
+        },
+        "scatter": {
+          "label": "Scatter",
+          "type": "number",
+          "min": 0,
+          "max": 10,
+          "step": 0.1,
+          "default": 4
+        },
+        "frost": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 0.4,
+          "step": 0.01,
+          "default": 0.08
+        },
+        "ior": {
+          "label": "Refraction",
+          "type": "number",
+          "min": 1.0,
+          "max": 1.8,
+          "step": 0.01,
+          "default": 1.35,
+          "unit": "IOR"
+        }
       }
     },
     "chrome": {
@@ -139,10 +459,27 @@
       "category": "Metal",
       "description": "Mirror-polished metal. Optional colour tint from the art.",
       "paint": "base",
-      "engines": { "cycles": "full", "eevee": "full" },
+      "engines": {
+        "cycles": "full",
+        "eevee": "full"
+      },
       "params": {
-        "tint":      { "label": "Colour Tint", "type": "number", "min": 0, "max": 1,   "step": 0.01, "default": 0.0 },
-        "roughness": { "label": "Roughness",   "type": "number", "min": 0, "max": 0.4, "step": 0.01, "default": 0.05 }
+        "tint": {
+          "label": "Colour Tint",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0
+        },
+        "roughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 0.4,
+          "step": 0.01,
+          "default": 0.05
+        }
       }
     },
     "brushed_metal": {
@@ -150,14 +487,55 @@
       "category": "Metal",
       "description": "Brushed / spun anodized aluminium in the art colour.",
       "paint": "base",
-      "engines": { "cycles": "full", "eevee": "good" },
+      "engines": {
+        "cycles": "full",
+        "eevee": "good"
+      },
       "eeveeNote": "Anisotropy is Cycles-only; EEVEE shows bump streaks.",
       "params": {
-        "tint":       { "label": "Colour",      "type": "number", "min": 0, "max": 1,   "step": 0.01, "default": 1.0 },
-        "roughness":  { "label": "Roughness",   "type": "number", "min": 0, "max": 1,   "step": 0.01, "default": 0.3 },
-        "anisotropy": { "label": "Anisotropy",  "type": "number", "min": 0, "max": 1,   "step": 0.01, "default": 0.8 },
-        "brush":      { "label": "Brushing",    "type": "enum",   "options": ["radial", "linear"], "default": "radial" },
-        "film":       { "label": "Oxide Film",  "type": "number", "min": 0, "max": 900, "step": 10, "default": 0, "unit": "nm", "help": "Thin-film interference (titanium look, Cycles)." }
+        "tint": {
+          "label": "Colour",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0
+        },
+        "roughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.3
+        },
+        "anisotropy": {
+          "label": "Anisotropy",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.8
+        },
+        "brush": {
+          "label": "Brushing",
+          "type": "enum",
+          "options": [
+            "radial",
+            "linear"
+          ],
+          "default": "radial"
+        },
+        "film": {
+          "label": "Oxide Film",
+          "type": "number",
+          "min": 0,
+          "max": 900,
+          "step": 10,
+          "default": 0,
+          "unit": "nm",
+          "help": "Thin-film interference (titanium look, Cycles)."
+        }
       }
     },
     "matte_clay": {
@@ -165,11 +543,36 @@
       "category": "Solid",
       "description": "Soft-touch matte clay — great for 'clay render' looks.",
       "paint": "base",
-      "engines": { "cycles": "full", "eevee": "good" },
+      "engines": {
+        "cycles": "full",
+        "eevee": "good"
+      },
       "params": {
-        "tint":      { "label": "Colour",    "type": "number", "min": 0, "max": 1, "step": 0.01, "default": 1.0, "help": "0 = neutral clay, 1 = art colour." },
-        "roughness": { "label": "Roughness", "type": "number", "min": 0.3, "max": 1, "step": 0.01, "default": 0.9 },
-        "sheen":     { "label": "Sheen",     "type": "number", "min": 0, "max": 1, "step": 0.01, "default": 0.15 }
+        "tint": {
+          "label": "Colour",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "help": "0 = neutral clay, 1 = art colour."
+        },
+        "roughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0.3,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.9
+        },
+        "sheen": {
+          "label": "Sheen",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.15
+        }
       }
     },
     "iridescent": {
@@ -177,16 +580,70 @@
       "category": "Metal",
       "description": "Oil-slick thin-film interference (Cycles).",
       "paint": "base",
-      "engines": { "cycles": "full", "eevee": "fallback" },
+      "engines": {
+        "cycles": "full",
+        "eevee": "fallback"
+      },
       "eeveeNote": "EEVEE ignores thin film; uses a rainbow-coat approximation.",
       "params": {
-        "tint":      { "label": "Base Colour", "type": "number", "min": 0, "max": 1,    "step": 0.01, "default": 0.2 },
-        "roughness": { "label": "Roughness",   "type": "number", "min": 0, "max": 0.6,  "step": 0.01, "default": 0.15 },
-        "filmMin":   { "label": "Film Min",    "type": "number", "min": 50, "max": 1500, "step": 10, "default": 250, "unit": "nm" },
-        "filmMax":   { "label": "Film Max",    "type": "number", "min": 50, "max": 1500, "step": 10, "default": 900, "unit": "nm" },
-        "filmIor":   { "label": "Film IOR",    "type": "number", "min": 1.1, "max": 2.5, "step": 0.01, "default": 1.6 },
-        "bands":     { "label": "Band Scale",  "type": "number", "min": 0.2, "max": 12,  "step": 0.1,  "default": 3 },
-        "metallic":  { "label": "Metallic",    "type": "number", "min": 0, "max": 1,     "step": 0.01, "default": 1.0 }
+        "tint": {
+          "label": "Base Colour",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.2
+        },
+        "roughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 0.6,
+          "step": 0.01,
+          "default": 0.15
+        },
+        "filmMin": {
+          "label": "Film Min",
+          "type": "number",
+          "min": 50,
+          "max": 1500,
+          "step": 10,
+          "default": 250,
+          "unit": "nm"
+        },
+        "filmMax": {
+          "label": "Film Max",
+          "type": "number",
+          "min": 50,
+          "max": 1500,
+          "step": 10,
+          "default": 900,
+          "unit": "nm"
+        },
+        "filmIor": {
+          "label": "Film IOR",
+          "type": "number",
+          "min": 1.1,
+          "max": 2.5,
+          "step": 0.01,
+          "default": 1.6
+        },
+        "bands": {
+          "label": "Band Scale",
+          "type": "number",
+          "min": 0.2,
+          "max": 12,
+          "step": 0.1,
+          "default": 3
+        },
+        "metallic": {
+          "label": "Metallic",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0
+        }
       }
     },
     "neon": {
@@ -194,11 +651,35 @@
       "category": "Light",
       "description": "Emissive neon tube with compositor bloom.",
       "paint": "emission",
-      "engines": { "cycles": "full", "eevee": "full" },
+      "engines": {
+        "cycles": "full",
+        "eevee": "full"
+      },
       "params": {
-        "strength": { "label": "Brightness", "type": "number", "min": 0, "max": 12, "step": 0.1,  "default": 4 },
-        "bloom":    { "label": "Bloom",      "type": "number", "min": 0, "max": 1,  "step": 0.01, "default": 0.6 },
-        "core":     { "label": "Hot Core",   "type": "number", "min": 0, "max": 1,  "step": 0.01, "default": 0.25 }
+        "strength": {
+          "label": "Brightness",
+          "type": "number",
+          "min": 0,
+          "max": 12,
+          "step": 0.1,
+          "default": 4
+        },
+        "bloom": {
+          "label": "Bloom",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.6
+        },
+        "core": {
+          "label": "Hot Core",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.25
+        }
       }
     },
     "flat": {
@@ -206,46 +687,683 @@
       "category": "Light",
       "description": "Unlit, colour-exact flat art — the original SVG look, in 3D space.",
       "paint": "emission",
-      "engines": { "cycles": "full", "eevee": "full" },
+      "engines": {
+        "cycles": "full",
+        "eevee": "full"
+      },
       "params": {}
     }
   },
   "lighting": {
-    "studio":   { "label": "Studio",   "description": "Balanced softbox key, grazing rim strips, front fill.", "key": 1.0, "rim": 1.0, "fill": 1.0, "environment": 1.0, "warmth": 0.0 },
-    "soft":     { "label": "Soft",     "description": "Low-contrast, diffuse light.", "key": 0.7, "rim": 0.6, "fill": 1.6, "environment": 1.3, "warmth": 0.0 },
-    "dramatic": { "label": "Dramatic", "description": "Strong key, deep shadows, bright rims.", "key": 1.5, "rim": 1.6, "fill": 0.3, "environment": 0.6, "warmth": 0.0 },
-    "top":      { "label": "Top Light","description": "Icon Composer 2.0 style vertical light from above.", "key": 1.0, "rim": 1.2, "fill": 0.9, "environment": 1.0, "warmth": 0.0, "lockAngle": 0 },
-    "darkfield":{ "label": "Dark Field","description": "Product-photography glass lighting: black surround, bright edge strips.", "key": 0.5, "rim": 2.0, "fill": 0.2, "environment": 0.3, "warmth": 0.0 },
-    "sunset":   { "label": "Golden",   "description": "Warm low key, cool fill.", "key": 1.2, "rim": 1.0, "fill": 0.6, "environment": 0.9, "warmth": 0.8 },
-    "neon":     { "label": "Neon Night","description": "Dark environment with magenta/cyan rims.", "key": 0.4, "rim": 1.8, "fill": 0.3, "environment": 0.25, "warmth": 0.0, "rimColors": ["#ff3df2", "#22d3ee"] },
-    "flat":     { "label": "Flat",     "description": "Even, shadowless light for diagrams.", "key": 0.4, "rim": 0.0, "fill": 2.0, "environment": 1.8, "warmth": 0.0 }
+    "studio": {
+      "label": "Studio",
+      "description": "Balanced softbox key, grazing rim strips, front fill.",
+      "key": 1.0,
+      "rim": 1.0,
+      "fill": 1.0,
+      "environment": 1.0,
+      "warmth": 0.0
+    },
+    "soft": {
+      "label": "Soft",
+      "description": "Low-contrast, diffuse light.",
+      "key": 0.7,
+      "rim": 0.6,
+      "fill": 1.6,
+      "environment": 1.3,
+      "warmth": 0.0
+    },
+    "dramatic": {
+      "label": "Dramatic",
+      "description": "Strong key, deep shadows, bright rims.",
+      "key": 1.5,
+      "rim": 1.6,
+      "fill": 0.3,
+      "environment": 0.6,
+      "warmth": 0.0
+    },
+    "top": {
+      "label": "Top Light",
+      "description": "Icon Composer 2.0 style vertical light from above.",
+      "key": 1.0,
+      "rim": 1.2,
+      "fill": 0.9,
+      "environment": 1.0,
+      "warmth": 0.0,
+      "lockAngle": 0
+    },
+    "darkfield": {
+      "label": "Dark Field",
+      "description": "Product-photography glass lighting: black surround, bright edge strips.",
+      "key": 0.5,
+      "rim": 2.0,
+      "fill": 0.2,
+      "environment": 0.3,
+      "warmth": 0.0
+    },
+    "sunset": {
+      "label": "Golden",
+      "description": "Warm low key, cool fill.",
+      "key": 1.2,
+      "rim": 1.0,
+      "fill": 0.6,
+      "environment": 0.9,
+      "warmth": 0.8
+    },
+    "neon": {
+      "label": "Neon Night",
+      "description": "Dark environment with magenta/cyan rims.",
+      "key": 0.4,
+      "rim": 1.8,
+      "fill": 0.3,
+      "environment": 0.25,
+      "warmth": 0.0,
+      "rimColors": [
+        "#ff3df2",
+        "#22d3ee"
+      ]
+    },
+    "flat": {
+      "label": "Flat",
+      "description": "Even, shadowless light for diagrams.",
+      "key": 0.4,
+      "rim": 0.0,
+      "fill": 2.0,
+      "environment": 1.8,
+      "warmth": 0.0
+    }
   },
   "platforms": {
-    "ios":     { "label": "iOS / iPadOS", "shape": "squircle", "canvas": 1024, "plateSize": 1.0,    "appearances": ["light", "dark", "clear-light", "clear-dark", "tinted-light", "tinted-dark"] },
-    "macos":   { "label": "macOS",        "shape": "squircle", "canvas": 1024, "plateSize": 0.8047, "appearances": ["light", "dark", "clear-light", "clear-dark", "tinted-light", "tinted-dark"], "note": "824/1024 body with 100 px margin and a baked drop shadow." },
-    "watchos": { "label": "watchOS",      "shape": "circle",   "canvas": 1088, "plateSize": 1.0,    "appearances": ["light"] },
-    "android": { "label": "Android",      "shape": "circle",   "canvas": 432,  "plateSize": 1.0,    "appearances": ["light", "dark", "tinted-light"], "note": "Adaptive icon: 108dp layers, 72dp safe zone; foreground = layers, background = plate." },
-    "windows": { "label": "Windows",      "shape": "rounded",  "canvas": 256,  "plateSize": 0.875,  "appearances": ["light", "dark"] },
-    "web":     { "label": "Web / PWA",    "shape": "rounded",  "canvas": 512,  "plateSize": 1.0,    "appearances": ["light", "dark"] }
+    "ios": {
+      "label": "iOS / iPadOS",
+      "shape": "squircle",
+      "canvas": 1024,
+      "plateSize": 1.0,
+      "appearances": [
+        "light",
+        "dark",
+        "clear-light",
+        "clear-dark",
+        "tinted-light",
+        "tinted-dark"
+      ]
+    },
+    "macos": {
+      "label": "macOS",
+      "shape": "squircle",
+      "canvas": 1024,
+      "plateSize": 0.8047,
+      "appearances": [
+        "light",
+        "dark",
+        "clear-light",
+        "clear-dark",
+        "tinted-light",
+        "tinted-dark"
+      ],
+      "note": "824/1024 body with 100 px margin and a baked drop shadow."
+    },
+    "watchos": {
+      "label": "watchOS",
+      "shape": "circle",
+      "canvas": 1088,
+      "plateSize": 1.0,
+      "appearances": [
+        "light"
+      ]
+    },
+    "android": {
+      "label": "Android",
+      "shape": "circle",
+      "canvas": 432,
+      "plateSize": 1.0,
+      "appearances": [
+        "light",
+        "dark",
+        "tinted-light"
+      ],
+      "note": "Adaptive icon: 108dp layers, 72dp safe zone; foreground = layers, background = plate."
+    },
+    "windows": {
+      "label": "Windows",
+      "shape": "rounded",
+      "canvas": 256,
+      "plateSize": 0.875,
+      "appearances": [
+        "light",
+        "dark"
+      ]
+    },
+    "web": {
+      "label": "Web / PWA",
+      "shape": "rounded",
+      "canvas": 512,
+      "plateSize": 1.0,
+      "appearances": [
+        "light",
+        "dark"
+      ]
+    }
   },
   "appearances": {
-    "light":        { "label": "Default",      "short": "Light" },
-    "dark":         { "label": "Dark",         "short": "Dark" },
-    "clear-light":  { "label": "Clear Light",  "short": "Clear" },
-    "clear-dark":   { "label": "Clear Dark",   "short": "Clear D" },
-    "tinted-light": { "label": "Tinted Light", "short": "Tinted" },
-    "tinted-dark":  { "label": "Tinted Dark",  "short": "Tinted D" }
+    "light": {
+      "label": "Default",
+      "short": "Light"
+    },
+    "dark": {
+      "label": "Dark",
+      "short": "Dark"
+    },
+    "clear-light": {
+      "label": "Clear Light",
+      "short": "Clear"
+    },
+    "clear-dark": {
+      "label": "Clear Dark",
+      "short": "Clear D"
+    },
+    "tinted-light": {
+      "label": "Tinted Light",
+      "short": "Tinted"
+    },
+    "tinted-dark": {
+      "label": "Tinted Dark",
+      "short": "Tinted D"
+    }
   },
   "quality": {
-    "draft":   { "label": "Draft",   "engine": "eevee",  "size": 512,  "samples": 16,   "description": "EEVEE, ~0.2 s warm. Live layout + lighting." },
-    "preview": { "label": "Preview", "engine": "cycles", "size": 512,  "samples": 48,   "adaptiveThreshold": 0.05, "description": "Cycles OptiX + OptiX denoise, ~1 s. First faithful glass." },
-    "final":   { "label": "Final",   "engine": "cycles", "size": 1024, "samples": 384,  "adaptiveThreshold": 0.01, "description": "Cycles OptiX, adaptive, denoised. Exports." },
-    "ultra":   { "label": "Ultra",   "engine": "cycles", "size": 2048, "samples": 1024, "adaptiveThreshold": 0.005, "description": "Hero shots only. Explicit opt-in." }
+    "draft": {
+      "label": "Draft",
+      "engine": "eevee",
+      "size": 512,
+      "samples": 16,
+      "description": "EEVEE, ~0.2 s warm. Live layout + lighting."
+    },
+    "preview": {
+      "label": "Preview",
+      "engine": "cycles",
+      "size": 512,
+      "samples": 48,
+      "adaptiveThreshold": 0.05,
+      "description": "Cycles OptiX + OptiX denoise, ~1 s. First faithful glass."
+    },
+    "final": {
+      "label": "Final",
+      "engine": "cycles",
+      "size": 1024,
+      "samples": 384,
+      "adaptiveThreshold": 0.01,
+      "description": "Cycles OptiX, adaptive, denoised. Exports."
+    },
+    "ultra": {
+      "label": "Ultra",
+      "engine": "cycles",
+      "size": 2048,
+      "samples": 1024,
+      "adaptiveThreshold": 0.005,
+      "description": "Hero shots only. Explicit opt-in."
+    }
   },
   "colorModes": {
-    "neutral":    { "label": "Neutral (brand-accurate)", "viewTransform": "Khronos PBR Neutral", "look": "None" },
-    "standard":   { "label": "Standard (SVG-exact)",     "viewTransform": "Standard",            "look": "None" },
-    "agx":        { "label": "Photographic (AgX)",       "viewTransform": "AgX",                 "look": "None" },
-    "agx-punchy": { "label": "Punchy (AgX)",             "viewTransform": "AgX",                 "look": "AgX - Punchy" }
+    "neutral": {
+      "label": "Neutral (brand-accurate)",
+      "viewTransform": "Khronos PBR Neutral",
+      "look": "None"
+    },
+    "standard": {
+      "label": "Standard (SVG-exact)",
+      "viewTransform": "Standard",
+      "look": "None"
+    },
+    "agx": {
+      "label": "Photographic (AgX)",
+      "viewTransform": "AgX",
+      "look": "None"
+    },
+    "agx-punchy": {
+      "label": "Punchy (AgX)",
+      "viewTransform": "AgX",
+      "look": "AgX - Punchy"
+    }
+  },
+  "looks": {
+    "liquid-glass": {
+      "label": "Liquid Glass",
+      "description": "Apple iOS 26-style glass layers on a satin plate.",
+      "style": {
+        "layerDefaults": {
+          "material": {
+            "preset": "liquid_glass",
+            "params": {}
+          },
+          "depth": {
+            "thickness": 0.1,
+            "bevel": 0.045,
+            "bevelSegments": 6,
+            "inflate": 0.0
+          },
+          "shadow": {
+            "kind": "neutral",
+            "opacity": 0.5
+          },
+          "mode": "individual"
+        },
+        "plate": {
+          "material": {
+            "preset": "satin",
+            "params": {}
+          },
+          "thickness": 0.16,
+          "bevel": 0.04
+        },
+        "lighting": {
+          "preset": "studio",
+          "angle": -45,
+          "elevation": 50,
+          "intensity": 1,
+          "rim": 1,
+          "fill": 1,
+          "environment": 1,
+          "shadowSoftness": 0.5
+        },
+        "zGap": 0.13
+      }
+    },
+    "crystal": {
+      "label": "Crystal",
+      "description": "Water-clear glass with strong lensing.",
+      "style": {
+        "layerDefaults": {
+          "material": {
+            "preset": "clear_glass",
+            "params": {
+              "tint": 0.35
+            }
+          },
+          "depth": {
+            "thickness": 0.12,
+            "bevel": 0.055,
+            "bevelSegments": 8,
+            "inflate": 0.0
+          },
+          "shadow": {
+            "kind": "chromatic",
+            "opacity": 0.6
+          },
+          "mode": "individual"
+        },
+        "plate": {
+          "material": {
+            "preset": "satin",
+            "params": {}
+          },
+          "thickness": 0.16,
+          "bevel": 0.04
+        },
+        "lighting": {
+          "preset": "darkfield",
+          "angle": -45,
+          "elevation": 50,
+          "intensity": 1,
+          "rim": 1,
+          "fill": 1,
+          "environment": 1,
+          "shadowSoftness": 0.5
+        },
+        "zGap": 0.15
+      }
+    },
+    "frosted": {
+      "label": "Frosted",
+      "description": "Sandblasted glass, soft and calm.",
+      "style": {
+        "layerDefaults": {
+          "material": {
+            "preset": "frosted_glass",
+            "params": {
+              "tint": 0.55
+            }
+          },
+          "depth": {
+            "thickness": 0.1,
+            "bevel": 0.04,
+            "bevelSegments": 6,
+            "inflate": 0.0
+          },
+          "shadow": {
+            "kind": "neutral",
+            "opacity": 0.45
+          },
+          "mode": "individual"
+        },
+        "plate": {
+          "material": {
+            "preset": "satin",
+            "params": {}
+          },
+          "thickness": 0.16,
+          "bevel": 0.04
+        },
+        "lighting": {
+          "preset": "soft",
+          "angle": -45,
+          "elevation": 50,
+          "intensity": 1,
+          "rim": 1,
+          "fill": 1,
+          "environment": 1,
+          "shadowSoftness": 0.7
+        },
+        "zGap": 0.12
+      }
+    },
+    "prism": {
+      "label": "Prism",
+      "description": "High-index crystal with rainbow dispersion (Cycles).",
+      "style": {
+        "layerDefaults": {
+          "material": {
+            "preset": "dispersive_crystal",
+            "params": {
+              "tint": 0.25
+            }
+          },
+          "depth": {
+            "thickness": 0.12,
+            "bevel": 0.055,
+            "bevelSegments": 8,
+            "inflate": 0.0
+          },
+          "shadow": {
+            "kind": "chromatic",
+            "opacity": 0.55
+          },
+          "mode": "individual"
+        },
+        "plate": {
+          "material": {
+            "preset": "satin",
+            "params": {}
+          },
+          "thickness": 0.16,
+          "bevel": 0.04
+        },
+        "lighting": {
+          "preset": "dramatic",
+          "angle": -35,
+          "elevation": 55,
+          "intensity": 1,
+          "rim": 1,
+          "fill": 1,
+          "environment": 1,
+          "shadowSoftness": 0.4
+        },
+        "zGap": 0.15
+      }
+    },
+    "candy": {
+      "label": "Candy",
+      "description": "Glossy hard candy with subsurface glow.",
+      "style": {
+        "layerDefaults": {
+          "material": {
+            "preset": "candy",
+            "params": {}
+          },
+          "depth": {
+            "thickness": 0.11,
+            "bevel": 0.05,
+            "bevelSegments": 8,
+            "inflate": 0.2
+          },
+          "shadow": {
+            "kind": "chromatic",
+            "opacity": 0.5
+          },
+          "mode": "individual"
+        },
+        "plate": {
+          "material": {
+            "preset": "glossy_plastic",
+            "params": {}
+          },
+          "thickness": 0.16,
+          "bevel": 0.045
+        },
+        "lighting": {
+          "preset": "studio",
+          "angle": -45,
+          "elevation": 50,
+          "intensity": 1,
+          "rim": 1,
+          "fill": 1,
+          "environment": 1,
+          "shadowSoftness": 0.5
+        },
+        "zGap": 0.13
+      }
+    },
+    "clay": {
+      "label": "Clay",
+      "description": "Soft-touch matte clay render.",
+      "style": {
+        "layerDefaults": {
+          "material": {
+            "preset": "matte_clay",
+            "params": {}
+          },
+          "depth": {
+            "thickness": 0.1,
+            "bevel": 0.045,
+            "bevelSegments": 6,
+            "inflate": 0.3
+          },
+          "shadow": {
+            "kind": "neutral",
+            "opacity": 0.55
+          },
+          "mode": "individual"
+        },
+        "plate": {
+          "material": {
+            "preset": "matte_clay",
+            "params": {}
+          },
+          "thickness": 0.16,
+          "bevel": 0.05
+        },
+        "lighting": {
+          "preset": "soft",
+          "angle": -45,
+          "elevation": 50,
+          "intensity": 1,
+          "rim": 1,
+          "fill": 1,
+          "environment": 1,
+          "shadowSoftness": 0.75
+        },
+        "zGap": 0.12
+      }
+    },
+    "chrome": {
+      "label": "Chrome",
+      "description": "Polished chrome glyphs on an anodized plate.",
+      "style": {
+        "layerDefaults": {
+          "material": {
+            "preset": "chrome",
+            "params": {
+              "tint": 0.25
+            }
+          },
+          "depth": {
+            "thickness": 0.1,
+            "bevel": 0.045,
+            "bevelSegments": 8,
+            "inflate": 0.25
+          },
+          "shadow": {
+            "kind": "neutral",
+            "opacity": 0.55
+          },
+          "mode": "individual"
+        },
+        "plate": {
+          "material": {
+            "preset": "brushed_metal",
+            "params": {}
+          },
+          "thickness": 0.16,
+          "bevel": 0.04
+        },
+        "lighting": {
+          "preset": "dramatic",
+          "angle": -45,
+          "elevation": 50,
+          "intensity": 1,
+          "rim": 1,
+          "fill": 1,
+          "environment": 1,
+          "shadowSoftness": 0.45
+        },
+        "zGap": 0.13
+      }
+    },
+    "neon": {
+      "label": "Neon",
+      "description": "Glowing neon tubes on a dark plate.",
+      "style": {
+        "layerDefaults": {
+          "material": {
+            "preset": "neon",
+            "params": {}
+          },
+          "depth": {
+            "thickness": 0.06,
+            "bevel": 0.028,
+            "bevelSegments": 6,
+            "inflate": 0.0
+          },
+          "shadow": {
+            "kind": "none",
+            "opacity": 0.0
+          },
+          "mode": "individual"
+        },
+        "plate": {
+          "material": {
+            "preset": "satin",
+            "params": {
+              "roughness": 0.6
+            }
+          },
+          "thickness": 0.16,
+          "bevel": 0.04,
+          "fill": {
+            "type": "system-dark"
+          }
+        },
+        "lighting": {
+          "preset": "neon",
+          "angle": -45,
+          "elevation": 50,
+          "intensity": 1,
+          "rim": 1,
+          "fill": 1,
+          "environment": 1,
+          "shadowSoftness": 0.5
+        },
+        "zGap": 0.1
+      }
+    },
+    "iridescent": {
+      "label": "Iridescent",
+      "description": "Oil-slick thin-film glyphs (Cycles).",
+      "style": {
+        "layerDefaults": {
+          "material": {
+            "preset": "iridescent",
+            "params": {
+              "tint": 0.45
+            }
+          },
+          "depth": {
+            "thickness": 0.1,
+            "bevel": 0.045,
+            "bevelSegments": 8,
+            "inflate": 0.3
+          },
+          "shadow": {
+            "kind": "neutral",
+            "opacity": 0.5
+          },
+          "mode": "individual"
+        },
+        "plate": {
+          "material": {
+            "preset": "satin",
+            "params": {}
+          },
+          "thickness": 0.16,
+          "bevel": 0.04
+        },
+        "lighting": {
+          "preset": "studio",
+          "angle": -45,
+          "elevation": 50,
+          "intensity": 1,
+          "rim": 1,
+          "fill": 1,
+          "environment": 1,
+          "shadowSoftness": 0.5
+        },
+        "zGap": 0.13
+      }
+    },
+    "soft-3d": {
+      "label": "Soft 3D",
+      "description": "Subtle depth, colour-exact — closest to the original art.",
+      "style": {
+        "layerDefaults": {
+          "material": {
+            "preset": "satin",
+            "params": {
+              "roughness": 0.5,
+              "coat": 0.15
+            }
+          },
+          "depth": {
+            "thickness": 0.05,
+            "bevel": 0.022,
+            "bevelSegments": 5,
+            "inflate": 0.0
+          },
+          "shadow": {
+            "kind": "neutral",
+            "opacity": 0.35
+          },
+          "mode": "individual"
+        },
+        "plate": {
+          "material": {
+            "preset": "satin",
+            "params": {}
+          },
+          "thickness": 0.12,
+          "bevel": 0.03
+        },
+        "lighting": {
+          "preset": "soft",
+          "angle": -45,
+          "elevation": 45,
+          "intensity": 1,
+          "rim": 1,
+          "fill": 1,
+          "environment": 1,
+          "shadowSoftness": 0.6
+        },
+        "zGap": 0.06
+      }
+    }
   }
 }

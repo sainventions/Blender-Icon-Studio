@@ -19,3 +19,4 @@ renders/
 Thumbs.db
 .vscode/
 .idea/
+*.tsbuildinfo

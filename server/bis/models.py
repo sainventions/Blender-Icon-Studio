@@ -350,7 +350,68 @@ class ExportRequest(_Model):
     quality: Quality = "final"
 
 
-JobKind = Literal["render", "animate", "export", "blend", "swatches"]
+# ----------------------------------------------------------------------------------------------
+# Styles, looks and batch ("Icon Pack") — apply one look to many icons
+# ----------------------------------------------------------------------------------------------
+class StyleLayerDefaults(_Model):
+    material: MaterialSpec = MaterialSpec()
+    depth: LayerDepth = LayerDepth()
+    shadow: LayerShadow = LayerShadow()
+    mode: Literal["individual", "combined"] = "individual"
+
+
+class StylePlate(_Model):
+    material: MaterialSpec = MaterialSpec(preset="satin")
+    thickness: float = 0.16
+    bevel: float = 0.04
+    fill: Optional[Fill] = None          # None = keep each icon's own plate fill
+    shape: Optional[PlateShape] = None   # None = keep each icon's detected shape
+
+
+class StyleSpec(_Model):
+    """A transferable look. Applying it to a project (see bis.style.apply_style):
+    - every layer gets layerDefaults (material/depth/shadow/mode) — or layerMaterials[i] by index from the bottom
+      (clamped to the last entry) when given; bevel is clamped to each layer's safeRadius;
+    - layers are restacked with z_i = i * zGap (zGap None = keep z);
+    - plate material/thickness/bevel (+ fill/shape when not None), lighting, camera (when given),
+      render.colorMode (when given) and appearances.tint (when given) are copied."""
+    layerDefaults: StyleLayerDefaults = StyleLayerDefaults()
+    layerMaterials: Optional[list[MaterialSpec]] = None
+    zGap: Optional[float] = 0.13
+    plate: StylePlate = StylePlate()
+    lighting: Optional[Lighting] = None
+    camera: Optional[CameraSpec] = None
+    colorMode: Optional[Literal["neutral", "standard", "agx", "agx-punchy"]] = None
+    tint: Optional[Tint] = None
+
+
+class StyleRequest(_Model):
+    """POST /api/projects/{id}/style — exactly one of look / style / fromProject."""
+    look: Optional[str] = None            # key into presets.json "looks"
+    style: Optional[StyleSpec] = None
+    fromProject: Optional[str] = None     # copy the style of another project (bis.style.extract_style)
+
+
+class BatchSource(_Model):
+    sample: Optional[str] = None          # sample name as listed by /api/samples
+    projectId: Optional[str] = None       # existing project
+
+
+class BatchRequest(_Model):
+    """POST /api/batch — 'Icon Pack': create/update projects from many sources, apply one style, render
+    each, optionally export everything into one zip."""
+    sources: list[BatchSource]
+    look: Optional[str] = None
+    style: Optional[StyleSpec] = None
+    fromProject: Optional[str] = None
+    strategy: SplitStrategy = "smart"
+    quality: Quality = "draft"            # per-icon render quality (tests: draft)
+    size: int = 512
+    appearance: AppearanceId = "light"
+    export: Optional[ExportRequest] = None
+
+
+JobKind = Literal["render", "animate", "export", "blend", "swatches", "batch"]
 JobState = Literal["queued", "running", "done", "error", "cancelled"]
 
 

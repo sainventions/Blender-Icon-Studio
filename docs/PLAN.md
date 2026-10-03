@@ -270,3 +270,14 @@ Renders: `workspace/projects/<id>/renders/<jobId>.png`, URL `/files/projects/<id
 ## 9. Phases
 1. Research ✅ → 2. Contracts ✅ → 3. Parallel build (A, B, C, D1, D2) → 4. Integration on the real corpus
 → 5. Adversarial review + UI QA in the browser → 6. Polish (swatches, hero renders, README screenshots).
+
+## 10. Round 2 — Looks, Style transfer and Icon Pack (batch)
+Contract: `StyleSpec`, `StyleRequest`, `BatchRequest`, `BatchSource` in models.py / types.ts; `looks` in presets.json.
+| Method | Path | Body / result |
+|---|---|---|
+| GET | `/projects/{id}/style` | `StyleSpec` extracted from the project |
+| POST | `/projects/{id}/style` | `StyleRequest` (`look` \| `style` \| `fromProject`) → `Project` (applied + saved) |
+| GET | `/looks` | `Record<string, Look>` (also included in `/presets`) |
+| POST | `/batch` | `BatchRequest` → `Job` (kind `batch`); result `{items: BatchItemResult[], contactSheet?: url, zip?: url}` |
+Apply rules are documented on `StyleSpec` in models.py (bevel clamped to each layer's safeRadius).
+Mono floor: the worker uses 0.3 (supersedes 0.25 in §5); the viewport mirrors the worker.
