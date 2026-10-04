@@ -11,7 +11,7 @@ import { OrbitControls, OrthographicCamera, PerspectiveCamera } from '@react-thr
 import * as THREE from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import { FRONT_ORTHO_SCALE, isoBasis, isoQuaternion, orthoFrame } from './iso'
-import { damp, useViewportStore } from './store'
+import { damp, resolveFrame, useViewportStore } from './store'
 
 export { FRONT_ORTHO_SCALE }
 
@@ -102,14 +102,19 @@ function IsoRig({ zoom, iso, points }: Props) {
       f.scale !== goal.scale
     isoQuaternion(t, k.q)
     const { x: ax, y: ay, z: az } = isoBasis(t)
-    // camera on the view axis through the frame centre (lens shift = moving the ortho camera sideways)
-    k.target.set(f.tx, f.ty, f.tz).addScaledVector(ax, f.cx).addScaledVector(ay, f.cy)
+    const { width, height } = state.size
+    // the square Blender frame (side `scale`) on the view window (store.frame: the editor's CAD zoom / pan, else the
+    // canvas's centred inscribed square). The auto-framing above is the 100 % baseline; the view rides on top.
+    const vf = resolveFrame(store.frame, width, height)
+    const zz = vf.side / Math.max(1e-6, f.scale)
+    // camera on the view axis through the frame centre (lens shift = moving the ortho camera sideways), shifted so
+    // that frame centre lands on the window's centre instead of the canvas's
+    const sx = (width / 2 - (vf.x + vf.side / 2)) / zz
+    const sy = (vf.y + vf.side / 2 - height / 2) / zz
+    k.target.set(f.tx, f.ty, f.tz).addScaledVector(ax, f.cx + sx).addScaledVector(ay, f.cy + sy)
     const dist = Math.max(20, goal.reach + 5)
     cam.position.copy(k.target).addScaledVector(az, dist)
     cam.quaternion.copy(k.q)
-    const { width, height } = state.size
-    // the square Blender frame (side `scale`) on the viewport's shorter side
-    const zz = Math.min(width, height) / Math.max(1e-6, f.scale)
     const far = dist + goal.reach + 10
     if (Math.abs(cam.zoom - zz) > 1e-6 || cam.far !== far) {
       cam.zoom = zz
@@ -133,6 +138,7 @@ function homeOffset(dist: number, out: THREE.Vector3): THREE.Vector3 {
 function OrbitRig({ zoom, fov, points }: Props) {
   const camRef = useRef<THREE.PerspectiveCamera>(null)
   const controlsRef = useRef<OrbitControlsImpl>(null)
+  const store = useViewportStore()
   const gl = useThree((s) => s.gl)
   const invalidate = useThree((s) => s.invalidate)
   const k = useRef({
@@ -203,7 +209,10 @@ function OrbitRig({ zoom, fov, points }: Props) {
     k.right.normalize()
     k.up.copy(k.dir).cross(k.right).normalize()
     const { width, height } = state.size
-    const aspect = width / Math.max(1, height)
+    // With the editor's view window the fit targets that square (the frame) and the canvas shows a window of the
+    // virtual frame-sized image around it (setViewOffset below) — the CAD zoom / pan rides on top of the fit.
+    const vf = store.frame ? resolveFrame(store.frame, width, height) : null
+    const aspect = vf ? 1 : width / Math.max(1, height)
     const tanV = Math.tan(THREE.MathUtils.degToRad(Math.max(5, Math.min(120, fov))) / 2)
     const tanH = tanV * aspect
     const m = ORBIT_MARGIN / Math.max(0.05, zoom)
@@ -303,9 +312,17 @@ function OrbitRig({ zoom, fov, points }: Props) {
     ctl.maxDistance = k.dist * MAX_DOLLY
     const near = Math.max(0.05, k.dist * 0.01)
     const far = Math.max(100, (k.dist * MAX_DOLLY + radius) * 1.5)
-    if (cam.near !== near || cam.far !== far) {
+    const v = cam.view
+    const windowed = !!v?.enabled
+    const sameWindow = vf
+      ? windowed && v!.fullWidth === vf.side && v!.fullHeight === vf.side && v!.offsetX === -vf.x && v!.offsetY === -vf.y && v!.width === width && v!.height === height
+      : !windowed
+    if (cam.near !== near || cam.far !== far || cam.aspect !== aspect || !sameWindow) {
       cam.near = near
       cam.far = far
+      cam.aspect = aspect // (R3F / drei reset it to the canvas aspect on resize; this runs before every render)
+      if (vf) cam.setViewOffset(vf.side, vf.side, -vf.x, -vf.y, width, height)
+      else if (windowed) cam.clearViewOffset()
       cam.updateProjectionMatrix()
     }
 

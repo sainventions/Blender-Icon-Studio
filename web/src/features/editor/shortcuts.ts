@@ -1,11 +1,13 @@
 // Editor keyboard shortcuts. Ignored while typing in inputs or while a dialog is open.
 import { useEffect } from 'react'
+import { prettyShortcut } from '../../lib/format'
 import { isTypingTarget } from '../../lib/hooks'
 import { APPEARANCE_IDS } from '../../lib/projectOps'
 import { useEditor } from '../../store/editor'
 import { useRender } from '../../store/render'
 import { useUi, type StageMode } from '../../store/ui'
 import { animateIso, duplicateProject } from './actions'
+import { resetView } from './stage/viewControl'
 import { copyStyle, pasteStyle } from '../looks/styleActions'
 
 export interface ShortcutDef {
@@ -26,11 +28,13 @@ export const SHORTCUTS: ShortcutDef[] = [
   { keys: '?', label: 'Keyboard shortcuts', group: 'General' },
   { keys: '1 – 6', label: 'Switch appearance (Default, Dark, Clear Light, Clear Dark, Tinted Light, Tinted Dark)', group: 'View' },
   { keys: 'V', label: 'Cycle stage: Viewport → Render → Compare → Matrix', group: 'View' },
+  { keys: 'X', label: 'Top-down ↔ isometric view, animated (I works too)', group: 'View' },
+  { keys: 'Wheel', label: 'Zoom at the cursor (trackpad pinch too)', group: 'View' },
+  { keys: 'Middle-drag', label: 'Pan the view (or hold Space and drag)', group: 'View' },
+  { keys: '0', label: 'Reset view to fit (also Home, ' + prettyShortcut('Mod+0') + ', double middle-click)', group: 'View' },
   { keys: 'O', label: 'Front / orbit view', group: 'View' },
-  { keys: 'I', label: 'Head-on ↔ isometric view (real layer distances)', group: 'View' },
   { keys: 'G', label: 'Icon grid overlay', group: 'View' },
   { keys: 'Mod+\\', label: 'Toggle side panels', group: 'View' },
-  { keys: 'Mod+0', label: 'Zoom to fit', group: 'View' },
   { keys: 'Mod+A', label: 'Select all layers', group: 'Layers' },
   { keys: 'Esc', label: 'Clear selection', group: 'Layers' },
   { keys: 'Mod+G', label: 'Merge selected layers', group: 'Layers' },
@@ -93,12 +97,17 @@ export function useEditorShortcuts() {
         }
         if (key === ']') return handled(), moveSelectedLayer(1)
         if (key === '[') return handled(), moveSelectedLayer(-1)
-        if (key === '0') return ui.stageMode === 'matrix' ? undefined : (handled(), ui.set({ zoom: 1 }))
+        if (key === '0') return ui.stageMode === 'matrix' ? undefined : (handled(), resetView())
         return
       }
       if (e.altKey && !key.startsWith('Arrow')) return
 
       if (/^[1-6]$/.test(key)) return handled(), ed.setAppearance(APPEARANCE_IDS[Number(key) - 1])
+      if (key === '0' || key === 'Home') {
+        // Home on a focused slider is that slider's own "minimum"
+        if (ui.stageMode === 'matrix' || (key === 'Home' && (e.target as HTMLElement | null)?.getAttribute?.('role') === 'slider')) return
+        return handled(), resetView()
+      }
       if (key.startsWith('Arrow')) {
         if (!ed.selection.layerIds.length) return
         handled()
@@ -118,8 +127,10 @@ export function useEditorShortcuts() {
         case 'g':
           if (ui.stageMode === 'matrix') return // no grid in the matrix (finished renders only)
           return handled(), ui.set({ showGrid: !ui.showGrid })
+        case 'x': // top-down ↔ isometric (the user's binding); I is the older alias
         case 'i':
           if (ui.stageMode === 'matrix') return // the matrix shows head-on renditions
+          if (e.repeat) return handled() // one swing per press, not per auto-repeat
           return handled(), animateIso()
         case 'o':
           return handled(), ui.set({ view3d: ui.view3d === 'front' ? 'orbit' : 'front' })

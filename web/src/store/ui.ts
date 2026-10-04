@@ -2,6 +2,7 @@
 import { create } from 'zustand'
 import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware'
 import { safeStorage } from '../lib/hooks'
+import type { StageView } from '../features/editor/stage/view'
 
 export type StageMode = 'viewport' | 'render' | 'compare' | 'matrix'
 export type InspectorTab = 'layer' | 'document' | 'render'
@@ -22,7 +23,10 @@ interface UiState {
    *  The final value is committed to project.camera.iso once, at the end. Not persisted. */
   isoAnim: number | null
   showGrid: boolean
-  zoom: number
+  /** CAD-style stage view (zoom at the cursor / pan; features/editor/stage/view.ts) shared by Live, Render and
+   *  Compare. A VIEW transform only — never the project's render framing (camera.zoom). null = Fit. Not persisted. */
+  stageView: StageView | null
+  /** Live / Blender divider of the Compare view, as a fraction of the stage width. */
   compareSplit: number
   inspectorTab: InspectorTab
   scopes: Record<ScopeSection, Scope>
@@ -56,7 +60,7 @@ export const useUi = create<UiState>()(
       view3d: 'front',
       isoAnim: null,
       showGrid: false,
-      zoom: 1,
+      stageView: null,
       compareSplit: 0.5,
       inspectorTab: 'layer',
       scopes: { color: 'appearance', material: 'all', plate: 'appearance' },

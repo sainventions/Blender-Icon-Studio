@@ -5,12 +5,33 @@ import type * as THREE from 'three'
 
 type Listener = () => void
 
+/**
+ * Where the icon frame — the square the Blender camera renders (FRONT_ORTHO_SCALE / zoom at iso 0, auto-framed
+ * otherwise) — sits on the canvas: top-left + side in CSS px from the canvas's top-left. The editor's CAD-style
+ * view zoom / pan moves and scales it (a view transform: the render framing is unchanged); the canvas may show
+ * more than the frame around it.
+ */
+export interface ViewFrame {
+  x: number
+  y: number
+  side: number
+}
+
+/** The frame in use: the editor's, else the canvas's centred inscribed square (the plain 100 % framing). */
+export function resolveFrame(frame: ViewFrame | null, width: number, height: number): ViewFrame {
+  if (frame && frame.side > 0 && Number.isFinite(frame.x) && Number.isFinite(frame.y)) return frame
+  const side = Math.max(1, Math.min(width, height))
+  return { x: (width - side) / 2, y: (height - side) / 2, side }
+}
+
 export class ViewportStore {
   hovered: string | null = null
   /** layerId → meshes of that layer (outline selection sets). */
   readonly meshes = new Map<string, Set<THREE.Mesh>>()
   /** Animated CAD iso view amount (0 = head-on .. 1 = isometric), damped toward `target` every frame. */
   readonly iso = { current: 0, target: 0 }
+  /** The editor's view window (Viewport `frame` prop); null = the centred inscribed square. Read every frame. */
+  frame: ViewFrame | null = null
   /** Layer being dragged (front view) — suppresses hover outlines while moving. */
   dragging: string | null = null
   version = 0

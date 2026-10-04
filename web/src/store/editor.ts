@@ -91,9 +91,18 @@ let lastCommit: { key: string | null; at: number } = { key: null, at: 0 }
 // Pointer gestures (slider drags, label scrubs, dial turns, gradient stops): all same-key commits between
 // pointerdown and pointerup form ONE undo step however long the user pauses mid-drag, and releasing ends the
 // step (the next drag is a new one). Outside gestures (keyboard, typing) the 1 s COALESCE_MS window applies.
+// A pointerdown always starts a FRESH step: e.g. the X / I view swing commits camera.iso, and dragging the View
+// slider right after must not merge into that commit (one undo would revert both).
 let gestureActive = false
 if (typeof window !== 'undefined') {
-  window.addEventListener('pointerdown', () => (gestureActive = true), true)
+  window.addEventListener(
+    'pointerdown',
+    () => {
+      gestureActive = true
+      lastCommit = { key: null, at: 0 }
+    },
+    true,
+  )
   const endGesture = () => {
     if (!gestureActive) return
     // Capture phase runs before the control's own pointerup handler (which commits the final value): defer.

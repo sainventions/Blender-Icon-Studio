@@ -1,12 +1,12 @@
 // Instant three.js preview of the icon — a draft of the Blender scene (PLAN §3/§4 D2, §11): the same height-field
 // bodies, ONE Principled material per shape mapped onto MeshPhysicalMaterial, real layer distances in the CAD iso view.
-import { useCallback, useMemo, useRef, type CSSProperties, type JSX } from 'react'
+import { useCallback, useLayoutEffect, useMemo, useRef, type CSSProperties, type JSX } from 'react'
 import { Canvas, type RootState } from '@react-three/fiber'
 import * as THREE from 'three'
 import type { AppearanceId, GeometryBundle, LayerTransform, Presets, Project } from '../types'
 import { appearanceMono, resolveAppearance } from '../lib/appearance'
 import { SceneRoot } from './scene/SceneRoot'
-import { StoreContext, ViewportStore } from './scene/store'
+import { StoreContext, ViewportStore, type ViewFrame } from './scene/store'
 
 export interface ViewportProps {
   project: Project
@@ -31,6 +31,13 @@ export interface ViewportProps {
    * view blends into the page; without it the checker fades into the stage's flat base colour.
    */
   stageElement?: () => HTMLElement | null
+  /**
+   * CAD-style view window: where the icon frame (the square Blender renders) sits on the canvas, CSS px from the
+   * canvas's top-left (scene/store.ts ViewFrame). The editor's zoom / pan moves it — the cameras zoom and shift so
+   * the auto-framed view fills it at any iso value, the canvas showing the scene around it. Omitted / null: the
+   * canvas's centred inscribed square. Changing it re-renders only the camera (no scene re-render).
+   */
+  frame?: ViewFrame | null
   className?: string
 }
 
@@ -99,7 +106,14 @@ function onCreated(state: RootState, store: ViewportStore): void {
 
 export function Viewport(p: ViewportProps): JSX.Element {
   const store = useMemo(() => new ViewportStore(), [])
-  const handleCreated = useCallback((state: RootState) => onCreated(state, store), [store])
+  const invalidateRef = useRef<(() => void) | null>(null)
+  const handleCreated = useCallback(
+    (state: RootState) => {
+      invalidateRef.current = () => state.invalidate()
+      onCreated(state, store)
+    },
+    [store],
+  )
   const effective = useMemo(() => resolveAppearance(p.project, p.appearance), [p.project, p.appearance])
   const geoLayers = p.geometry?.layers
   const mono = useMemo(() => appearanceMono(p.project, p.appearance, geoLayers), [p.project, p.appearance, geoLayers])
@@ -107,7 +121,42 @@ export function Viewport(p: ViewportProps): JSX.Element {
   const appearance = p.project.canvas.platform === 'watchos' ? 'light' : p.appearance
   const selectRef = useRef(p.onSelectLayer)
   selectRef.current = p.onSelectLayer
+  const transformRef = useRef(p.onLayerTransform)
+  transformRef.current = p.onLayerTransform
   const onMissed = useCallback(() => selectRef.current(null), [])
+  const onSelect = useCallback((id: string | null) => selectRef.current(id), [])
+  const onTransform = useCallback((id: string, t: LayerTransform) => transformRef.current?.(id, t), [])
+  const draggable = !!p.onLayerTransform
+
+  // The view window goes to the cameras through the store (read every frame): a zoom / pan only re-renders a frame.
+  const fx = p.frame?.x
+  const fy = p.frame?.y
+  const fs = p.frame?.side
+  useLayoutEffect(() => {
+    store.frame = fx != null && fy != null && fs != null ? { x: fx, y: fy, side: fs } : null
+    invalidateRef.current?.()
+  }, [store, fx, fy, fs])
+
+  // The scene element is memoised so view changes (and other re-renders of the caller with equal props) skip it.
+  const scene = useMemo(
+    () => (
+      <SceneRoot
+        project={effective}
+        appearance={appearance}
+        geometry={p.geometry}
+        presets={p.presets ?? null}
+        selectedLayerId={p.selectedLayerId}
+        onSelectLayer={onSelect}
+        onLayerTransform={draggable ? onTransform : undefined}
+        iso={p.iso}
+        view={p.view}
+        showGrid={!!p.showGrid}
+        mono={mono}
+        stage={p.stageElement}
+      />
+    ),
+    [effective, appearance, p.geometry, p.presets, p.selectedLayerId, onSelect, draggable, onTransform, p.iso, p.view, p.showGrid, mono, p.stageElement],
+  )
 
   const pending = !p.geometry && effective.layers.some((l) => l.visible) ? 'Building geometry…' : null
 
@@ -123,22 +172,7 @@ export function Viewport(p: ViewportProps): JSX.Element {
           onPointerMissed={onMissed}
           style={{ position: 'absolute', inset: 0 }}
         >
-          <StoreContext.Provider value={store}>
-            <SceneRoot
-              project={effective}
-              appearance={appearance}
-              geometry={p.geometry}
-              presets={p.presets ?? null}
-              selectedLayerId={p.selectedLayerId}
-              onSelectLayer={p.onSelectLayer}
-              onLayerTransform={p.onLayerTransform}
-              iso={p.iso}
-              view={p.view}
-              showGrid={!!p.showGrid}
-              mono={mono}
-              stage={p.stageElement}
-            />
-          </StoreContext.Provider>
+          <StoreContext.Provider value={store}>{scene}</StoreContext.Provider>
         </Canvas>
         {pending && <div style={PILL_STYLE}>{pending}</div>}
       </div>

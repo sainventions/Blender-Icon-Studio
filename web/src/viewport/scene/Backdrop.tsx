@@ -8,13 +8,15 @@
 // box shows around the live view (Khronos PBR Neutral alone turns a #17171c checker into ~#02020c).
 //
 // The wallpaper is defined in world units (like the worker's wallpaper plane behind the plate), so the background
-// texture is framed to match the front camera (ortho_scale 2.24 / zoom on the shorter viewport side).
-import { useEffect, useLayoutEffect, useMemo } from 'react'
-import { useThree } from '@react-three/fiber'
+// texture is framed to match the front camera (ortho_scale 2.24 / zoom across the icon frame — the editor's view
+// window, store.frame — so it zooms and pans with the icon).
+import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
+import { useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import { checkerOver, STAGE_BACKDROP, type StageBackdropSpec } from '../../lib/stageBackdrop'
 import { createWallpaperTexture, WALLPAPER_EXTENT } from '../textures/procedural'
 import { DISPLAY_INVERSE_GLSL, toScene, type DisplayTransform } from './displayTransform'
+import { resolveFrame, useViewportStore } from './store'
 
 export type BackdropSpec =
   { kind: 'checker' } | { kind: 'color'; color: string } | { kind: 'wallpaper'; tone: 'light' | 'dark' }
@@ -97,22 +99,29 @@ export function Backdrop({
     }
   }, [scene, binding, checker, invalidate])
 
-  useLayoutEffect(() => {
+  // Frame the wallpaper like the front camera: world ±FRONT_ORTHO_SCALE/2/zoom across the icon frame (the editor's
+  // CAD zoom / pan view window, store.frame; else the canvas's centred square), so it zooms and pans with the icon.
+  // Runs before each render (a view change only invalidates a frame).
+  const store = useViewportStore()
+  const fitted = useRef('')
+  useFrame(() => {
     const t = binding.texture
     if (!t || binding.spec.kind !== 'wallpaper') return
-    // Show world ±half (front camera) of a texture that covers world ±WALLPAPER_EXTENT.
-    const half = FRONT_ORTHO_SCALE / 2 / Math.max(0.05, zoom || 1)
     const w = Math.max(1, size.width)
     const h = Math.max(1, size.height)
-    const hx = w >= h ? (half * w) / h : half
-    const hy = h > w ? (half * h) / w : half
-    const rx = Math.min(1, hx / WALLPAPER_EXTENT)
-    const ry = Math.min(1, hy / WALLPAPER_EXTENT)
-    t.repeat.set(rx, ry)
-    t.offset.set(0.5 - rx / 2, 0.5 - ry / 2)
+    const vf = resolveFrame(store.frame, w, h)
+    const key = `${t.uuid}|${w}|${h}|${vf.x}|${vf.y}|${vf.side}|${zoom}`
+    if (key === fitted.current) return
+    fitted.current = key
+    const upp = FRONT_ORTHO_SCALE / Math.max(0.05, zoom || 1) / vf.side // world units per CSS px
+    const x0 = -(vf.x + vf.side / 2) * upp // canvas left edge (world x)
+    const y0 = -(h - vf.y - vf.side / 2) * upp // canvas bottom edge (world y)
+    // the texture covers world ±WALLPAPER_EXTENT (clamped at its edges beyond that)
+    const span = 2 * WALLPAPER_EXTENT
+    t.repeat.set((w * upp) / span, (h * upp) / span)
+    t.offset.set((x0 + WALLPAPER_EXTENT) / span, (y0 + WALLPAPER_EXTENT) / span)
     t.updateMatrix()
-    invalidate()
-  }, [binding, size.width, size.height, zoom, invalidate])
+  })
 
   return checker ? <StageCheckerBackdrop display={display} stage={stage} /> : null
 }
@@ -133,6 +142,7 @@ const FRAG = /* glsl */ `
 varying vec2 vBisUv;
 uniform vec2 uCanvas;   // canvas size, CSS px
 uniform vec4 uStage;    // stage box relative to the canvas top-left (x, y, w, h; CSS px); w = 0: no stage
+uniform vec4 uFrame;    // icon frame (the checker's box) relative to the canvas top-left (x, y, w, h; CSS px)
 uniform vec3 uBase;     // sRGB 0..1
 uniform vec4 uGlow;     // rgb (sRGB), alpha
 uniform vec4 uGlowBox;  // cx, cy, rx, ry (fractions of the stage box)
@@ -157,9 +167,10 @@ void main() {
     float aGlow = uGlow.a * clamp(1.0 - length(q) / uGlowStop, 0.0, 1.0);
     col = mix(col, uGlow.rgb, aGlow);
   }
-  vec2 cell = floor(p / uCheck.x);
+  vec2 f = p - uFrame.xy;
+  vec2 cell = floor(f / uCheck.x);
   vec3 sq = mod(cell.x + cell.y, 2.0) > 0.5 ? uCheckA : uCheckB;
-  vec2 r = (p - 0.5 * uCanvas) / (0.5 * uCanvas);
+  vec2 r = (f - 0.5 * uFrame.zw) / (0.5 * uFrame.zw);
   col = mix(col, sq, uCheck.y * clamp(1.0 - length(r), 0.0, 1.0));
   gl_FragColor = vec4(bisToScene(bisSrgbToLinear(col)), 1.0);
 }
@@ -188,6 +199,7 @@ function StageCheckerBackdrop({ display, stage }: { display: DisplayTransform; s
       uniforms: {
         uCanvas: { value: new THREE.Vector2(1, 1) },
         uStage: { value: new THREE.Vector4(0, 0, 0, 0) },
+        uFrame: { value: new THREE.Vector4(0, 0, 1, 1) },
         uBase: { value: rgb01(spec.base) },
         uGlow: { value: new THREE.Vector4(spec.glow.rgb[0] / 255, spec.glow.rgb[1] / 255, spec.glow.rgb[2] / 255, spec.glow.alpha) },
         uGlowBox: { value: new THREE.Vector4(spec.glow.cx, spec.glow.cy, spec.glow.rx, spec.glow.ry) },
@@ -222,6 +234,18 @@ function StageCheckerBackdrop({ display, stage }: { display: DisplayTransform; s
     u.bisSaturation.value = display.saturation
     invalidate()
   }, [u, display.mode, display.saturation, invalidate])
+
+  // The checker belongs to the icon frame (like the Render view's CSS overlay): the editor's view window when it
+  // zooms / pans (store.frame), else the whole canvas. Checked before each render.
+  const store = useViewportStore()
+  useFrame(() => {
+    const c = u.uCanvas.value as THREE.Vector2
+    const vf = store.frame ? resolveFrame(store.frame, c.x, c.y) : null
+    const f = u.uFrame.value as THREE.Vector4
+    if (vf) {
+      if (f.x !== vf.x || f.y !== vf.y || f.z !== vf.side || f.w !== vf.side) f.set(vf.x, vf.y, vf.side, vf.side)
+    } else if (f.x !== 0 || f.y !== 0 || f.z !== c.x || f.w !== c.y) f.set(0, 0, c.x, c.y)
+  })
 
   // Locate the stage box relative to the canvas; it moves when the stage scrolls (zoomed in) or resizes.
   useLayoutEffect(() => {

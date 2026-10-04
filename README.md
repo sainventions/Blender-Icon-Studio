@@ -99,7 +99,7 @@ the head is a glass sphere, the body a glass pebble, and the orange plate refrac
 
 <img src="docs/img/ui-iso.png" width="100%" alt="Maps split into four layers in the live view, turned toward isometric, with the Depth inspector">
 
-Press <kbd>I</kbd> (or click **Front** / **Iso**, or drag the view-angle slider in the stage toolbar) to turn the
+Press <kbd>X</kbd> (or click **Front** / **Iso**, or drag the view-angle slider in the stage toolbar) to turn the
 orthographic camera from head-on toward a true isometric view (pitch 35.264°, yaw 45°), like a CAD program.
 Nothing is spread apart: the layers sit at their **real** Z positions, so the depth you see is the depth you
 render. The live view and every Blender render share the same camera (`camera.iso`, 0 – 1) and its auto-framing;
@@ -268,9 +268,10 @@ shape's material is an ordinary Principled BSDF you can keep editing there.
 |---|---|
 | <kbd>1</kbd> – <kbd>6</kbd> | switch appearance (Default, Dark, Clear Light, Clear Dark, Tinted Light, Tinted Dark) |
 | <kbd>V</kbd> | cycle the stage: Live → Render → Compare → Matrix |
-| <kbd>I</kbd> | swing the view between head-on and isometric (real layer distances) |
+| <kbd>X</kbd> (or <kbd>I</kbd>) | swing the view between top-down and isometric (real layer distances) |
+| wheel · middle-drag (or <kbd>Space</kbd>+drag) | zoom at the cursor · pan the view (CAD-style; doesn't change the render framing) |
 | <kbd>O</kbd> / <kbd>G</kbd> | front / orbit view · icon grid overlay |
-| <kbd>Ctrl</kbd>+<kbd>0</kbd>, <kbd>Ctrl</kbd>+wheel | zoom to fit / zoom the stage |
+| <kbd>0</kbd> / <kbd>Home</kbd> / <kbd>Ctrl</kbd>+<kbd>0</kbd> / double middle-click | reset the view to fit |
 | <kbd>R</kbd> / <kbd>Shift</kbd>+<kbd>R</kbd> | Cycles preview / Final render |
 | <kbd>Shift</kbd>+<kbd>M</kbd> | render all six renditions |
 | <kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> | undo / redo |

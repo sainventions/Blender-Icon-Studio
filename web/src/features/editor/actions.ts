@@ -93,6 +93,8 @@ export function setPlatform(platform: Platform) {
 }
 
 let isoRaf = 0
+/** Where the running swing (animateIso) is heading. */
+let isoGoal = 0
 
 /** The CAD-style view angle shown right now: the animation's value while one runs, else project.camera.iso. */
 export function currentIso(): number {
@@ -101,23 +103,28 @@ export function currentIso(): number {
 }
 
 /** Set project.camera.iso (0 = head-on … 1 = isometric, real layer distances — PLAN §11 View). The CAD view is
- *  orthographic, so a perspective camera switches back to the front projection. One undo step per gesture. */
-export function setIso(iso: number) {
+ *  orthographic, so a perspective camera switches back to the front projection. One undo step per gesture (slider
+ *  drag); `step` = a discrete change (X / I key, Front / Iso buttons) that is always its own undo step. */
+export function setIso(iso: number, step = false) {
   const v = Math.round(Math.min(1, Math.max(0, iso)) * 1000) / 1000
   cancelAnimationFrame(isoRaf)
   if (useUi.getState().isoAnim !== null) useUi.setState({ isoAnim: null })
   useEditor.getState().commit(
     (p) => (p.camera.iso === v && p.camera.view === 'front' ? p : { ...p, camera: { ...p.camera, iso: v, view: 'front' } }),
-    { coalesce: 'camera.iso' },
+    step ? {} : { coalesce: 'camera.iso' },
   )
 }
 
-/** Swing the view to `target` (default: toggle head-on ↔ isometric) — animated in the live view, committed once. */
+/** Swing the view to `target` (default: toggle top-down / head-on ↔ isometric — the X key) — animated in the live
+ *  view, committed ONCE at the end as its own undo step (never merged into a following slider drag or toggle). */
 export function animateIso(target?: number) {
   const from = currentIso()
-  const to = target ?? (from > 0.5 ? 0 : 1)
+  // a toggle while a swing runs reverses that swing (toward the other end than the one it was heading to)
+  const heading = useUi.getState().isoAnim !== null ? isoGoal : from
+  const to = target ?? (heading > 0.5 ? 0 : 1)
+  isoGoal = to
   cancelAnimationFrame(isoRaf)
-  if (Math.abs(to - from) < 1e-4) return setIso(to)
+  if (Math.abs(to - from) < 1e-4) return setIso(to, true)
   const t0 = performance.now()
   const dur = 560
   const step = (t: number) => {
@@ -126,7 +133,8 @@ export function animateIso(target?: number) {
     if (k < 1) {
       useUi.setState({ isoAnim: from + (to - from) * e })
       isoRaf = requestAnimationFrame(step)
-    } else setIso(to)
+    } else setIso(to, true)
   }
+  useUi.setState({ isoAnim: from }) // running from now on (a second press before the first frame reverses it)
   isoRaf = requestAnimationFrame(step)
 }

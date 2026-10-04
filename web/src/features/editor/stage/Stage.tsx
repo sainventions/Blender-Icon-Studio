@@ -30,28 +30,21 @@ import { animateIso, setIso } from '../actions'
 import { RenderImage } from './RenderImage'
 import { IconGrid } from './IconGrid'
 import { MatrixView } from './MatrixView'
-import { actualPixelsZoom, frameSide, isOneToOne, pixelScaleLabel } from './frame'
+import { isOneToOne, pixelScaleLabel } from './frame'
+import { frameRect, stageLayout, viewOf, zoomPercent, type FrameRect, type StageLayout } from './view'
+import {
+  PAN_CURSOR_CSS,
+  resetView,
+  resetViewForProject,
+  setStageLayout,
+  useStageNavigation,
+  zoomViewStep,
+  zoomViewTo,
+} from './viewControl'
 import { RenditionsStrip } from './RenditionsStrip'
 
-const FRAME_PAD_TOP = 64
-const FRAME_PAD = 40
 const STAGE_BG = stageBackgroundStyle()
 const CHECKER_OVERLAY = checkerOverlayStyle()
-
-/** Ctrl/⌘ + wheel zooms the stage. Needs a native non-passive listener: React registers `wheel` as passive, so
- *  preventDefault() in onWheel is ignored and the browser would zoom the whole app (Edge --app window) too. */
-function onStageWheel(e: WheelEvent) {
-  if (!(e.ctrlKey || e.metaKey)) return
-  e.preventDefault()
-  const z = useUi.getState().zoom
-  useUi.getState().set({ zoom: clamp(Math.round(z * (e.deltaY < 0 ? 1.1 : 1 / 1.1) * 100) / 100, 0.25, 4) })
-}
-
-function wheelZoomRef(el: HTMLDivElement | null) {
-  if (!el) return
-  el.addEventListener('wheel', onStageWheel, { passive: false })
-  return () => el.removeEventListener('wheel', onStageWheel)
-}
 
 /** Width in image pixels of the render the Render / Compare views show, when known. */
 function useShownNativeWidth(mode: StageMode): number | null {
@@ -59,44 +52,57 @@ function useShownNativeWidth(mode: StageMode): number | null {
   return (mode === 'render' || mode === 'compare') && entry?.url && entry.width ? entry.width : null
 }
 
+/**
+ * The stage is a CAD-style viewport: the wheel zooms at the cursor, middle-drag (or Space + drag) pans, X swings
+ * top-down ↔ isometric, 0 / Home / double middle-click fits (viewControl.ts). The view (useUi.stageView) places the
+ * icon frame on the stage area for Live, Render and Compare alike; the live canvas fills the whole area and its
+ * camera follows the frame (Viewport `frame`), the Blender image is laid out on the frame.
+ */
 export function Stage() {
   const mode = useUi((s) => s.stageMode)
-  const zoom = useUi((s) => s.zoom)
+  const view = useUi((s) => s.stageView)
   const renditionsOpen = useUi((s) => s.renditionsOpen)
-  const [areaRef, area] = useElementSize<HTMLDivElement>()
+  const [areaSizeRef, area] = useElementSize<HTMLDivElement>()
+  const [areaEl, setAreaEl] = useState<HTMLDivElement | null>(null)
+  const [surfaceEl, setSurfaceEl] = useState<HTMLDivElement | null>(null)
+  const areaRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      areaSizeRef(el)
+      setAreaEl(el)
+    },
+    [areaSizeRef],
+  )
   const dpr = useDevicePixelRatio()
   const native = useShownNativeWidth(mode)
-  const fit = Math.max(160, Math.min(area.width - FRAME_PAD * 2, area.height - FRAME_PAD_TOP - FRAME_PAD))
-  const side = frameSide(fit, zoom, dpr, native)
+  const layout = useMemo(() => stageLayout(area.width, area.height, dpr, native), [area.width, area.height, dpr, native])
+  const rect = frameRect(view, layout)
+  useLayoutEffect(() => setStageLayout(layout), [layout])
+  const projectId = useEditor((s) => s.project?.id)
+  useLayoutEffect(() => resetViewForProject(projectId), [projectId])
+  useStageNavigation(areaEl, surfaceEl)
   const stageRef = useRef<HTMLDivElement>(null)
   const stageElement = useCallback(() => stageRef.current, [])
 
   return (
     <div ref={stageRef} className="relative flex min-w-0 flex-1 flex-col" style={STAGE_BG}>
+      <style>{PAN_CURSOR_CSS}</style>
       <div ref={areaRef} className="relative min-h-0 flex-1 overflow-hidden">
         {mode === 'matrix' ? (
           <MatrixView />
         ) : (
-          <div ref={wheelZoomRef} className="absolute inset-0 overflow-auto">
-            <div
-              className="flex items-center justify-center"
-              style={{
-                minWidth: '100%',
-                minHeight: '100%',
-                width: side + FRAME_PAD * 2,
-                height: side + FRAME_PAD_TOP + FRAME_PAD,
-                paddingTop: FRAME_PAD_TOP - FRAME_PAD,
-              }}
-            >
-              <PixelSnapped className="relative shrink-0" style={{ width: side, height: side }}>
-                {area.width > 0 && (
-                  <StageContent mode={mode} side={side} scale={native ? (side * dpr) / native : null} stageElement={stageElement} />
-                )}
-              </PixelSnapped>
-            </div>
+          <div ref={setSurfaceEl} className="absolute inset-0" data-stage-surface="" data-testid="stage-surface">
+            {area.width > 0 && (
+              <StageContent
+                mode={mode}
+                rect={rect}
+                area={area}
+                scale={native ? (rect.side * dpr) / native : null}
+                stageElement={stageElement}
+              />
+            )}
           </div>
         )}
-        <StageToolbar fit={fit} dpr={dpr} native={native} />
+        <StageToolbar layout={layout} native={native} />
         <RenderStatus />
       </div>
       {renditionsOpen ? (
@@ -114,30 +120,52 @@ export function Stage() {
   )
 }
 
+type AreaSize = { width: number; height: number }
+
 function StageContent({
   mode,
-  side,
+  rect,
+  area,
   scale,
   stageElement,
 }: {
   mode: StageMode
-  side: number
+  /** The icon frame on the stage area (view.ts frameRect). */
+  rect: FrameRect
+  area: AreaSize
   /** Screen pixels per image pixel of the shown render (null = unknown / no render). */
   scale: number | null
   stageElement: () => HTMLElement | null
 }) {
   return (
     <>
-      {(mode === 'viewport' || mode === 'compare') && <LiveViewport stageElement={stageElement} />}
-      {mode === 'render' && <RenderPane scale={scale} />}
-      {mode === 'compare' && <CompareOverlay side={side} scale={scale} stageElement={stageElement} />}
-      <FrameLabel mode={mode} />
+      {(mode === 'viewport' || mode === 'compare') && <LiveViewport frame={rect} stageElement={stageElement} />}
+      {mode === 'render' && (
+        <FrameBox rect={rect}>
+          <RenderPane scale={scale} />
+        </FrameBox>
+      )}
+      {mode === 'compare' && <CompareOverlay rect={rect} area={area} scale={scale} stageElement={stageElement} />}
+      <FrameFooter mode={mode} rect={rect} area={area} scale={scale} />
     </>
   )
 }
 
+/** The icon frame's box on the stage area (whole device pixels). */
+function FrameBox({ rect, children }: { rect: FrameRect; children: ReactNode }) {
+  return (
+    <PixelSnapped
+      className="absolute"
+      style={{ left: rect.x, top: rect.y, width: rect.side, height: rect.side }}
+      snapKey={`${rect.x},${rect.y},${rect.side}`}
+    >
+      {children}
+    </PixelSnapped>
+  )
+}
+
 // ------------------------------------------------------------------------------------------ live three.js
-function LiveViewport({ stageElement }: { stageElement: () => HTMLElement | null }) {
+function LiveViewport({ frame, stageElement }: { frame: FrameRect; stageElement: () => HTMLElement | null }) {
   const project = useEditor((s) => s.project)!
   const geometry = useEditor((s) => s.geometry)
   const selected = useEditor((s) => s.selection.primary)
@@ -146,15 +174,19 @@ function LiveViewport({ stageElement }: { stageElement: () => HTMLElement | null
   const view = useUi((s) => s.view3d)
   const showGrid = useUi((s) => s.showGrid)
 
-  const onSelect = (id: string | null) => {
+  // stable identities: a zoom / pan re-renders this component but must not re-render the 3D scene
+  const onSelect = useCallback((id: string | null) => {
     const ed = useEditor.getState()
     if (id) {
       ed.selectLayer(id)
       useUi.getState().set({ inspectorTab: 'layer' })
     } else ed.clearSelection()
-  }
-  const onTransform = (id: string, t: LayerTransform) =>
-    useEditor.getState().commit((p) => updateLayer(p, id, (l) => (l.locked ? l : { ...l, transform: { ...t } })), { coalesce: `drag:${id}` })
+  }, [])
+  const onTransform = useCallback(
+    (id: string, t: LayerTransform) =>
+      useEditor.getState().commit((p) => updateLayer(p, id, (l) => (l.locked ? l : { ...l, transform: { ...t } })), { coalesce: `drag:${id}` }),
+    [],
+  )
 
   return (
     <Viewport
@@ -169,6 +201,7 @@ function LiveViewport({ stageElement }: { stageElement: () => HTMLElement | null
       view={view}
       showGrid={showGrid}
       stageElement={stageElement}
+      frame={frame}
       className="absolute inset-0 h-full w-full"
     />
   )
@@ -186,7 +219,7 @@ function useShownRender(): { entry: RenderEntry | null; pinned: boolean; stale: 
 }
 
 function RenderPane({ scale }: { scale: number | null }) {
-  const { entry, pinned, stale } = useShownRender()
+  const { entry } = useShownRender()
   const showGrid = useUi((s) => s.showGrid)
   const appearance = useEditor((s) => s.project!.appearance)
   const active = useRender((s) => activeEntry(s, appearance))
@@ -234,16 +267,26 @@ function RenderPane({ scale }: { scale: number | null }) {
       <div className="absolute inset-0" style={CHECKER_OVERLAY} />
       <RenderImage url={entry.url} className="absolute inset-0" pixelExact={isOneToOne(scale)} />
       {showGrid && <IconGrid className="pointer-events-none absolute inset-0 h-full w-full" />}
-      <RenderInfoChip entry={entry} pinned={pinned} stale={stale} scale={scale} />
     </div>
   )
 }
 
 /**
  * Keeps its box on whole device pixels (a centred frame can land on a half pixel, which resamples a 1:1 render and
- * softens it): measures the untransformed position and translates by the sub-pixel remainder.
+ * softens it): measures the untransformed position and translates by the sub-pixel remainder. `snapKey` changes
+ * whenever the box moves (zoom / pan) so it is re-measured.
  */
-function PixelSnapped({ className, style, children }: { className?: string; style?: CSSProperties; children: ReactNode }) {
+function PixelSnapped({
+  className,
+  style,
+  snapKey,
+  children,
+}: {
+  className?: string
+  style?: CSSProperties
+  snapKey?: string
+  children: ReactNode
+}) {
   const ref = useRef<HTMLDivElement>(null)
   const dpr = useDevicePixelRatio()
   useLayoutEffect(() => {
@@ -271,7 +314,7 @@ function PixelSnapped({ className, style, children }: { className?: string; styl
       ro.disconnect()
       window.removeEventListener('resize', schedule)
     }
-  }, [dpr])
+  }, [dpr, snapKey])
   return (
     <div ref={ref} className={className} style={style}>
       {children}
@@ -279,10 +322,39 @@ function PixelSnapped({ className, style, children }: { className?: string; styl
   )
 }
 
-function RenderInfoChip({ entry, pinned, stale, scale }: { entry: RenderEntry; pinned: boolean; stale: boolean; scale: number | null }) {
+/**
+ * Under the frame (its label / the render's info chip): centred below it, kept on screen when the frame is zoomed
+ * past the stage area.
+ */
+function FrameFooter({ mode, rect, area, scale }: { mode: StageMode; rect: FrameRect; area: AreaSize; scale: number | null }) {
+  const { entry, pinned, stale } = useShownRender()
+  const style: CSSProperties = {
+    left: clamp(rect.x + rect.side / 2, Math.min(150, area.width / 2), Math.max(area.width - 150, area.width / 2)),
+    top: Math.max(8, Math.min(rect.y + rect.side + 12, area.height - 30)),
+  }
+  if (mode === 'render') return entry?.url ? <RenderInfoChip entry={entry} pinned={pinned} stale={stale} scale={scale} style={style} /> : null
+  return <FrameLabel mode={mode} style={style} />
+}
+
+function RenderInfoChip({
+  entry,
+  pinned,
+  stale,
+  scale,
+  style,
+}: {
+  entry: RenderEntry
+  pinned: boolean
+  stale: boolean
+  scale: number | null
+  style: CSSProperties
+}) {
   const one = isOneToOne(scale)
   return (
-    <div className="absolute -bottom-9 left-1/2 flex -translate-x-1/2 items-center gap-1.5 whitespace-nowrap rounded-full border border-line bg-surface-2/85 px-2.5 py-1 text-3xs text-fg-3 backdrop-blur">
+    <div
+      className="absolute flex -translate-x-1/2 items-center gap-1.5 whitespace-nowrap rounded-full border border-line bg-surface-2/85 px-2.5 py-1 text-3xs text-fg-3 backdrop-blur"
+      style={style}
+    >
       {pinned && <Pin className="h-3 w-3 text-accent" />}
       <span className="font-semibold capitalize text-fg-2">{entry.quality}</span>
       <span>·</span>
@@ -327,35 +399,61 @@ function RenderInfoChip({ entry, pinned, stale, scale }: { entry: RenderEntry; p
   )
 }
 
-function CompareOverlay({ side, scale, stageElement }: { side: number; scale: number | null; stageElement: () => HTMLElement | null }) {
+/**
+ * Compare: the live canvas fills the stage; right of the divider (a fraction of the stage width, so it stays on
+ * screen at any zoom) the Blender render is laid on the same frame over an opaque copy of the stage.
+ */
+function CompareOverlay({
+  rect,
+  area,
+  scale,
+  stageElement,
+}: {
+  rect: FrameRect
+  area: AreaSize
+  scale: number | null
+  stageElement: () => HTMLElement | null
+}) {
   const split = useUi((s) => s.compareSplit)
   const set = useUi((s) => s.set)
   const { entry, stale } = useShownRender()
   const dragging = useRef(false)
   const [hover, setHover] = useState(false)
-  const x = split * side
+  const x = split * area.width
+  // the divider spans the frame's visible height (the whole stage when zoomed in)
+  const divTop = Math.max(rect.y, 0)
+  const divHeight = Math.max(0, Math.min(rect.y + rect.side, area.height) - divTop)
+  // tags in the frame's visible top corners (below the floating toolbar)
+  const tagTop = Math.max(rect.y, 48) + 8
+  const tagLeft = Math.max(rect.x, 0) + 8
+  const tagRight = Math.max(area.width - rect.x - rect.side, 0) + 8
 
   return (
     <div className="pointer-events-none absolute inset-0">
       {entry?.url ? (
         <div className="absolute inset-0" style={{ clipPath: `inset(0 0 0 ${x}px)` }}>
           <StageBackdropFill stageElement={stageElement} />
-          <RenderImage url={entry.url} className="absolute inset-0" pixelExact={isOneToOne(scale)} />
+          <FrameBox rect={rect}>
+            <div className="absolute inset-0" style={CHECKER_OVERLAY} />
+            <RenderImage url={entry.url} className="absolute inset-0" pixelExact={isOneToOne(scale)} />
+          </FrameBox>
         </div>
       ) : (
         <div className="absolute inset-y-0 right-0 flex items-center justify-center bg-black/30 text-2xs text-fg-3 backdrop-blur-sm" style={{ left: x }}>
           <span className="px-4 text-center">No Blender render yet</span>
         </div>
       )}
-      <span className="absolute left-2 top-2 rounded-full bg-black/45 px-2 py-0.5 text-3xs font-semibold text-fg-2 backdrop-blur">three.js live</span>
-      <span className="absolute right-2 top-2 rounded-full bg-black/45 px-2 py-0.5 text-3xs font-semibold text-fg-2 backdrop-blur">
+      <span className="absolute rounded-full bg-black/45 px-2 py-0.5 text-3xs font-semibold text-fg-2 backdrop-blur" style={{ left: tagLeft, top: tagTop }}>
+        three.js live
+      </span>
+      <span className="absolute rounded-full bg-black/45 px-2 py-0.5 text-3xs font-semibold text-fg-2 backdrop-blur" style={{ right: tagRight, top: tagTop }}>
         Blender {entry ? `· ${entry.quality}` : ''}
         {stale ? ' · outdated' : ''}
       </span>
       {/* divider */}
       <div
-        className="pointer-events-auto absolute inset-y-0 z-10 w-5 -translate-x-1/2 cursor-ew-resize"
-        style={{ left: x }}
+        className="pointer-events-auto absolute z-10 w-5 -translate-x-1/2 cursor-ew-resize"
+        style={{ left: x, top: divTop, height: divHeight }}
         onPointerEnter={() => setHover(true)}
         onPointerLeave={() => setHover(false)}
         onPointerDown={(e) => {
@@ -386,9 +484,9 @@ function CompareOverlay({ side, scale, stageElement }: { side: number; scale: nu
 }
 
 /**
- * Opaque copy of what is behind the frame — the stage background (aligned to the stage element, so its glow and dot
- * grid line up) under the faded checkerboard — for the render side of Compare: it hides the live view beneath and
- * matches the live view's own backdrop, so neither half shows a box.
+ * Opaque copy of the stage background (aligned to the stage element, so its glow and dot grid line up) for the render
+ * side of Compare: it hides the live view beneath and matches the live view's own backdrop (the frame's faded
+ * checkerboard is drawn with the render, on the frame), so neither half shows a box.
  */
 function StageBackdropFill({ stageElement }: { stageElement: () => HTMLElement | null }) {
   const ref = useRef<HTMLDivElement>(null)
@@ -424,19 +522,18 @@ function StageBackdropFill({ stageElement }: { stageElement: () => HTMLElement |
       document.removeEventListener('scroll', schedule, { capture: true })
     }
   }, [stageElement])
-  return (
-    <div ref={ref} className="absolute inset-0" style={{ ...STAGE_BG, backgroundRepeat: 'no-repeat, repeat' }}>
-      <div className="absolute inset-0" style={CHECKER_OVERLAY} />
-    </div>
-  )
+  return <div ref={ref} className="absolute inset-0" style={{ ...STAGE_BG, backgroundRepeat: 'no-repeat, repeat' }} />
 }
 
-function FrameLabel({ mode }: { mode: StageMode }) {
+function FrameLabel({ mode, style }: { mode: StageMode; style: CSSProperties }) {
   const appearance = useEditor((s) => s.project!.appearance)
   const presets = useAppStore((s) => s.presets.data)
   if (mode === 'render') return null
   return (
-    <div className="pointer-events-none absolute -bottom-9 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full border border-line bg-surface-2/85 px-2.5 py-1 text-3xs text-fg-3 backdrop-blur">
+    <div
+      className="pointer-events-none absolute -translate-x-1/2 whitespace-nowrap rounded-full border border-line bg-surface-2/85 px-2.5 py-1 text-3xs text-fg-3 backdrop-blur"
+      style={style}
+    >
       {mode === 'compare' ? 'Drag the divider to compare' : `Live preview · ${appearanceLabel(appearance, presets)}`}
     </div>
   )
@@ -447,30 +544,35 @@ function Centered({ children }: { children: ReactNode }) {
 }
 
 // ------------------------------------------------------------------------------------------ floating toolbar
-const ZOOMS = [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4]
+const ZOOMS = [0.25, 0.5, 1, 2, 4, 8]
 
-function StageToolbar({ fit, dpr, native }: { fit: number; dpr: number; native: number | null }) {
+function StageToolbar({ layout, native }: { layout: StageLayout; native: number | null }) {
   const mode = useUi((s) => s.stageMode)
   const showGrid = useUi((s) => s.showGrid)
-  const zoom = useUi((s) => s.zoom)
+  const view = useUi((s) => s.stageView)
   const set = useUi((s) => s.set)
   const angle = useEditor((s) => s.project!.lighting.angle)
   const lightingPreset = useEditor((s) => s.project!.lighting.preset)
   const lockAngle = useAppStore((s) => s.presets.data?.lighting[lightingPreset]?.lockAngle)
   const zoomMenu = useAnchor<HTMLButtonElement>()
   const zoomRef = useRef<HTMLButtonElement>(null)
-  const actual = native ? +actualPixelsZoom(fit, dpr, native).toFixed(4) : null
+  const zoom = viewOf(view, layout).zoom
+  // zoom (relative to the fitted frame) that shows the render at one image pixel per device pixel
+  const actual = native ? native / layout.dpr / layout.fit : null
   const zoomItems: MenuItem[] = [
+    { key: 'fit', label: native ? 'Fit (max 1:1)' : 'Fit', shortcut: '0', checked: view === null, onSelect: () => resetView() },
+    { type: 'separator', key: 'sep-zooms' },
     ...ZOOMS.map<MenuItem>((z) => ({
       key: String(z),
-      label: z === 1 ? (native ? 'Fit (100%, max 1:1)' : 'Fit (100%)') : `${z * 100}%`,
-      checked: zoom === z,
-      onSelect: () => set({ zoom: z }),
+      label: `${z * 100}%`,
+      checked: view !== null && Math.abs(zoom - z) < 0.001,
+      onSelect: () => zoomViewTo(z),
     })),
-    ...(actual != null && Math.abs(actual - 1) > 0.001
+    // a render larger than the fitted frame: 1:1 is a separate zoom (else Fit already shows it 1:1)
+    ...(actual != null && Math.abs(actual * layout.fit - layout.base) > 0.5
       ? ([
           { type: 'separator', key: 'sep-actual' },
-          { key: 'actual', label: 'Actual pixels (1:1)', checked: Math.abs(zoom - actual) < 0.001, onSelect: () => set({ zoom: actual }) },
+          { key: 'actual', label: 'Actual pixels (1:1)', checked: Math.abs(zoom - actual) < 0.001, onSelect: () => zoomViewTo(actual) },
         ] satisfies MenuItem[])
       : []),
   ]
@@ -503,20 +605,22 @@ function StageToolbar({ fit, dpr, native }: { fit: number; dpr: number; native: 
             <Grid3x3 />
           </IconButton>
           <div className="flex items-center">
-            <IconButton label="Zoom out" size="sm" onClick={() => set({ zoom: clamp(+(zoom / 1.25).toFixed(2), 0.25, 4) })}>
+            <IconButton label="Zoom out" size="sm" onClick={() => zoomViewStep(-1)}>
               <Minus />
             </IconButton>
             <button
               ref={zoomRef}
               type="button"
               onClick={() => zoomRef.current && zoomMenu.toggle(zoomRef.current)}
+              onDoubleClick={() => resetView()}
               className="h-6 w-11 rounded-md text-2xs tabular text-fg-2 transition-colors hover:bg-white/[0.07]"
-              data-tip="Zoom (Ctrl+wheel)"
-              data-tip-kbd="Mod+0"
+              data-testid="stage-zoom"
+              data-tip="Zoom: scroll to zoom at the cursor · middle-drag (or Space + drag) to pan · double-click / 0 to fit"
+              data-tip-kbd="0"
             >
-              {Math.round(zoom * 100)}%
+              {zoomPercent(view, layout)}%
             </button>
-            <IconButton label="Zoom in" size="sm" onClick={() => set({ zoom: clamp(+(zoom * 1.25).toFixed(2), 0.25, 4) })}>
+            <IconButton label="Zoom in" size="sm" onClick={() => zoomViewStep(1)}>
               <Plus />
             </IconButton>
           </div>
@@ -551,13 +655,13 @@ function ViewAngleControl() {
       data-testid="view-angle"
       data-tip={perspective ? 'The render camera is in perspective — moving this switches it back to the CAD view' : undefined}
     >
-      <IconButton label="Front view (head-on)" kbd="I" size="sm" active={iso < 0.005 && !perspective} onClick={() => animateIso(0)}>
+      <IconButton label="Top-down view (head-on)" kbd="X" size="sm" active={iso < 0.005 && !perspective} onClick={() => animateIso(0)}>
         <Square />
       </IconButton>
-      <div className="flex items-center" data-tip="View angle: head-on ↔ isometric (real layer distances, like a CAD view)" data-tip-kbd="I">
+      <div className="flex items-center" data-tip="View angle: top-down ↔ isometric (real layer distances, like a CAD view)" data-tip-kbd="X">
         <Slider value={iso} min={0} max={1} step={0.01} defaultValue={0} onChange={(v) => setIso(v)} className="w-20" ariaLabel="View angle" />
       </div>
-      <IconButton label="Isometric view" kbd="I" size="sm" active={iso > 0.995 && !perspective} onClick={() => animateIso(1)}>
+      <IconButton label="Isometric view" kbd="X" size="sm" active={iso > 0.995 && !perspective} onClick={() => animateIso(1)}>
         <Box />
       </IconButton>
     </div>
