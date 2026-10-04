@@ -20,3 +20,6 @@ Thumbs.db
 .vscode/
 .idea/
 *.tsbuildinfo
+/.claude
+/.agents
+skills-lock.json
