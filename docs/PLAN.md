@@ -337,3 +337,11 @@ viewport and Blender renders; animation kind `iso` = head-on → iso → head-on
 - **Raster image layers** (kind 'image') import as flat cards (inflate 0, thin, small bevel); looks don't inflate them.
 - The Liquid Glass look matches the import defaults (thickness 0.16, bevel 0.08, inflate 0.25, gap = stackGap).
 - EEVEE drafts must not render translucent or floating glass near-black (drafts feed Render tab / batch / animations).
+
+**Round 9 decisions (binding):**
+- **Raster layers:** a raster element with a crisp alpha silhouette (not `art_alpha_is_soft`) is a real body like vector art
+  (traced outline → height-field, normal depth defaults); only soft-alpha rasters (glows, shines, shadows) are flat cards.
+- **Baked overlays:** soft-alpha raster layers that overlap vector/body layers BELOW them (baked shines/highlights, e.g.
+  Find Device's sweep) import hidden (`visible: false`) with a source warning ("baked highlight hidden — Blender lighting
+  replaces it"); the user can unhide. Soft rasters that don't sit on other art (e.g. a neon glow halo) stay visible cards.
+- Clear/tinted EEVEE drafts must not render glyph glass near-black (glyphs must see the frosted plate, like Cycles).
