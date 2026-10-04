@@ -16,6 +16,7 @@ const KIND_ICON: Record<AnimateRequest['kind'], React.ReactNode> = {
   turntable: <Orbit />,
   float: <Waves />,
   'light-sweep': <SunMedium />,
+  iso: <Boxes />,
   explode: <Boxes />,
 }
 

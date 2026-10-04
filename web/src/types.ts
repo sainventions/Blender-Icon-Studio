@@ -60,6 +60,7 @@ export interface Layer {
   transform: LayerTransform
   depth: LayerDepth
   material: MaterialSpec
+  elementMaterials?: Record<string, MaterialSpec> // per-shape overrides, merged over `material`
   shadow: LayerShadow
 }
 
@@ -74,7 +75,9 @@ export interface Lighting {
   rim: number; fill: number; environment: number; shadowSoftness: number
 }
 export interface CameraSpec {
-  view: 'front' | 'perspective'; tiltX: number; tiltY: number; fov: number; zoom: number; explode: number
+  view: 'front' | 'perspective'; tiltX: number; tiltY: number; fov: number; zoom: number
+  iso?: number // CAD-style POV: 0 = head-on .. 1 = isometric (real distances, orthographic)
+  explode: number // legacy — keep 1
 }
 export interface LayerOverride {
   fill?: Fill | null; opacity?: number | null; visible?: boolean | null
@@ -148,7 +151,7 @@ export interface RenderRequest {
   fullBleed?: boolean; live?: boolean
 }
 export interface AnimateRequest {
-  kind: 'turntable' | 'tilt' | 'float' | 'light-sweep' | 'explode'
+  kind: 'turntable' | 'tilt' | 'float' | 'light-sweep' | 'iso' | 'explode'
   frames: number; fps: number; quality: Quality; size: number; format: 'mp4' | 'webp' | 'gif' | 'png'
 }
 export type ExportTarget = 'ios' | 'macos' | 'watchos' | 'android' | 'windows' | 'web' | 'marketing' | 'icon' | 'blend'
@@ -179,6 +182,7 @@ export interface ParamSchema {
   label: string; type: 'number' | 'enum' | 'bool' | 'color'
   min?: number; max?: number; step?: number; default: number | string | boolean
   options?: string[]; unit?: string; help?: string
+  group?: string // Principled BSDF section: Paint, Base, Subsurface, Specular, Transmission, Coat, Sheen, Emission, Thin Film
 }
 export interface MaterialPreset {
   label: string; category: string; description: string

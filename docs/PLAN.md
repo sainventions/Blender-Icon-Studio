@@ -282,25 +282,35 @@ Contract: `StyleSpec`, `StyleRequest`, `BatchRequest`, `BatchSource` in models.p
 Apply rules are documented on `StyleSpec` in models.py (bevel clamped to each layer's safeRadius).
 Mono floor: the worker uses 0.3 (supersedes 0.25 in §5); the viewport mirrors the worker.
 
-## 11. Round 6 pivot — PHYSICAL glass (binding; supersedes the round-4/5 "colour fidelity" glass work)
-User feedback: the glass must be *real* Blender physics (Principled BSDF transmission, IOR, roughness, tint),
-like the user's own renders (reference images: Contacts — clear glass IOR 1.6 roughness 0, sphere head from
-bevel = radius; Gemini — frosted glass IOR 1.6 roughness 0.267, Base Color = gradient texture, Transmission 1).
-The previous glass was faked (self-lit emission bodies, milk layers, overlay estimation, glow cards, paint
-pre-compensation) — that approach is abandoned for glass.
-- **Glass presets** (liquid_glass, clear_glass, frosted_glass, tinted_glass, dispersive_crystal, jelly) are plain,
-  editable node graphs a Blender user recognises: paint texture → (mix white→paint by `tint`) → Principled
-  Base Color; Transmission Weight = `transmission` (default 1); Roughness = `frost`; IOR = `ior`; optional Coat,
-  Thin Film, bump grain, Volume Absorption/Scatter (jelly, depth tint), 3-lobe dispersion (prism, Cycles).
-  No emission/milk/overlay/glow fakes. Cycles = truth; EEVEE drafts approximate (raytraced refraction; only where
-  EEVEE physically can't show glass-through-glass may a lower layer fall back).
-- **Shadows**: new `LayerShadow.kind = 'physical'` (no shadow-ray trick) is the default for glass layers;
-  'neutral'/'chromatic' remain as art-directed options.
-- **Opaque presets** (satin, plastic, clay, metals, candy, gummy) stay physically based (calibrated lighting +
-  albedo choice is fine); colour modes stay ('brand' default).
-- **Roundness**: UI slider = bevel / min(thickness/2, 0.9·safeRadius); 1 → full pill / sphere lens.
-- **Inflate** (`LayerDepth.inflate` 0..1): REAL geometry — a height-field body: inward distance d from the
-  silhouette, per-piece max distance D; top z = e + hb(d) + inflate·D·sqrt(1−(1−min(d/D,1))²) and the mirror below
-  (e = extrude half, hb = round-bevel profile); inflate 1 on a disc ≈ sphere. Built in Blender with
-  mathutils.geometry.delaunay_2d_cdt (boundary + interior Steiner points); mirrored in the viewport with poly2tri.
-- Fidelity harness: applies to plates and opaque presets only.
+## 11. Round 6 pivot — PHYSICAL rendering (binding; supersedes all earlier material/explode decisions)
+**Goal (user):** make it easy to turn SVGs into the layered setup (the splitter already does this well), then let the
+renders take real advantage of Cycles physics. Things should look 3D and physical — *perfect colour accuracy is NOT a
+goal*. Sliders need not mirror Icon Composer.
+
+**Materials — ONE Principled BSDF per shape.** Every shape object gets its own material (named after layer/element) whose
+graph is exactly: pre-processing nodes → ONE `ShaderNodeBsdfPrincipled` → Material Output (target ALL). Allowed
+pre-processing: Texture Coordinate / Mapping / Image Texture (the layer art), Mix Color (white → art = `tint`; specular /
+coat / sheen tints), Noise → Bump → Normal (`grain`), Noise → Map Range → Thin Film Thickness (`filmVariation`), Value /
+RGB / Math nodes. FORBIDDEN: Mix Shader, Add Shader, Emission / Transparent / Glass / Refraction / Volume shader nodes,
+Light Path tricks, overlay estimation, glow cards, self-lit bodies. Params = the Principled schema in
+`shared/presets.json` (28 params grouped like Blender's panel: Paint, Base, Subsurface, Specular, Transmission, Coat, Sheen,
+Emission, Thin Film); presets are only starting values; per-shape overrides via `Layer.elementMaterials`.
+- Shadows: real only. `physical` (default) = Cycles' true shadow; `none` = object.visible_shadow False; legacy
+  `neutral`/`chromatic` render as `physical`.
+- No native dispersion in 5.0 Principled → "Diamond" = IOR 2.4 + thin film. Jelly = transmission + subsurface (no volume).
+- Neon glow = compositor Glare (a render setting, not a material trick).
+- Appearances change only Principled inputs (clear = white base, transmission 1, roughness ~0.25 over the wallpaper;
+  tinted = base = mono × tint; dark = dark plate fill).
+- Colour: no pre-compensation for glass. Keep `brand` as the default colour mode.
+
+**Geometry — robust height-field bodies for ALL shapes.** Each piece (individual) / silhouette (combined) is a watertight body
+over its 2D outline defined by inward distance d (per-piece max D): top z(d) = e + hb(d) + inflate·D·√(1−(1−min(d/D,1))²),
+bottom mirrored; hb(d) = √(b² − (b − min(d, b))²) (round edge of radius b = bevel), e = max(thickness/2 − b, 0).
+Thin parts simply taper (z limited by d) → no inverted bevels, no self-intersections at tips/corners (Gemini star!).
+Built in Blender with `mathutils.geometry.delaunay_2d_cdt` (dense boundary + interior Steiner points, graded near edges,
+hole-aware), smooth normals, cached. The curve-bevel route is retired (fallback only). Viewport mirrors it with poly2tri.
+- Roundness slider = bevel / min(thickness/2, D-ish limit); 1 → full pill / sphere lens.
+
+**View — CAD-style POV instead of "explode".** `camera.iso` 0..1 interpolates an orthographic camera from head-on (0) to
+isometric (1: pitch 35.264°, yaw 45°) showing the REAL z distances (no artificial spreading), auto-framed. Same in the live
+viewport and Blender renders; animation kind `iso` = head-on → iso → head-on. `camera.explode` stays 1 (legacy).

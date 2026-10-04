@@ -112,6 +112,9 @@ class Element(_Model):
 # Materials / layers
 # ----------------------------------------------------------------------------------------------
 class MaterialSpec(_Model):
+    """ONE Principled BSDF per shape. `preset` = starting values (shared/presets.json "materials");
+    `params` = overrides keyed by the Principled schema (roughness, ior, transmission, coatWeight, ... +
+    Paint pre-processing: paintMode, tint, grain, grainScale, filmVariation)."""
     preset: str = "liquid_glass"              # key into shared/presets.json "materials"
     params: dict[str, Any] = {}               # overrides of preset param defaults
 
@@ -133,7 +136,8 @@ class LayerDepth(_Model):
 class LayerShadow(_Model):
     # physical = the body really blocks/attenuates light (no shadow-ray trick; Cycles' true result);
     # neutral / chromatic = art-directed soft shadow (Is-Shadow-Ray transparent wrap, grey / tinted)
-    kind: Literal["none", "physical", "neutral", "chromatic"] = "neutral"
+    # single-Principled rule: only real shadows are rendered; neutral/chromatic are legacy values rendered as physical
+    kind: Literal["none", "physical", "neutral", "chromatic"] = "physical"
     opacity: float = 0.5        # 0..1 (Icon Composer shadow %)
 
 
@@ -158,6 +162,7 @@ class Layer(_Model):
     transform: LayerTransform = LayerTransform()
     depth: LayerDepth = LayerDepth()
     material: MaterialSpec = MaterialSpec()
+    elementMaterials: dict[str, MaterialSpec] = {}   # per-shape overrides (element id -> material), merged over `material`
     shadow: LayerShadow = LayerShadow()
 
 
@@ -207,7 +212,8 @@ class CameraSpec(_Model):
     tiltY: float = 0.0                   # degrees: yaw
     fov: float = 30.0                    # degrees (perspective)
     zoom: float = 1.0
-    explode: float = 1.0                 # multiplies layer z gaps (exploded hero shots)
+    iso: float = 0.0                     # CAD-style POV: 0 = head-on (front) .. 1 = isometric; REAL distances, orthographic
+    explode: float = 1.0                 # legacy z-gap multiplier — keep 1.0 (the UI uses `iso` instead)
 
 
 class LayerOverride(_Model):
@@ -339,7 +345,7 @@ class RenderRequest(_Model):
 
 
 class AnimateRequest(_Model):
-    kind: Literal["turntable", "tilt", "float", "light-sweep", "explode"] = "tilt"
+    kind: Literal["turntable", "tilt", "float", "light-sweep", "iso", "explode"] = "tilt"   # explode = legacy alias of iso
     frames: int = 48
     fps: int = 24
     quality: Quality = "draft"

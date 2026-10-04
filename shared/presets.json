@@ -5,636 +5,62 @@
     "liquid_glass": {
       "label": "Liquid Glass",
       "category": "Glass",
-      "description": "Apple-style Liquid Glass: thick pill-edged glass with a crisp wet coat, light-locked rim highlights, frost and soft shadows.",
-      "paint": "tint",
+      "description": "Thick clear glass with a light art-colour tint and a thin wet coat - real refraction of what is beneath.",
       "engines": {
         "cycles": "full",
         "eevee": "good"
       },
       "params": {
-        "tint": {
-          "label": "Tint",
-          "type": "number",
-          "min": 0,
-          "max": 1,
-          "step": 0.01,
-          "default": 1.0,
-          "help": "How strongly the layer colour tints the glass (1 = the exact SVG colour)."
-        },
-        "frost": {
-          "label": "Frost / Blur",
-          "type": "number",
-          "min": 0,
-          "max": 0.5,
-          "step": 0.01,
-          "default": 0.06,
-          "help": "Surface roughness of the transmission (Icon Composer 'Blur')."
-        },
-        "translucency": {
-          "label": "Translucency",
-          "type": "number",
-          "min": 0,
-          "max": 1,
-          "step": 0.01,
-          "default": 0.75,
-          "help": "How see-through the glass is (Icon Composer 'Translucency')."
-        },
-        "ior": {
-          "label": "Refraction",
-          "type": "number",
-          "min": 1.0,
-          "max": 1.8,
-          "step": 0.01,
-          "default": 1.5,
-          "unit": "IOR",
-          "help": "Index of refraction — lensing strength at the rounded edges."
-        },
-        "specular": {
-          "label": "Specular",
+        "paintMode": {
+          "label": "Use Art Colour As",
           "type": "enum",
           "options": [
-            "off",
-            "auto",
-            "inside",
-            "outside"
+            "base",
+            "emission",
+            "base+emission"
           ],
-          "default": "auto",
-          "help": "Edge highlight placement (Icon Composer 2.0)."
+          "default": "base",
+          "group": "Paint",
+          "help": "Where the layer's SVG colours (texture) go: Base Color, Emission Color, or both."
         },
-        "rim": {
-          "label": "Rim Highlight",
-          "type": "number",
-          "min": 0,
-          "max": 3,
-          "step": 0.05,
-          "default": 1.0,
-          "help": "Light-angle-locked rim emission strength."
-        },
-        "glow": {
-          "label": "Inner Glow",
-          "type": "number",
-          "min": 0,
-          "max": 2,
-          "step": 0.05,
-          "default": 0.35,
-          "help": "Lit-from-within glow near the edges."
-        }
-      }
-    },
-    "clear_glass": {
-      "label": "Clear Glass",
-      "category": "Glass",
-      "description": "Crystal-clear, perfectly smooth glass.",
-      "paint": "tint",
-      "engines": {
-        "cycles": "full",
-        "eevee": "good"
-      },
-      "params": {
         "tint": {
-          "label": "Tint",
+          "label": "Art Colour Amount",
           "type": "number",
           "min": 0,
           "max": 1,
           "step": 0.01,
-          "default": 0.1
-        },
-        "frost": {
-          "label": "Roughness",
-          "type": "number",
-          "min": 0,
-          "max": 0.3,
-          "step": 0.01,
-          "default": 0.0
-        },
-        "ior": {
-          "label": "Refraction",
-          "type": "number",
-          "min": 1.0,
-          "max": 2.0,
-          "step": 0.01,
-          "default": 1.5,
-          "unit": "IOR"
-        }
-      }
-    },
-    "frosted_glass": {
-      "label": "Frosted Glass",
-      "category": "Glass",
-      "description": "Sandblasted glass with a glossy top coat and micro grain.",
-      "paint": "tint",
-      "engines": {
-        "cycles": "full",
-        "eevee": "good"
-      },
-      "params": {
-        "tint": {
-          "label": "Tint",
-          "type": "number",
-          "min": 0,
-          "max": 1,
-          "step": 0.01,
-          "default": 0.25
-        },
-        "frost": {
-          "label": "Frost",
-          "type": "number",
-          "min": 0.05,
-          "max": 0.7,
-          "step": 0.01,
-          "default": 0.35
+          "default": 0.5,
+          "group": "Paint",
+          "help": "Mix(white -> art colour) into Base Color. Glass: low = clear, high = coloured glass."
         },
         "grain": {
-          "label": "Grain",
-          "type": "number",
-          "min": 0,
-          "max": 0.3,
-          "step": 0.01,
-          "default": 0.08
-        },
-        "coat": {
-          "label": "Gloss Coat",
+          "label": "Surface Grain",
           "type": "number",
           "min": 0,
           "max": 1,
           "step": 0.01,
-          "default": 1.0
-        },
-        "ior": {
-          "label": "Refraction",
-          "type": "number",
-          "min": 1.0,
-          "max": 2.0,
-          "step": 0.01,
-          "default": 1.5,
-          "unit": "IOR"
-        }
-      }
-    },
-    "dispersive_crystal": {
-      "label": "Prism Crystal",
-      "category": "Glass",
-      "description": "High-index crystal with chromatic dispersion — rainbow fringes at the edges (Cycles).",
-      "paint": "tint",
-      "engines": {
-        "cycles": "full",
-        "eevee": "fallback"
-      },
-      "eeveeNote": "EEVEE shows plain clear glass; render with Cycles to see dispersion.",
-      "params": {
-        "tint": {
-          "label": "Tint",
-          "type": "number",
-          "min": 0,
-          "max": 1,
-          "step": 0.01,
-          "default": 0.05
-        },
-        "ior": {
-          "label": "Refraction",
-          "type": "number",
-          "min": 1.3,
-          "max": 2.4,
-          "step": 0.01,
-          "default": 1.6,
-          "unit": "IOR"
-        },
-        "dispersion": {
-          "label": "Dispersion",
-          "type": "number",
-          "min": 0,
-          "max": 0.15,
-          "step": 0.005,
-          "default": 0.06
-        },
-        "frost": {
-          "label": "Roughness",
-          "type": "number",
-          "min": 0,
-          "max": 0.2,
-          "step": 0.01,
-          "default": 0.0
-        }
-      }
-    },
-    "tinted_glass": {
-      "label": "Stained Glass",
-      "category": "Glass",
-      "description": "Deeply coloured glass that casts coloured (chromatic) shadows.",
-      "paint": "tint",
-      "engines": {
-        "cycles": "full",
-        "eevee": "good"
-      },
-      "eeveeNote": "EEVEE shadows are grey; coloured shadows need Cycles.",
-      "params": {
-        "tint": {
-          "label": "Tint",
-          "type": "number",
-          "min": 0,
-          "max": 1,
-          "step": 0.01,
-          "default": 0.95
-        },
-        "frost": {
-          "label": "Roughness",
-          "type": "number",
-          "min": 0,
-          "max": 0.4,
-          "step": 0.01,
-          "default": 0.04
-        },
-        "ior": {
-          "label": "Refraction",
-          "type": "number",
-          "min": 1.0,
-          "max": 2.0,
-          "step": 0.01,
-          "default": 1.5,
-          "unit": "IOR"
-        },
-        "absorption": {
-          "label": "Depth Tint",
-          "type": "number",
-          "min": 0,
-          "max": 12,
-          "step": 0.1,
           "default": 0.0,
-          "help": "Beer-Lambert volume absorption (Cycles): thicker = deeper colour."
-        }
-      }
-    },
-    "glossy_plastic": {
-      "label": "Glossy Plastic",
-      "category": "Solid",
-      "description": "Saturated injection-moulded plastic with a clear coat.",
-      "paint": "base",
-      "engines": {
-        "cycles": "full",
-        "eevee": "full"
-      },
-      "params": {
-        "roughness": {
-          "label": "Roughness",
-          "type": "number",
-          "min": 0,
-          "max": 1,
-          "step": 0.01,
-          "default": 0.35
+          "group": "Paint",
+          "help": "Noise -> Bump -> Normal (sandblasted / brushed micro-surface)."
         },
-        "coat": {
-          "label": "Clear Coat",
+        "grainScale": {
+          "label": "Grain Scale",
           "type": "number",
-          "min": 0,
-          "max": 1,
-          "step": 0.01,
-          "default": 1.0
-        },
-        "coatRoughness": {
-          "label": "Coat Roughness",
-          "type": "number",
-          "min": 0,
-          "max": 0.5,
-          "step": 0.01,
-          "default": 0.03
-        }
-      }
-    },
-    "satin": {
-      "label": "Satin",
-      "category": "Solid",
-      "description": "Soft satin paint — the default for icon plates.",
-      "paint": "base",
-      "engines": {
-        "cycles": "full",
-        "eevee": "full"
-      },
-      "params": {
-        "roughness": {
-          "label": "Roughness",
-          "type": "number",
-          "min": 0,
-          "max": 1,
-          "step": 0.01,
-          "default": 0.45
-        },
-        "coat": {
-          "label": "Clear Coat",
-          "type": "number",
-          "min": 0,
-          "max": 1,
-          "step": 0.01,
-          "default": 0.15
-        }
-      }
-    },
-    "candy": {
-      "label": "Hard Candy",
-      "category": "Solid",
-      "description": "Translucent sugar candy with subsurface glow.",
-      "paint": "base",
-      "engines": {
-        "cycles": "full",
-        "eevee": "good"
-      },
-      "params": {
-        "roughness": {
-          "label": "Roughness",
-          "type": "number",
-          "min": 0,
-          "max": 1,
-          "step": 0.01,
-          "default": 0.15
-        },
-        "subsurface": {
-          "label": "Subsurface",
-          "type": "number",
-          "min": 0,
-          "max": 1,
-          "step": 0.01,
-          "default": 1.0
-        },
-        "transmission": {
-          "label": "Transmission",
-          "type": "number",
-          "min": 0,
-          "max": 1,
-          "step": 0.01,
-          "default": 0.0
-        },
-        "coat": {
-          "label": "Clear Coat",
-          "type": "number",
-          "min": 0,
-          "max": 1,
-          "step": 0.01,
-          "default": 1.0
-        }
-      }
-    },
-    "gummy": {
-      "label": "Gummy",
-      "category": "Solid",
-      "description": "Soft gummy-bear subsurface material.",
-      "paint": "base",
-      "engines": {
-        "cycles": "full",
-        "eevee": "good"
-      },
-      "params": {
-        "roughness": {
-          "label": "Roughness",
-          "type": "number",
-          "min": 0,
-          "max": 1,
-          "step": 0.01,
-          "default": 0.2
-        },
-        "subsurfaceScale": {
-          "label": "Softness",
-          "type": "number",
-          "min": 0,
-          "max": 1,
-          "step": 0.01,
-          "default": 0.3
-        },
-        "coat": {
-          "label": "Clear Coat",
-          "type": "number",
-          "min": 0,
-          "max": 1,
-          "step": 0.01,
-          "default": 0.6
-        }
-      }
-    },
-    "jelly": {
-      "label": "Jelly",
-      "category": "Glass",
-      "description": "Wobbly translucent jelly with a scattering volume (Cycles).",
-      "paint": "tint",
-      "engines": {
-        "cycles": "full",
-        "eevee": "fallback"
-      },
-      "eeveeNote": "EEVEE falls back to Gummy (volumes are not visible through refraction).",
-      "params": {
-        "density": {
-          "label": "Density",
-          "type": "number",
-          "min": 0,
-          "max": 20,
-          "step": 0.1,
-          "default": 8
-        },
-        "scatter": {
-          "label": "Scatter",
-          "type": "number",
-          "min": 0,
-          "max": 10,
-          "step": 0.1,
-          "default": 4
-        },
-        "frost": {
-          "label": "Roughness",
-          "type": "number",
-          "min": 0,
-          "max": 0.4,
-          "step": 0.01,
-          "default": 0.08
-        },
-        "ior": {
-          "label": "Refraction",
-          "type": "number",
-          "min": 1.0,
-          "max": 1.8,
-          "step": 0.01,
-          "default": 1.35,
-          "unit": "IOR"
-        }
-      }
-    },
-    "chrome": {
-      "label": "Chrome",
-      "category": "Metal",
-      "description": "Mirror-polished metal. Optional colour tint from the art.",
-      "paint": "base",
-      "engines": {
-        "cycles": "full",
-        "eevee": "full"
-      },
-      "params": {
-        "tint": {
-          "label": "Colour Tint",
-          "type": "number",
-          "min": 0,
-          "max": 1,
-          "step": 0.01,
-          "default": 0.0
-        },
-        "roughness": {
-          "label": "Roughness",
-          "type": "number",
-          "min": 0,
-          "max": 0.4,
-          "step": 0.01,
-          "default": 0.05
-        }
-      }
-    },
-    "brushed_metal": {
-      "label": "Anodized Metal",
-      "category": "Metal",
-      "description": "Brushed / spun anodized aluminium in the art colour.",
-      "paint": "base",
-      "engines": {
-        "cycles": "full",
-        "eevee": "good"
-      },
-      "eeveeNote": "Anisotropy is Cycles-only; EEVEE shows bump streaks.",
-      "params": {
-        "tint": {
-          "label": "Colour",
-          "type": "number",
-          "min": 0,
-          "max": 1,
-          "step": 0.01,
-          "default": 1.0
-        },
-        "roughness": {
-          "label": "Roughness",
-          "type": "number",
-          "min": 0,
-          "max": 1,
-          "step": 0.01,
-          "default": 0.3
-        },
-        "anisotropy": {
-          "label": "Anisotropy",
-          "type": "number",
-          "min": 0,
-          "max": 1,
-          "step": 0.01,
-          "default": 0.8
-        },
-        "brush": {
-          "label": "Brushing",
-          "type": "enum",
-          "options": [
-            "radial",
-            "linear"
-          ],
-          "default": "radial"
-        },
-        "film": {
-          "label": "Oxide Film",
-          "type": "number",
-          "min": 0,
-          "max": 900,
+          "min": 10,
+          "max": 2000,
           "step": 10,
-          "default": 0,
-          "unit": "nm",
-          "help": "Thin-film interference (titanium look, Cycles)."
-        }
-      }
-    },
-    "matte_clay": {
-      "label": "Matte Clay",
-      "category": "Solid",
-      "description": "Soft-touch matte clay — great for 'clay render' looks.",
-      "paint": "base",
-      "engines": {
-        "cycles": "full",
-        "eevee": "good"
-      },
-      "params": {
-        "tint": {
-          "label": "Colour",
+          "default": 400,
+          "group": "Paint"
+        },
+        "filmVariation": {
+          "label": "Film Variation",
           "type": "number",
           "min": 0,
           "max": 1,
           "step": 0.01,
-          "default": 1.0,
-          "help": "0 = neutral clay, 1 = art colour."
-        },
-        "roughness": {
-          "label": "Roughness",
-          "type": "number",
-          "min": 0.3,
-          "max": 1,
-          "step": 0.01,
-          "default": 0.9
-        },
-        "sheen": {
-          "label": "Sheen",
-          "type": "number",
-          "min": 0,
-          "max": 1,
-          "step": 0.01,
-          "default": 0.15
-        }
-      }
-    },
-    "iridescent": {
-      "label": "Iridescent",
-      "category": "Metal",
-      "description": "Oil-slick thin-film interference (Cycles).",
-      "paint": "base",
-      "engines": {
-        "cycles": "full",
-        "eevee": "fallback"
-      },
-      "eeveeNote": "EEVEE ignores thin film; uses a rainbow-coat approximation.",
-      "params": {
-        "tint": {
-          "label": "Base Colour",
-          "type": "number",
-          "min": 0,
-          "max": 1,
-          "step": 0.01,
-          "default": 0.2
-        },
-        "roughness": {
-          "label": "Roughness",
-          "type": "number",
-          "min": 0,
-          "max": 0.6,
-          "step": 0.01,
-          "default": 0.15
-        },
-        "filmMin": {
-          "label": "Film Min",
-          "type": "number",
-          "min": 50,
-          "max": 1500,
-          "step": 10,
-          "default": 250,
-          "unit": "nm"
-        },
-        "filmMax": {
-          "label": "Film Max",
-          "type": "number",
-          "min": 50,
-          "max": 1500,
-          "step": 10,
-          "default": 900,
-          "unit": "nm"
-        },
-        "filmIor": {
-          "label": "Film IOR",
-          "type": "number",
-          "min": 1.1,
-          "max": 2.5,
-          "step": 0.01,
-          "default": 1.6
-        },
-        "bands": {
-          "label": "Band Scale",
-          "type": "number",
-          "min": 0.2,
-          "max": 12,
-          "step": 0.1,
-          "default": 3
+          "default": 0.0,
+          "group": "Paint",
+          "help": "Noise-driven Thin Film thickness variation (oil-slick bands)."
         },
         "metallic": {
           "label": "Metallic",
@@ -642,56 +68,4307 @@
           "min": 0,
           "max": 1,
           "step": 0.01,
-          "default": 1.0
+          "default": 0.0,
+          "group": "Base"
+        },
+        "roughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.04,
+          "group": "Base",
+          "help": "Frost / blur for glass."
+        },
+        "ior": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.5,
+          "group": "Base",
+          "help": "Index of refraction - lensing strength."
+        },
+        "alpha": {
+          "label": "Alpha",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Base"
+        },
+        "diffuseRoughness": {
+          "label": "Diffuse Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Base"
+        },
+        "subsurfaceWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Subsurface"
+        },
+        "subsurfaceScale": {
+          "label": "Scale",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.05,
+          "group": "Subsurface",
+          "unit": "m"
+        },
+        "subsurfaceAnisotropy": {
+          "label": "Anisotropy",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Subsurface"
+        },
+        "specularIorLevel": {
+          "label": "IOR Level",
+          "type": "number",
+          "min": 0,
+          "max": 2,
+          "step": 0.01,
+          "default": 0.5,
+          "group": "Specular"
+        },
+        "specularTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "anisotropic": {
+          "label": "Anisotropic",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "anisotropicRotation": {
+          "label": "Anisotropic Rotation",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "transmission": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Transmission"
+        },
+        "coatWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.3,
+          "group": "Coat"
+        },
+        "coatRoughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.02,
+          "group": "Coat"
+        },
+        "coatIor": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.5,
+          "group": "Coat"
+        },
+        "coatTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Coat"
+        },
+        "sheenWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Sheen"
+        },
+        "sheenRoughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.5,
+          "group": "Sheen"
+        },
+        "sheenTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Sheen"
+        },
+        "emissionStrength": {
+          "label": "Strength",
+          "type": "number",
+          "min": 0,
+          "max": 30,
+          "step": 0.1,
+          "default": 0.0,
+          "group": "Emission"
+        },
+        "thinFilmThickness": {
+          "label": "Thickness",
+          "type": "number",
+          "min": 0,
+          "max": 1500,
+          "step": 5,
+          "default": 0.0,
+          "group": "Thin Film",
+          "unit": "nm"
+        },
+        "thinFilmIor": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.33,
+          "group": "Thin Film"
+        }
+      }
+    },
+    "clear_glass": {
+      "label": "Clear Glass",
+      "category": "Glass",
+      "description": "Crystal-clear glass (IOR 1.6, roughness 0).",
+      "engines": {
+        "cycles": "full",
+        "eevee": "good"
+      },
+      "params": {
+        "paintMode": {
+          "label": "Use Art Colour As",
+          "type": "enum",
+          "options": [
+            "base",
+            "emission",
+            "base+emission"
+          ],
+          "default": "base",
+          "group": "Paint",
+          "help": "Where the layer's SVG colours (texture) go: Base Color, Emission Color, or both."
+        },
+        "tint": {
+          "label": "Art Colour Amount",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.15,
+          "group": "Paint",
+          "help": "Mix(white -> art colour) into Base Color. Glass: low = clear, high = coloured glass."
+        },
+        "grain": {
+          "label": "Surface Grain",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Paint",
+          "help": "Noise -> Bump -> Normal (sandblasted / brushed micro-surface)."
+        },
+        "grainScale": {
+          "label": "Grain Scale",
+          "type": "number",
+          "min": 10,
+          "max": 2000,
+          "step": 10,
+          "default": 400,
+          "group": "Paint"
+        },
+        "filmVariation": {
+          "label": "Film Variation",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Paint",
+          "help": "Noise-driven Thin Film thickness variation (oil-slick bands)."
+        },
+        "metallic": {
+          "label": "Metallic",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Base"
+        },
+        "roughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.0,
+          "group": "Base",
+          "help": "Frost / blur for glass."
+        },
+        "ior": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.6,
+          "group": "Base",
+          "help": "Index of refraction - lensing strength."
+        },
+        "alpha": {
+          "label": "Alpha",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Base"
+        },
+        "diffuseRoughness": {
+          "label": "Diffuse Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Base"
+        },
+        "subsurfaceWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Subsurface"
+        },
+        "subsurfaceScale": {
+          "label": "Scale",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.05,
+          "group": "Subsurface",
+          "unit": "m"
+        },
+        "subsurfaceAnisotropy": {
+          "label": "Anisotropy",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Subsurface"
+        },
+        "specularIorLevel": {
+          "label": "IOR Level",
+          "type": "number",
+          "min": 0,
+          "max": 2,
+          "step": 0.01,
+          "default": 0.5,
+          "group": "Specular"
+        },
+        "specularTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "anisotropic": {
+          "label": "Anisotropic",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "anisotropicRotation": {
+          "label": "Anisotropic Rotation",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "transmission": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Transmission"
+        },
+        "coatWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Coat"
+        },
+        "coatRoughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.03,
+          "group": "Coat"
+        },
+        "coatIor": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.5,
+          "group": "Coat"
+        },
+        "coatTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Coat"
+        },
+        "sheenWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Sheen"
+        },
+        "sheenRoughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.5,
+          "group": "Sheen"
+        },
+        "sheenTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Sheen"
+        },
+        "emissionStrength": {
+          "label": "Strength",
+          "type": "number",
+          "min": 0,
+          "max": 30,
+          "step": 0.1,
+          "default": 0.0,
+          "group": "Emission"
+        },
+        "thinFilmThickness": {
+          "label": "Thickness",
+          "type": "number",
+          "min": 0,
+          "max": 1500,
+          "step": 5,
+          "default": 0.0,
+          "group": "Thin Film",
+          "unit": "nm"
+        },
+        "thinFilmIor": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.33,
+          "group": "Thin Film"
+        }
+      }
+    },
+    "frosted_glass": {
+      "label": "Frosted Glass",
+      "category": "Glass",
+      "description": "Frosted tinted glass (IOR 1.6, roughness 0.267).",
+      "engines": {
+        "cycles": "full",
+        "eevee": "good"
+      },
+      "params": {
+        "paintMode": {
+          "label": "Use Art Colour As",
+          "type": "enum",
+          "options": [
+            "base",
+            "emission",
+            "base+emission"
+          ],
+          "default": "base",
+          "group": "Paint",
+          "help": "Where the layer's SVG colours (texture) go: Base Color, Emission Color, or both."
+        },
+        "tint": {
+          "label": "Art Colour Amount",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Paint",
+          "help": "Mix(white -> art colour) into Base Color. Glass: low = clear, high = coloured glass."
+        },
+        "grain": {
+          "label": "Surface Grain",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Paint",
+          "help": "Noise -> Bump -> Normal (sandblasted / brushed micro-surface)."
+        },
+        "grainScale": {
+          "label": "Grain Scale",
+          "type": "number",
+          "min": 10,
+          "max": 2000,
+          "step": 10,
+          "default": 400,
+          "group": "Paint"
+        },
+        "filmVariation": {
+          "label": "Film Variation",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Paint",
+          "help": "Noise-driven Thin Film thickness variation (oil-slick bands)."
+        },
+        "metallic": {
+          "label": "Metallic",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Base"
+        },
+        "roughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.267,
+          "group": "Base",
+          "help": "Frost / blur for glass."
+        },
+        "ior": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.6,
+          "group": "Base",
+          "help": "Index of refraction - lensing strength."
+        },
+        "alpha": {
+          "label": "Alpha",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Base"
+        },
+        "diffuseRoughness": {
+          "label": "Diffuse Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Base"
+        },
+        "subsurfaceWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Subsurface"
+        },
+        "subsurfaceScale": {
+          "label": "Scale",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.05,
+          "group": "Subsurface",
+          "unit": "m"
+        },
+        "subsurfaceAnisotropy": {
+          "label": "Anisotropy",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Subsurface"
+        },
+        "specularIorLevel": {
+          "label": "IOR Level",
+          "type": "number",
+          "min": 0,
+          "max": 2,
+          "step": 0.01,
+          "default": 0.5,
+          "group": "Specular"
+        },
+        "specularTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "anisotropic": {
+          "label": "Anisotropic",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "anisotropicRotation": {
+          "label": "Anisotropic Rotation",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "transmission": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Transmission"
+        },
+        "coatWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Coat"
+        },
+        "coatRoughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.03,
+          "group": "Coat"
+        },
+        "coatIor": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.5,
+          "group": "Coat"
+        },
+        "coatTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Coat"
+        },
+        "sheenWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Sheen"
+        },
+        "sheenRoughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.5,
+          "group": "Sheen"
+        },
+        "sheenTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Sheen"
+        },
+        "emissionStrength": {
+          "label": "Strength",
+          "type": "number",
+          "min": 0,
+          "max": 30,
+          "step": 0.1,
+          "default": 0.0,
+          "group": "Emission"
+        },
+        "thinFilmThickness": {
+          "label": "Thickness",
+          "type": "number",
+          "min": 0,
+          "max": 1500,
+          "step": 5,
+          "default": 0.0,
+          "group": "Thin Film",
+          "unit": "nm"
+        },
+        "thinFilmIor": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.33,
+          "group": "Thin Film"
+        }
+      }
+    },
+    "tinted_glass": {
+      "label": "Stained Glass",
+      "category": "Glass",
+      "description": "Deeply coloured smooth glass.",
+      "engines": {
+        "cycles": "full",
+        "eevee": "good"
+      },
+      "params": {
+        "paintMode": {
+          "label": "Use Art Colour As",
+          "type": "enum",
+          "options": [
+            "base",
+            "emission",
+            "base+emission"
+          ],
+          "default": "base",
+          "group": "Paint",
+          "help": "Where the layer's SVG colours (texture) go: Base Color, Emission Color, or both."
+        },
+        "tint": {
+          "label": "Art Colour Amount",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Paint",
+          "help": "Mix(white -> art colour) into Base Color. Glass: low = clear, high = coloured glass."
+        },
+        "grain": {
+          "label": "Surface Grain",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Paint",
+          "help": "Noise -> Bump -> Normal (sandblasted / brushed micro-surface)."
+        },
+        "grainScale": {
+          "label": "Grain Scale",
+          "type": "number",
+          "min": 10,
+          "max": 2000,
+          "step": 10,
+          "default": 400,
+          "group": "Paint"
+        },
+        "filmVariation": {
+          "label": "Film Variation",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Paint",
+          "help": "Noise-driven Thin Film thickness variation (oil-slick bands)."
+        },
+        "metallic": {
+          "label": "Metallic",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Base"
+        },
+        "roughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.02,
+          "group": "Base",
+          "help": "Frost / blur for glass."
+        },
+        "ior": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.52,
+          "group": "Base",
+          "help": "Index of refraction - lensing strength."
+        },
+        "alpha": {
+          "label": "Alpha",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Base"
+        },
+        "diffuseRoughness": {
+          "label": "Diffuse Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Base"
+        },
+        "subsurfaceWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Subsurface"
+        },
+        "subsurfaceScale": {
+          "label": "Scale",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.05,
+          "group": "Subsurface",
+          "unit": "m"
+        },
+        "subsurfaceAnisotropy": {
+          "label": "Anisotropy",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Subsurface"
+        },
+        "specularIorLevel": {
+          "label": "IOR Level",
+          "type": "number",
+          "min": 0,
+          "max": 2,
+          "step": 0.01,
+          "default": 0.5,
+          "group": "Specular"
+        },
+        "specularTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "anisotropic": {
+          "label": "Anisotropic",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "anisotropicRotation": {
+          "label": "Anisotropic Rotation",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "transmission": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Transmission"
+        },
+        "coatWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Coat"
+        },
+        "coatRoughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.03,
+          "group": "Coat"
+        },
+        "coatIor": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.5,
+          "group": "Coat"
+        },
+        "coatTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Coat"
+        },
+        "sheenWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Sheen"
+        },
+        "sheenRoughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.5,
+          "group": "Sheen"
+        },
+        "sheenTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Sheen"
+        },
+        "emissionStrength": {
+          "label": "Strength",
+          "type": "number",
+          "min": 0,
+          "max": 30,
+          "step": 0.1,
+          "default": 0.0,
+          "group": "Emission"
+        },
+        "thinFilmThickness": {
+          "label": "Thickness",
+          "type": "number",
+          "min": 0,
+          "max": 1500,
+          "step": 5,
+          "default": 0.0,
+          "group": "Thin Film",
+          "unit": "nm"
+        },
+        "thinFilmIor": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.33,
+          "group": "Thin Film"
+        }
+      }
+    },
+    "dispersive_crystal": {
+      "label": "Diamond",
+      "category": "Glass",
+      "description": "Very high-index crystal (IOR 2.4) with a faint thin-film sheen.",
+      "engines": {
+        "cycles": "full",
+        "eevee": "good"
+      },
+      "params": {
+        "paintMode": {
+          "label": "Use Art Colour As",
+          "type": "enum",
+          "options": [
+            "base",
+            "emission",
+            "base+emission"
+          ],
+          "default": "base",
+          "group": "Paint",
+          "help": "Where the layer's SVG colours (texture) go: Base Color, Emission Color, or both."
+        },
+        "tint": {
+          "label": "Art Colour Amount",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.1,
+          "group": "Paint",
+          "help": "Mix(white -> art colour) into Base Color. Glass: low = clear, high = coloured glass."
+        },
+        "grain": {
+          "label": "Surface Grain",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Paint",
+          "help": "Noise -> Bump -> Normal (sandblasted / brushed micro-surface)."
+        },
+        "grainScale": {
+          "label": "Grain Scale",
+          "type": "number",
+          "min": 10,
+          "max": 2000,
+          "step": 10,
+          "default": 400,
+          "group": "Paint"
+        },
+        "filmVariation": {
+          "label": "Film Variation",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Paint",
+          "help": "Noise-driven Thin Film thickness variation (oil-slick bands)."
+        },
+        "metallic": {
+          "label": "Metallic",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Base"
+        },
+        "roughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.0,
+          "group": "Base",
+          "help": "Frost / blur for glass."
+        },
+        "ior": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 2.4,
+          "group": "Base",
+          "help": "Index of refraction - lensing strength."
+        },
+        "alpha": {
+          "label": "Alpha",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Base"
+        },
+        "diffuseRoughness": {
+          "label": "Diffuse Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Base"
+        },
+        "subsurfaceWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Subsurface"
+        },
+        "subsurfaceScale": {
+          "label": "Scale",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.05,
+          "group": "Subsurface",
+          "unit": "m"
+        },
+        "subsurfaceAnisotropy": {
+          "label": "Anisotropy",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Subsurface"
+        },
+        "specularIorLevel": {
+          "label": "IOR Level",
+          "type": "number",
+          "min": 0,
+          "max": 2,
+          "step": 0.01,
+          "default": 0.5,
+          "group": "Specular"
+        },
+        "specularTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "anisotropic": {
+          "label": "Anisotropic",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "anisotropicRotation": {
+          "label": "Anisotropic Rotation",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "transmission": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Transmission"
+        },
+        "coatWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Coat"
+        },
+        "coatRoughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.03,
+          "group": "Coat"
+        },
+        "coatIor": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.5,
+          "group": "Coat"
+        },
+        "coatTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Coat"
+        },
+        "sheenWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Sheen"
+        },
+        "sheenRoughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.5,
+          "group": "Sheen"
+        },
+        "sheenTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Sheen"
+        },
+        "emissionStrength": {
+          "label": "Strength",
+          "type": "number",
+          "min": 0,
+          "max": 30,
+          "step": 0.1,
+          "default": 0.0,
+          "group": "Emission"
+        },
+        "thinFilmThickness": {
+          "label": "Thickness",
+          "type": "number",
+          "min": 0,
+          "max": 1500,
+          "step": 5,
+          "default": 320.0,
+          "group": "Thin Film",
+          "unit": "nm"
+        },
+        "thinFilmIor": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.45,
+          "group": "Thin Film"
+        }
+      }
+    },
+    "jelly": {
+      "label": "Jelly",
+      "category": "Glass",
+      "description": "Soft translucent jelly - transmission with a little subsurface.",
+      "engines": {
+        "cycles": "full",
+        "eevee": "good"
+      },
+      "params": {
+        "paintMode": {
+          "label": "Use Art Colour As",
+          "type": "enum",
+          "options": [
+            "base",
+            "emission",
+            "base+emission"
+          ],
+          "default": "base",
+          "group": "Paint",
+          "help": "Where the layer's SVG colours (texture) go: Base Color, Emission Color, or both."
+        },
+        "tint": {
+          "label": "Art Colour Amount",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Paint",
+          "help": "Mix(white -> art colour) into Base Color. Glass: low = clear, high = coloured glass."
+        },
+        "grain": {
+          "label": "Surface Grain",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Paint",
+          "help": "Noise -> Bump -> Normal (sandblasted / brushed micro-surface)."
+        },
+        "grainScale": {
+          "label": "Grain Scale",
+          "type": "number",
+          "min": 10,
+          "max": 2000,
+          "step": 10,
+          "default": 400,
+          "group": "Paint"
+        },
+        "filmVariation": {
+          "label": "Film Variation",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Paint",
+          "help": "Noise-driven Thin Film thickness variation (oil-slick bands)."
+        },
+        "metallic": {
+          "label": "Metallic",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Base"
+        },
+        "roughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.12,
+          "group": "Base",
+          "help": "Frost / blur for glass."
+        },
+        "ior": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.35,
+          "group": "Base",
+          "help": "Index of refraction - lensing strength."
+        },
+        "alpha": {
+          "label": "Alpha",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Base"
+        },
+        "diffuseRoughness": {
+          "label": "Diffuse Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Base"
+        },
+        "subsurfaceWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.25,
+          "group": "Subsurface"
+        },
+        "subsurfaceScale": {
+          "label": "Scale",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.1,
+          "group": "Subsurface",
+          "unit": "m"
+        },
+        "subsurfaceAnisotropy": {
+          "label": "Anisotropy",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Subsurface"
+        },
+        "specularIorLevel": {
+          "label": "IOR Level",
+          "type": "number",
+          "min": 0,
+          "max": 2,
+          "step": 0.01,
+          "default": 0.5,
+          "group": "Specular"
+        },
+        "specularTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "anisotropic": {
+          "label": "Anisotropic",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "anisotropicRotation": {
+          "label": "Anisotropic Rotation",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "transmission": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.85,
+          "group": "Transmission"
+        },
+        "coatWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Coat"
+        },
+        "coatRoughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.03,
+          "group": "Coat"
+        },
+        "coatIor": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.5,
+          "group": "Coat"
+        },
+        "coatTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Coat"
+        },
+        "sheenWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Sheen"
+        },
+        "sheenRoughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.5,
+          "group": "Sheen"
+        },
+        "sheenTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Sheen"
+        },
+        "emissionStrength": {
+          "label": "Strength",
+          "type": "number",
+          "min": 0,
+          "max": 30,
+          "step": 0.1,
+          "default": 0.0,
+          "group": "Emission"
+        },
+        "thinFilmThickness": {
+          "label": "Thickness",
+          "type": "number",
+          "min": 0,
+          "max": 1500,
+          "step": 5,
+          "default": 0.0,
+          "group": "Thin Film",
+          "unit": "nm"
+        },
+        "thinFilmIor": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.33,
+          "group": "Thin Film"
+        }
+      }
+    },
+    "glossy_plastic": {
+      "label": "Glossy Plastic",
+      "category": "Solid",
+      "description": "Saturated plastic with a clear coat.",
+      "engines": {
+        "cycles": "full",
+        "eevee": "good"
+      },
+      "params": {
+        "paintMode": {
+          "label": "Use Art Colour As",
+          "type": "enum",
+          "options": [
+            "base",
+            "emission",
+            "base+emission"
+          ],
+          "default": "base",
+          "group": "Paint",
+          "help": "Where the layer's SVG colours (texture) go: Base Color, Emission Color, or both."
+        },
+        "tint": {
+          "label": "Art Colour Amount",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Paint",
+          "help": "Mix(white -> art colour) into Base Color. Glass: low = clear, high = coloured glass."
+        },
+        "grain": {
+          "label": "Surface Grain",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Paint",
+          "help": "Noise -> Bump -> Normal (sandblasted / brushed micro-surface)."
+        },
+        "grainScale": {
+          "label": "Grain Scale",
+          "type": "number",
+          "min": 10,
+          "max": 2000,
+          "step": 10,
+          "default": 400,
+          "group": "Paint"
+        },
+        "filmVariation": {
+          "label": "Film Variation",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Paint",
+          "help": "Noise-driven Thin Film thickness variation (oil-slick bands)."
+        },
+        "metallic": {
+          "label": "Metallic",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Base"
+        },
+        "roughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.35,
+          "group": "Base",
+          "help": "Frost / blur for glass."
+        },
+        "ior": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.5,
+          "group": "Base",
+          "help": "Index of refraction - lensing strength."
+        },
+        "alpha": {
+          "label": "Alpha",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Base"
+        },
+        "diffuseRoughness": {
+          "label": "Diffuse Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Base"
+        },
+        "subsurfaceWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Subsurface"
+        },
+        "subsurfaceScale": {
+          "label": "Scale",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.05,
+          "group": "Subsurface",
+          "unit": "m"
+        },
+        "subsurfaceAnisotropy": {
+          "label": "Anisotropy",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Subsurface"
+        },
+        "specularIorLevel": {
+          "label": "IOR Level",
+          "type": "number",
+          "min": 0,
+          "max": 2,
+          "step": 0.01,
+          "default": 0.5,
+          "group": "Specular"
+        },
+        "specularTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "anisotropic": {
+          "label": "Anisotropic",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "anisotropicRotation": {
+          "label": "Anisotropic Rotation",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "transmission": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Transmission"
+        },
+        "coatWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Coat"
+        },
+        "coatRoughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.03,
+          "group": "Coat"
+        },
+        "coatIor": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.5,
+          "group": "Coat"
+        },
+        "coatTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Coat"
+        },
+        "sheenWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Sheen"
+        },
+        "sheenRoughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.5,
+          "group": "Sheen"
+        },
+        "sheenTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Sheen"
+        },
+        "emissionStrength": {
+          "label": "Strength",
+          "type": "number",
+          "min": 0,
+          "max": 30,
+          "step": 0.1,
+          "default": 0.0,
+          "group": "Emission"
+        },
+        "thinFilmThickness": {
+          "label": "Thickness",
+          "type": "number",
+          "min": 0,
+          "max": 1500,
+          "step": 5,
+          "default": 0.0,
+          "group": "Thin Film",
+          "unit": "nm"
+        },
+        "thinFilmIor": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.33,
+          "group": "Thin Film"
+        }
+      }
+    },
+    "satin": {
+      "label": "Satin",
+      "category": "Solid",
+      "description": "Soft satin paint - the default for plates.",
+      "engines": {
+        "cycles": "full",
+        "eevee": "good"
+      },
+      "params": {
+        "paintMode": {
+          "label": "Use Art Colour As",
+          "type": "enum",
+          "options": [
+            "base",
+            "emission",
+            "base+emission"
+          ],
+          "default": "base",
+          "group": "Paint",
+          "help": "Where the layer's SVG colours (texture) go: Base Color, Emission Color, or both."
+        },
+        "tint": {
+          "label": "Art Colour Amount",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Paint",
+          "help": "Mix(white -> art colour) into Base Color. Glass: low = clear, high = coloured glass."
+        },
+        "grain": {
+          "label": "Surface Grain",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Paint",
+          "help": "Noise -> Bump -> Normal (sandblasted / brushed micro-surface)."
+        },
+        "grainScale": {
+          "label": "Grain Scale",
+          "type": "number",
+          "min": 10,
+          "max": 2000,
+          "step": 10,
+          "default": 400,
+          "group": "Paint"
+        },
+        "filmVariation": {
+          "label": "Film Variation",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Paint",
+          "help": "Noise-driven Thin Film thickness variation (oil-slick bands)."
+        },
+        "metallic": {
+          "label": "Metallic",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Base"
+        },
+        "roughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.45,
+          "group": "Base",
+          "help": "Frost / blur for glass."
+        },
+        "ior": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.5,
+          "group": "Base",
+          "help": "Index of refraction - lensing strength."
+        },
+        "alpha": {
+          "label": "Alpha",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Base"
+        },
+        "diffuseRoughness": {
+          "label": "Diffuse Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Base"
+        },
+        "subsurfaceWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Subsurface"
+        },
+        "subsurfaceScale": {
+          "label": "Scale",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.05,
+          "group": "Subsurface",
+          "unit": "m"
+        },
+        "subsurfaceAnisotropy": {
+          "label": "Anisotropy",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Subsurface"
+        },
+        "specularIorLevel": {
+          "label": "IOR Level",
+          "type": "number",
+          "min": 0,
+          "max": 2,
+          "step": 0.01,
+          "default": 0.5,
+          "group": "Specular"
+        },
+        "specularTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "anisotropic": {
+          "label": "Anisotropic",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "anisotropicRotation": {
+          "label": "Anisotropic Rotation",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "transmission": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Transmission"
+        },
+        "coatWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.15,
+          "group": "Coat"
+        },
+        "coatRoughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.03,
+          "group": "Coat"
+        },
+        "coatIor": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.5,
+          "group": "Coat"
+        },
+        "coatTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Coat"
+        },
+        "sheenWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Sheen"
+        },
+        "sheenRoughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.5,
+          "group": "Sheen"
+        },
+        "sheenTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Sheen"
+        },
+        "emissionStrength": {
+          "label": "Strength",
+          "type": "number",
+          "min": 0,
+          "max": 30,
+          "step": 0.1,
+          "default": 0.0,
+          "group": "Emission"
+        },
+        "thinFilmThickness": {
+          "label": "Thickness",
+          "type": "number",
+          "min": 0,
+          "max": 1500,
+          "step": 5,
+          "default": 0.0,
+          "group": "Thin Film",
+          "unit": "nm"
+        },
+        "thinFilmIor": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.33,
+          "group": "Thin Film"
+        }
+      }
+    },
+    "candy": {
+      "label": "Hard Candy",
+      "category": "Solid",
+      "description": "Translucent candy with subsurface glow.",
+      "engines": {
+        "cycles": "full",
+        "eevee": "good"
+      },
+      "params": {
+        "paintMode": {
+          "label": "Use Art Colour As",
+          "type": "enum",
+          "options": [
+            "base",
+            "emission",
+            "base+emission"
+          ],
+          "default": "base",
+          "group": "Paint",
+          "help": "Where the layer's SVG colours (texture) go: Base Color, Emission Color, or both."
+        },
+        "tint": {
+          "label": "Art Colour Amount",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Paint",
+          "help": "Mix(white -> art colour) into Base Color. Glass: low = clear, high = coloured glass."
+        },
+        "grain": {
+          "label": "Surface Grain",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Paint",
+          "help": "Noise -> Bump -> Normal (sandblasted / brushed micro-surface)."
+        },
+        "grainScale": {
+          "label": "Grain Scale",
+          "type": "number",
+          "min": 10,
+          "max": 2000,
+          "step": 10,
+          "default": 400,
+          "group": "Paint"
+        },
+        "filmVariation": {
+          "label": "Film Variation",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Paint",
+          "help": "Noise-driven Thin Film thickness variation (oil-slick bands)."
+        },
+        "metallic": {
+          "label": "Metallic",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Base"
+        },
+        "roughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.15,
+          "group": "Base",
+          "help": "Frost / blur for glass."
+        },
+        "ior": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.5,
+          "group": "Base",
+          "help": "Index of refraction - lensing strength."
+        },
+        "alpha": {
+          "label": "Alpha",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Base"
+        },
+        "diffuseRoughness": {
+          "label": "Diffuse Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Base"
+        },
+        "subsurfaceWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Subsurface"
+        },
+        "subsurfaceScale": {
+          "label": "Scale",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.08,
+          "group": "Subsurface",
+          "unit": "m"
+        },
+        "subsurfaceAnisotropy": {
+          "label": "Anisotropy",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Subsurface"
+        },
+        "specularIorLevel": {
+          "label": "IOR Level",
+          "type": "number",
+          "min": 0,
+          "max": 2,
+          "step": 0.01,
+          "default": 0.5,
+          "group": "Specular"
+        },
+        "specularTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "anisotropic": {
+          "label": "Anisotropic",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "anisotropicRotation": {
+          "label": "Anisotropic Rotation",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "transmission": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Transmission"
+        },
+        "coatWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Coat"
+        },
+        "coatRoughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.02,
+          "group": "Coat"
+        },
+        "coatIor": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.5,
+          "group": "Coat"
+        },
+        "coatTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Coat"
+        },
+        "sheenWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Sheen"
+        },
+        "sheenRoughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.5,
+          "group": "Sheen"
+        },
+        "sheenTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Sheen"
+        },
+        "emissionStrength": {
+          "label": "Strength",
+          "type": "number",
+          "min": 0,
+          "max": 30,
+          "step": 0.1,
+          "default": 0.0,
+          "group": "Emission"
+        },
+        "thinFilmThickness": {
+          "label": "Thickness",
+          "type": "number",
+          "min": 0,
+          "max": 1500,
+          "step": 5,
+          "default": 0.0,
+          "group": "Thin Film",
+          "unit": "nm"
+        },
+        "thinFilmIor": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.33,
+          "group": "Thin Film"
+        }
+      }
+    },
+    "gummy": {
+      "label": "Gummy",
+      "category": "Solid",
+      "description": "Soft gummy subsurface.",
+      "engines": {
+        "cycles": "full",
+        "eevee": "good"
+      },
+      "params": {
+        "paintMode": {
+          "label": "Use Art Colour As",
+          "type": "enum",
+          "options": [
+            "base",
+            "emission",
+            "base+emission"
+          ],
+          "default": "base",
+          "group": "Paint",
+          "help": "Where the layer's SVG colours (texture) go: Base Color, Emission Color, or both."
+        },
+        "tint": {
+          "label": "Art Colour Amount",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Paint",
+          "help": "Mix(white -> art colour) into Base Color. Glass: low = clear, high = coloured glass."
+        },
+        "grain": {
+          "label": "Surface Grain",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Paint",
+          "help": "Noise -> Bump -> Normal (sandblasted / brushed micro-surface)."
+        },
+        "grainScale": {
+          "label": "Grain Scale",
+          "type": "number",
+          "min": 10,
+          "max": 2000,
+          "step": 10,
+          "default": 400,
+          "group": "Paint"
+        },
+        "filmVariation": {
+          "label": "Film Variation",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Paint",
+          "help": "Noise-driven Thin Film thickness variation (oil-slick bands)."
+        },
+        "metallic": {
+          "label": "Metallic",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Base"
+        },
+        "roughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.2,
+          "group": "Base",
+          "help": "Frost / blur for glass."
+        },
+        "ior": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.5,
+          "group": "Base",
+          "help": "Index of refraction - lensing strength."
+        },
+        "alpha": {
+          "label": "Alpha",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Base"
+        },
+        "diffuseRoughness": {
+          "label": "Diffuse Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Base"
+        },
+        "subsurfaceWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Subsurface"
+        },
+        "subsurfaceScale": {
+          "label": "Scale",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.3,
+          "group": "Subsurface",
+          "unit": "m"
+        },
+        "subsurfaceAnisotropy": {
+          "label": "Anisotropy",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Subsurface"
+        },
+        "specularIorLevel": {
+          "label": "IOR Level",
+          "type": "number",
+          "min": 0,
+          "max": 2,
+          "step": 0.01,
+          "default": 0.5,
+          "group": "Specular"
+        },
+        "specularTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "anisotropic": {
+          "label": "Anisotropic",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "anisotropicRotation": {
+          "label": "Anisotropic Rotation",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "transmission": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Transmission"
+        },
+        "coatWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.6,
+          "group": "Coat"
+        },
+        "coatRoughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.05,
+          "group": "Coat"
+        },
+        "coatIor": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.5,
+          "group": "Coat"
+        },
+        "coatTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Coat"
+        },
+        "sheenWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Sheen"
+        },
+        "sheenRoughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.5,
+          "group": "Sheen"
+        },
+        "sheenTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Sheen"
+        },
+        "emissionStrength": {
+          "label": "Strength",
+          "type": "number",
+          "min": 0,
+          "max": 30,
+          "step": 0.1,
+          "default": 0.0,
+          "group": "Emission"
+        },
+        "thinFilmThickness": {
+          "label": "Thickness",
+          "type": "number",
+          "min": 0,
+          "max": 1500,
+          "step": 5,
+          "default": 0.0,
+          "group": "Thin Film",
+          "unit": "nm"
+        },
+        "thinFilmIor": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.33,
+          "group": "Thin Film"
+        }
+      }
+    },
+    "matte_clay": {
+      "label": "Matte Clay",
+      "category": "Solid",
+      "description": "Soft-touch matte clay.",
+      "engines": {
+        "cycles": "full",
+        "eevee": "good"
+      },
+      "params": {
+        "paintMode": {
+          "label": "Use Art Colour As",
+          "type": "enum",
+          "options": [
+            "base",
+            "emission",
+            "base+emission"
+          ],
+          "default": "base",
+          "group": "Paint",
+          "help": "Where the layer's SVG colours (texture) go: Base Color, Emission Color, or both."
+        },
+        "tint": {
+          "label": "Art Colour Amount",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Paint",
+          "help": "Mix(white -> art colour) into Base Color. Glass: low = clear, high = coloured glass."
+        },
+        "grain": {
+          "label": "Surface Grain",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Paint",
+          "help": "Noise -> Bump -> Normal (sandblasted / brushed micro-surface)."
+        },
+        "grainScale": {
+          "label": "Grain Scale",
+          "type": "number",
+          "min": 10,
+          "max": 2000,
+          "step": 10,
+          "default": 400,
+          "group": "Paint"
+        },
+        "filmVariation": {
+          "label": "Film Variation",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Paint",
+          "help": "Noise-driven Thin Film thickness variation (oil-slick bands)."
+        },
+        "metallic": {
+          "label": "Metallic",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Base"
+        },
+        "roughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.9,
+          "group": "Base",
+          "help": "Frost / blur for glass."
+        },
+        "ior": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.5,
+          "group": "Base",
+          "help": "Index of refraction - lensing strength."
+        },
+        "alpha": {
+          "label": "Alpha",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Base"
+        },
+        "diffuseRoughness": {
+          "label": "Diffuse Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.5,
+          "group": "Base"
+        },
+        "subsurfaceWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Subsurface"
+        },
+        "subsurfaceScale": {
+          "label": "Scale",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.05,
+          "group": "Subsurface",
+          "unit": "m"
+        },
+        "subsurfaceAnisotropy": {
+          "label": "Anisotropy",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Subsurface"
+        },
+        "specularIorLevel": {
+          "label": "IOR Level",
+          "type": "number",
+          "min": 0,
+          "max": 2,
+          "step": 0.01,
+          "default": 0.3,
+          "group": "Specular"
+        },
+        "specularTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "anisotropic": {
+          "label": "Anisotropic",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "anisotropicRotation": {
+          "label": "Anisotropic Rotation",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "transmission": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Transmission"
+        },
+        "coatWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Coat"
+        },
+        "coatRoughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.03,
+          "group": "Coat"
+        },
+        "coatIor": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.5,
+          "group": "Coat"
+        },
+        "coatTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Coat"
+        },
+        "sheenWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.15,
+          "group": "Sheen"
+        },
+        "sheenRoughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.5,
+          "group": "Sheen"
+        },
+        "sheenTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Sheen"
+        },
+        "emissionStrength": {
+          "label": "Strength",
+          "type": "number",
+          "min": 0,
+          "max": 30,
+          "step": 0.1,
+          "default": 0.0,
+          "group": "Emission"
+        },
+        "thinFilmThickness": {
+          "label": "Thickness",
+          "type": "number",
+          "min": 0,
+          "max": 1500,
+          "step": 5,
+          "default": 0.0,
+          "group": "Thin Film",
+          "unit": "nm"
+        },
+        "thinFilmIor": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.33,
+          "group": "Thin Film"
+        }
+      }
+    },
+    "chrome": {
+      "label": "Chrome",
+      "category": "Metal",
+      "description": "Mirror-polished metal.",
+      "engines": {
+        "cycles": "full",
+        "eevee": "good"
+      },
+      "params": {
+        "paintMode": {
+          "label": "Use Art Colour As",
+          "type": "enum",
+          "options": [
+            "base",
+            "emission",
+            "base+emission"
+          ],
+          "default": "base",
+          "group": "Paint",
+          "help": "Where the layer's SVG colours (texture) go: Base Color, Emission Color, or both."
+        },
+        "tint": {
+          "label": "Art Colour Amount",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Paint",
+          "help": "Mix(white -> art colour) into Base Color. Glass: low = clear, high = coloured glass."
+        },
+        "grain": {
+          "label": "Surface Grain",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Paint",
+          "help": "Noise -> Bump -> Normal (sandblasted / brushed micro-surface)."
+        },
+        "grainScale": {
+          "label": "Grain Scale",
+          "type": "number",
+          "min": 10,
+          "max": 2000,
+          "step": 10,
+          "default": 400,
+          "group": "Paint"
+        },
+        "filmVariation": {
+          "label": "Film Variation",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Paint",
+          "help": "Noise-driven Thin Film thickness variation (oil-slick bands)."
+        },
+        "metallic": {
+          "label": "Metallic",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Base"
+        },
+        "roughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.05,
+          "group": "Base",
+          "help": "Frost / blur for glass."
+        },
+        "ior": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.5,
+          "group": "Base",
+          "help": "Index of refraction - lensing strength."
+        },
+        "alpha": {
+          "label": "Alpha",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Base"
+        },
+        "diffuseRoughness": {
+          "label": "Diffuse Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Base"
+        },
+        "subsurfaceWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Subsurface"
+        },
+        "subsurfaceScale": {
+          "label": "Scale",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.05,
+          "group": "Subsurface",
+          "unit": "m"
+        },
+        "subsurfaceAnisotropy": {
+          "label": "Anisotropy",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Subsurface"
+        },
+        "specularIorLevel": {
+          "label": "IOR Level",
+          "type": "number",
+          "min": 0,
+          "max": 2,
+          "step": 0.01,
+          "default": 0.5,
+          "group": "Specular"
+        },
+        "specularTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "anisotropic": {
+          "label": "Anisotropic",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "anisotropicRotation": {
+          "label": "Anisotropic Rotation",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "transmission": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Transmission"
+        },
+        "coatWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Coat"
+        },
+        "coatRoughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.03,
+          "group": "Coat"
+        },
+        "coatIor": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.5,
+          "group": "Coat"
+        },
+        "coatTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Coat"
+        },
+        "sheenWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Sheen"
+        },
+        "sheenRoughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.5,
+          "group": "Sheen"
+        },
+        "sheenTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Sheen"
+        },
+        "emissionStrength": {
+          "label": "Strength",
+          "type": "number",
+          "min": 0,
+          "max": 30,
+          "step": 0.1,
+          "default": 0.0,
+          "group": "Emission"
+        },
+        "thinFilmThickness": {
+          "label": "Thickness",
+          "type": "number",
+          "min": 0,
+          "max": 1500,
+          "step": 5,
+          "default": 0.0,
+          "group": "Thin Film",
+          "unit": "nm"
+        },
+        "thinFilmIor": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.33,
+          "group": "Thin Film"
+        }
+      }
+    },
+    "brushed_metal": {
+      "label": "Anodized Metal",
+      "category": "Metal",
+      "description": "Brushed anodized aluminium in the art colour.",
+      "engines": {
+        "cycles": "full",
+        "eevee": "good"
+      },
+      "params": {
+        "paintMode": {
+          "label": "Use Art Colour As",
+          "type": "enum",
+          "options": [
+            "base",
+            "emission",
+            "base+emission"
+          ],
+          "default": "base",
+          "group": "Paint",
+          "help": "Where the layer's SVG colours (texture) go: Base Color, Emission Color, or both."
+        },
+        "tint": {
+          "label": "Art Colour Amount",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Paint",
+          "help": "Mix(white -> art colour) into Base Color. Glass: low = clear, high = coloured glass."
+        },
+        "grain": {
+          "label": "Surface Grain",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.15,
+          "group": "Paint",
+          "help": "Noise -> Bump -> Normal (sandblasted / brushed micro-surface)."
+        },
+        "grainScale": {
+          "label": "Grain Scale",
+          "type": "number",
+          "min": 10,
+          "max": 2000,
+          "step": 10,
+          "default": 300,
+          "group": "Paint"
+        },
+        "filmVariation": {
+          "label": "Film Variation",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Paint",
+          "help": "Noise-driven Thin Film thickness variation (oil-slick bands)."
+        },
+        "metallic": {
+          "label": "Metallic",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Base"
+        },
+        "roughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.3,
+          "group": "Base",
+          "help": "Frost / blur for glass."
+        },
+        "ior": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.5,
+          "group": "Base",
+          "help": "Index of refraction - lensing strength."
+        },
+        "alpha": {
+          "label": "Alpha",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Base"
+        },
+        "diffuseRoughness": {
+          "label": "Diffuse Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Base"
+        },
+        "subsurfaceWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Subsurface"
+        },
+        "subsurfaceScale": {
+          "label": "Scale",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.05,
+          "group": "Subsurface",
+          "unit": "m"
+        },
+        "subsurfaceAnisotropy": {
+          "label": "Anisotropy",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Subsurface"
+        },
+        "specularIorLevel": {
+          "label": "IOR Level",
+          "type": "number",
+          "min": 0,
+          "max": 2,
+          "step": 0.01,
+          "default": 0.5,
+          "group": "Specular"
+        },
+        "specularTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "anisotropic": {
+          "label": "Anisotropic",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.8,
+          "group": "Specular"
+        },
+        "anisotropicRotation": {
+          "label": "Anisotropic Rotation",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "transmission": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Transmission"
+        },
+        "coatWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Coat"
+        },
+        "coatRoughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.03,
+          "group": "Coat"
+        },
+        "coatIor": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.5,
+          "group": "Coat"
+        },
+        "coatTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Coat"
+        },
+        "sheenWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Sheen"
+        },
+        "sheenRoughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.5,
+          "group": "Sheen"
+        },
+        "sheenTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Sheen"
+        },
+        "emissionStrength": {
+          "label": "Strength",
+          "type": "number",
+          "min": 0,
+          "max": 30,
+          "step": 0.1,
+          "default": 0.0,
+          "group": "Emission"
+        },
+        "thinFilmThickness": {
+          "label": "Thickness",
+          "type": "number",
+          "min": 0,
+          "max": 1500,
+          "step": 5,
+          "default": 0.0,
+          "group": "Thin Film",
+          "unit": "nm"
+        },
+        "thinFilmIor": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.33,
+          "group": "Thin Film"
+        }
+      }
+    },
+    "iridescent": {
+      "label": "Iridescent",
+      "category": "Metal",
+      "description": "Oil-slick thin-film metal.",
+      "engines": {
+        "cycles": "full",
+        "eevee": "good"
+      },
+      "params": {
+        "paintMode": {
+          "label": "Use Art Colour As",
+          "type": "enum",
+          "options": [
+            "base",
+            "emission",
+            "base+emission"
+          ],
+          "default": "base",
+          "group": "Paint",
+          "help": "Where the layer's SVG colours (texture) go: Base Color, Emission Color, or both."
+        },
+        "tint": {
+          "label": "Art Colour Amount",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.2,
+          "group": "Paint",
+          "help": "Mix(white -> art colour) into Base Color. Glass: low = clear, high = coloured glass."
+        },
+        "grain": {
+          "label": "Surface Grain",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Paint",
+          "help": "Noise -> Bump -> Normal (sandblasted / brushed micro-surface)."
+        },
+        "grainScale": {
+          "label": "Grain Scale",
+          "type": "number",
+          "min": 10,
+          "max": 2000,
+          "step": 10,
+          "default": 400,
+          "group": "Paint"
+        },
+        "filmVariation": {
+          "label": "Film Variation",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.6,
+          "group": "Paint",
+          "help": "Noise-driven Thin Film thickness variation (oil-slick bands)."
+        },
+        "metallic": {
+          "label": "Metallic",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Base"
+        },
+        "roughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.15,
+          "group": "Base",
+          "help": "Frost / blur for glass."
+        },
+        "ior": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.5,
+          "group": "Base",
+          "help": "Index of refraction - lensing strength."
+        },
+        "alpha": {
+          "label": "Alpha",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Base"
+        },
+        "diffuseRoughness": {
+          "label": "Diffuse Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Base"
+        },
+        "subsurfaceWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Subsurface"
+        },
+        "subsurfaceScale": {
+          "label": "Scale",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.05,
+          "group": "Subsurface",
+          "unit": "m"
+        },
+        "subsurfaceAnisotropy": {
+          "label": "Anisotropy",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Subsurface"
+        },
+        "specularIorLevel": {
+          "label": "IOR Level",
+          "type": "number",
+          "min": 0,
+          "max": 2,
+          "step": 0.01,
+          "default": 0.5,
+          "group": "Specular"
+        },
+        "specularTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "anisotropic": {
+          "label": "Anisotropic",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "anisotropicRotation": {
+          "label": "Anisotropic Rotation",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "transmission": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Transmission"
+        },
+        "coatWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Coat"
+        },
+        "coatRoughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.03,
+          "group": "Coat"
+        },
+        "coatIor": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.5,
+          "group": "Coat"
+        },
+        "coatTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Coat"
+        },
+        "sheenWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Sheen"
+        },
+        "sheenRoughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.5,
+          "group": "Sheen"
+        },
+        "sheenTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Sheen"
+        },
+        "emissionStrength": {
+          "label": "Strength",
+          "type": "number",
+          "min": 0,
+          "max": 30,
+          "step": 0.1,
+          "default": 0.0,
+          "group": "Emission"
+        },
+        "thinFilmThickness": {
+          "label": "Thickness",
+          "type": "number",
+          "min": 0,
+          "max": 1500,
+          "step": 5,
+          "default": 500.0,
+          "group": "Thin Film",
+          "unit": "nm"
+        },
+        "thinFilmIor": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.6,
+          "group": "Thin Film"
         }
       }
     },
     "neon": {
       "label": "Neon",
       "category": "Light",
-      "description": "Emissive neon tube with compositor bloom.",
-      "paint": "emission",
+      "description": "Emissive neon (Emission Color = art colour; bloom is a render setting).",
       "engines": {
         "cycles": "full",
-        "eevee": "full"
+        "eevee": "good"
       },
       "params": {
-        "strength": {
-          "label": "Brightness",
+        "paintMode": {
+          "label": "Use Art Colour As",
+          "type": "enum",
+          "options": [
+            "base",
+            "emission",
+            "base+emission"
+          ],
+          "default": "emission",
+          "group": "Paint",
+          "help": "Where the layer's SVG colours (texture) go: Base Color, Emission Color, or both."
+        },
+        "tint": {
+          "label": "Art Colour Amount",
           "type": "number",
           "min": 0,
-          "max": 12,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Paint",
+          "help": "Mix(white -> art colour) into Base Color. Glass: low = clear, high = coloured glass."
+        },
+        "grain": {
+          "label": "Surface Grain",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Paint",
+          "help": "Noise -> Bump -> Normal (sandblasted / brushed micro-surface)."
+        },
+        "grainScale": {
+          "label": "Grain Scale",
+          "type": "number",
+          "min": 10,
+          "max": 2000,
+          "step": 10,
+          "default": 400,
+          "group": "Paint"
+        },
+        "filmVariation": {
+          "label": "Film Variation",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Paint",
+          "help": "Noise-driven Thin Film thickness variation (oil-slick bands)."
+        },
+        "metallic": {
+          "label": "Metallic",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Base"
+        },
+        "roughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.2,
+          "group": "Base",
+          "help": "Frost / blur for glass."
+        },
+        "ior": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.5,
+          "group": "Base",
+          "help": "Index of refraction - lensing strength."
+        },
+        "alpha": {
+          "label": "Alpha",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Base"
+        },
+        "diffuseRoughness": {
+          "label": "Diffuse Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Base"
+        },
+        "subsurfaceWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Subsurface"
+        },
+        "subsurfaceScale": {
+          "label": "Scale",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.05,
+          "group": "Subsurface",
+          "unit": "m"
+        },
+        "subsurfaceAnisotropy": {
+          "label": "Anisotropy",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Subsurface"
+        },
+        "specularIorLevel": {
+          "label": "IOR Level",
+          "type": "number",
+          "min": 0,
+          "max": 2,
+          "step": 0.01,
+          "default": 0.5,
+          "group": "Specular"
+        },
+        "specularTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "anisotropic": {
+          "label": "Anisotropic",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "anisotropicRotation": {
+          "label": "Anisotropic Rotation",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "transmission": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Transmission"
+        },
+        "coatWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Coat"
+        },
+        "coatRoughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.03,
+          "group": "Coat"
+        },
+        "coatIor": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.5,
+          "group": "Coat"
+        },
+        "coatTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Coat"
+        },
+        "sheenWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Sheen"
+        },
+        "sheenRoughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.5,
+          "group": "Sheen"
+        },
+        "sheenTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Sheen"
+        },
+        "emissionStrength": {
+          "label": "Strength",
+          "type": "number",
+          "min": 0,
+          "max": 30,
           "step": 0.1,
-          "default": 4
+          "default": 4.0,
+          "group": "Emission"
         },
-        "bloom": {
-          "label": "Bloom",
+        "thinFilmThickness": {
+          "label": "Thickness",
           "type": "number",
           "min": 0,
-          "max": 1,
-          "step": 0.01,
-          "default": 0.6
+          "max": 1500,
+          "step": 5,
+          "default": 0.0,
+          "group": "Thin Film",
+          "unit": "nm"
         },
-        "core": {
-          "label": "Hot Core",
+        "thinFilmIor": {
+          "label": "IOR",
           "type": "number",
-          "min": 0,
-          "max": 1,
+          "min": 1.0,
+          "max": 3.0,
           "step": 0.01,
-          "default": 0.25
+          "default": 1.33,
+          "group": "Thin Film"
         }
       }
     },
     "flat": {
       "label": "Flat (2D)",
       "category": "Light",
-      "description": "Unlit, colour-exact flat art — the original SVG look, in 3D space.",
-      "paint": "emission",
+      "description": "Unlit, colour-exact art via Emission.",
       "engines": {
         "cycles": "full",
-        "eevee": "full"
+        "eevee": "good"
       },
-      "params": {}
+      "params": {
+        "paintMode": {
+          "label": "Use Art Colour As",
+          "type": "enum",
+          "options": [
+            "base",
+            "emission",
+            "base+emission"
+          ],
+          "default": "emission",
+          "group": "Paint",
+          "help": "Where the layer's SVG colours (texture) go: Base Color, Emission Color, or both."
+        },
+        "tint": {
+          "label": "Art Colour Amount",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Paint",
+          "help": "Mix(white -> art colour) into Base Color. Glass: low = clear, high = coloured glass."
+        },
+        "grain": {
+          "label": "Surface Grain",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Paint",
+          "help": "Noise -> Bump -> Normal (sandblasted / brushed micro-surface)."
+        },
+        "grainScale": {
+          "label": "Grain Scale",
+          "type": "number",
+          "min": 10,
+          "max": 2000,
+          "step": 10,
+          "default": 400,
+          "group": "Paint"
+        },
+        "filmVariation": {
+          "label": "Film Variation",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Paint",
+          "help": "Noise-driven Thin Film thickness variation (oil-slick bands)."
+        },
+        "metallic": {
+          "label": "Metallic",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Base"
+        },
+        "roughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 1.0,
+          "group": "Base",
+          "help": "Frost / blur for glass."
+        },
+        "ior": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.5,
+          "group": "Base",
+          "help": "Index of refraction - lensing strength."
+        },
+        "alpha": {
+          "label": "Alpha",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 1.0,
+          "group": "Base"
+        },
+        "diffuseRoughness": {
+          "label": "Diffuse Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Base"
+        },
+        "subsurfaceWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Subsurface"
+        },
+        "subsurfaceScale": {
+          "label": "Scale",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.05,
+          "group": "Subsurface",
+          "unit": "m"
+        },
+        "subsurfaceAnisotropy": {
+          "label": "Anisotropy",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Subsurface"
+        },
+        "specularIorLevel": {
+          "label": "IOR Level",
+          "type": "number",
+          "min": 0,
+          "max": 2,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "specularTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "anisotropic": {
+          "label": "Anisotropic",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "anisotropicRotation": {
+          "label": "Anisotropic Rotation",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Specular"
+        },
+        "transmission": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Transmission"
+        },
+        "coatWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Coat"
+        },
+        "coatRoughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.005,
+          "default": 0.03,
+          "group": "Coat"
+        },
+        "coatIor": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.5,
+          "group": "Coat"
+        },
+        "coatTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Coat"
+        },
+        "sheenWeight": {
+          "label": "Weight",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Sheen"
+        },
+        "sheenRoughness": {
+          "label": "Roughness",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.5,
+          "group": "Sheen"
+        },
+        "sheenTint": {
+          "label": "Tint (art colour)",
+          "type": "number",
+          "min": 0,
+          "max": 1,
+          "step": 0.01,
+          "default": 0.0,
+          "group": "Sheen"
+        },
+        "emissionStrength": {
+          "label": "Strength",
+          "type": "number",
+          "min": 0,
+          "max": 30,
+          "step": 0.1,
+          "default": 1.0,
+          "group": "Emission"
+        },
+        "thinFilmThickness": {
+          "label": "Thickness",
+          "type": "number",
+          "min": 0,
+          "max": 1500,
+          "step": 5,
+          "default": 0.0,
+          "group": "Thin Film",
+          "unit": "nm"
+        },
+        "thinFilmIor": {
+          "label": "IOR",
+          "type": "number",
+          "min": 1.0,
+          "max": 3.0,
+          "step": 0.01,
+          "default": 1.33,
+          "group": "Thin Film"
+        }
+      }
     }
   },
   "lighting": {
@@ -944,13 +4621,13 @@
             "params": {}
           },
           "depth": {
-            "thickness": 0.1,
-            "bevel": 0.045,
-            "bevelSegments": 6,
+            "thickness": 0.14,
+            "bevel": 0.07,
+            "bevelSegments": 8,
             "inflate": 0.0
           },
           "shadow": {
-            "kind": "neutral",
+            "kind": "physical",
             "opacity": 0.5
           }
         },
@@ -987,13 +4664,13 @@
             }
           },
           "depth": {
-            "thickness": 0.12,
-            "bevel": 0.055,
+            "thickness": 0.14,
+            "bevel": 0.07,
             "bevelSegments": 8,
             "inflate": 0.0
           },
           "shadow": {
-            "kind": "chromatic",
+            "kind": "physical",
             "opacity": 0.6
           }
         },
@@ -1030,13 +4707,13 @@
             }
           },
           "depth": {
-            "thickness": 0.1,
-            "bevel": 0.04,
-            "bevelSegments": 6,
+            "thickness": 0.14,
+            "bevel": 0.07,
+            "bevelSegments": 8,
             "inflate": 0.0
           },
           "shadow": {
-            "kind": "neutral",
+            "kind": "physical",
             "opacity": 0.45
           }
         },
@@ -1073,13 +4750,13 @@
             }
           },
           "depth": {
-            "thickness": 0.12,
-            "bevel": 0.055,
+            "thickness": 0.14,
+            "bevel": 0.07,
             "bevelSegments": 8,
             "inflate": 0.0
           },
           "shadow": {
-            "kind": "chromatic",
+            "kind": "physical",
             "opacity": 0.55
           }
         },
@@ -1120,7 +4797,7 @@
             "inflate": 0.2
           },
           "shadow": {
-            "kind": "chromatic",
+            "kind": "physical",
             "opacity": 0.5
           }
         },
@@ -1161,7 +4838,7 @@
             "inflate": 0.3
           },
           "shadow": {
-            "kind": "neutral",
+            "kind": "physical",
             "opacity": 0.55
           }
         },
@@ -1204,7 +4881,7 @@
             "inflate": 0.25
           },
           "shadow": {
-            "kind": "neutral",
+            "kind": "physical",
             "opacity": 0.55
           }
         },
@@ -1245,7 +4922,7 @@
             "inflate": 0.0
           },
           "shadow": {
-            "kind": "none",
+            "kind": "physical",
             "opacity": 0.0
           }
         },
@@ -1293,7 +4970,7 @@
             "inflate": 0.3
           },
           "shadow": {
-            "kind": "neutral",
+            "kind": "physical",
             "opacity": 0.5
           }
         },
@@ -1326,8 +5003,7 @@
           "material": {
             "preset": "satin",
             "params": {
-              "roughness": 0.5,
-              "coat": 0.15
+              "roughness": 0.5
             }
           },
           "depth": {
@@ -1337,7 +5013,7 @@
             "inflate": 0.0
           },
           "shadow": {
-            "kind": "neutral",
+            "kind": "physical",
             "opacity": 0.35
           }
         },
@@ -1362,5 +5038,19 @@
         "zGap": 0.06
       }
     }
+  },
+  "principledSchema": {
+    "$comment": "Every material = ONE Principled BSDF; params map 1:1 to its inputs (+ Paint pre-processing). Presets are just starting values.",
+    "groups": [
+      "Paint",
+      "Base",
+      "Subsurface",
+      "Specular",
+      "Transmission",
+      "Coat",
+      "Sheen",
+      "Emission",
+      "Thin Film"
+    ]
   }
 }
