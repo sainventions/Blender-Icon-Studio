@@ -1,0 +1,2352 @@
+// Height-field bodies (PLAN §11 Geometry) — the three.js twin of blender_worker/heightfield.py, used for EVERY piece,
+// silhouette, raster contour, card and the plate.
+//
+// A body is a watertight, smooth solid over a 2D outline whose height only depends on the inward distance d to that
+// outline, so thin parts simply taper and tips / corners can never fold over or self-intersect. The profile, the
+// sampling (graded offset rings along inward bisectors + medial points + the island apex), the chord passes, the
+// normals (softmin over FOOT POINTS, safe blend toward +Z, singular rim splits, creased flat-slab walls) and the
+// assembly follow heightfield.py step by step (see its module docstring, mirrored constants below). The only
+// difference is the triangulator: poly2tri (one constrained Delaunay triangulation per island: outer ring + its holes
+// + Steiner points) instead of mathutils.geometry.delaunay_2d_cdt.
+//
+// Units: everything is in the piece's LOCAL units (art units of its splines); tolerances are WORLD units divided by
+// `scale` (art scale × layer scale), exactly like the worker. The body is centred on its mid-plane z = 0.
+import './globalShim.ts'
+import * as poly2triNs from 'poly2tri'
+import type { Spline } from '../../types'
+
+// CJS interop: named exports (Node, Vite pre-bundle) or only a default export (some bundlers)
+const poly2tri: typeof poly2triNs =
+  (poly2triNs as { SweepContext?: unknown }).SweepContext ? poly2triNs : (poly2triNs as unknown as { default: typeof poly2triNs }).default
+
+// ------------------------------------------------------------------------------------------------ tunables (WORLD units)
+export const CHORD_TOL = 0.0006
+export const MAX_EDGE = 0.04
+export const MERGE_EPS = 1e-5
+export const MERGE_Q = 2e-6
+export const MIN_AREA = 1e-8
+export const CORNER_DEG = 30.0
+export const GUARD_MIN = 0.002
+export const GUARD_MAX = 0.008
+export const FAN_DEG = 15.0
+export const RING_TOL = 0.04
+export const KAPPA = 0.0015
+export const KAPPA_REL = 0.3
+export const SOFT_REACH = 4.0
+export const NEAR = 0.01
+export const TAN_K = 0.006
+export const TAN_MIN = 0.004
+export const TAN_MAX = 0.04
+export const NORMAL_MIN_DOT = 0.05
+export const APEX_CLEAR = 0.3
+export const MIN_THICKNESS = 1e-4
+export const CHORD_PASSES = 4
+
+type Ring = Float64Array // flat x,y pairs, no repeated closing point
+
+// ================================================================================================ profile
+/** e = max(t/2 − b, 0): half height of the vertical side wall. */
+export function wallHalf(thickness: number, bevel: number): number {
+  return Math.max(thickness / 2 - bevel, 0)
+}
+
+/** Top height z(d) = e + hb(d) + inflate·D·sqrt(1 − (1 − min(d/D, 1))²) (mirrored for the bottom). */
+export function profile(d: number, thickness: number, bevel: number, inflate: number, D: number): number {
+  const dd = Math.max(d, 0)
+  const b = Math.max(0, bevel)
+  let z = wallHalf(thickness, b)
+  if (b > 0) {
+    const db = Math.min(dd, b)
+    z += Math.sqrt(Math.max(b * b - (b - db) ** 2, 0))
+  }
+  const k = Math.max(0, inflate)
+  if (k > 0) {
+    const Dv = Math.max(D, 1e-12)
+    const u = Math.min(dd / Dv, 1)
+    z += k * Dv * Math.sqrt(Math.max(1 - (1 - u) ** 2, 0))
+  }
+  return z
+}
+
+/** dz/dd of profile (Infinity at d = 0 when bevel > 0 or inflate > 0). */
+export function slope(d: number, bevel: number, inflate: number, D: number): number {
+  const dd = Math.max(d, 0)
+  const b = Math.max(0, bevel)
+  let s = 0
+  if (b > 0 && dd < b) {
+    const hb = Math.sqrt(Math.max(b * b - (b - Math.min(dd, b)) ** 2, 0))
+    s += hb > 0 ? (b - dd) / hb : Infinity
+  }
+  const k = Math.max(0, inflate)
+  if (k > 0) {
+    const Dv = Math.max(D, 1e-12)
+    const u = Math.min(dd / Dv, 1)
+    if (u < 1) {
+      const r = Math.sqrt(Math.max(1 - (1 - u) ** 2, 0))
+      s += r > 0 ? (k * (1 - u)) / r : Infinity
+    }
+  }
+  return s
+}
+
+/** Max top height of an island with inradius D (= its half height). */
+export function halfHeight(thickness: number, bevel: number, inflate: number, D: number): number {
+  return profile(Math.max(D, 0), thickness, bevel, inflate, Math.max(D, 1e-12))
+}
+
+/** Inward distances of the graded offset rings of one island (sorted, 0 < d < D). */
+export function ringDistances(bevel: number, inflate: number, D: number, segments: number): number[] {
+  const out: number[] = []
+  const b = Math.max(0, bevel)
+  if (b > 0) {
+    const K = Math.max(2, Math.min(16, Math.trunc(segments)))
+    for (let j = 1; j <= K; j++) out.push(b * (1 - Math.cos((j * Math.PI) / (2 * K))))
+  }
+  if (inflate > 0 && D > 0) {
+    const J = Math.max(3, Math.min(12, Math.trunc(segments)))
+    for (let j = 1; j < J; j++) out.push(D * (1 - Math.cos((j * Math.PI) / (2 * J))))
+  }
+  let ds = out.filter((x) => x > 0 && x < D * 0.999).sort((a, c) => a - c)
+  if (ds.length < 2) return ds
+  const keep = [ds[0]]
+  for (const x of ds.slice(1)) if (x - keep[keep.length - 1] > 1e-12) keep.push(x)
+  ds = keep
+  // merge rings much closer than their neighbours' gaps (bevel and dome rings interleave)
+  while (ds.length > 2) {
+    const gaps = ds.map((x, i) => x - (i ? ds[i - 1] : 0))
+    let bad = -1
+    for (let i = 1; i < gaps.length; i++) {
+      const nb = Math.min(i + 1 < gaps.length ? gaps[i + 1] : Infinity, gaps[i - 1])
+      if (gaps[i] < 0.25 * nb) {
+        bad = i
+        break
+      }
+    }
+    if (bad < 0) break
+    ds = ds.filter((_, i) => i !== bad)
+  }
+  return ds
+}
+
+// ================================================================================================ outline
+/** Adaptive polyline of one bezier spline (closed ring, no repeated end point). maxEdge 0: chord tolerance only. */
+export function flattenSpline(s: Spline, tol: number, maxEdge: number): number[] {
+  const P = s.points ?? []
+  const m = P.length
+  const out: number[] = []
+  if (m < 2) {
+    for (const p of P) out.push(p.co[0], p.co[1])
+    return out
+  }
+  const closed = s.closed ?? true
+  const nseg = closed ? m : m - 1
+  for (let i = 0; i < nseg; i++) {
+    const a = P[i]
+    const b = P[(i + 1) % m]
+    const p0 = a.co
+    const c1 = a.hr ?? a.co
+    const c2 = b.hl ?? b.co
+    const p1 = b.co
+    const L = Math.max(
+      Math.hypot(p0[0] - 2 * c1[0] + c2[0], p0[1] - 2 * c1[1] + c2[1]),
+      Math.hypot(c1[0] - 2 * c2[0] + p1[0], c1[1] - 2 * c2[1] + p1[1]),
+    )
+    const nCurv = Math.ceil(Math.sqrt((0.75 * L) / Math.max(tol, 1e-12)))
+    const plen =
+      Math.hypot(c1[0] - p0[0], c1[1] - p0[1]) + Math.hypot(c2[0] - c1[0], c2[1] - c1[1]) + Math.hypot(p1[0] - c2[0], p1[1] - c2[1])
+    const nLen = maxEdge ? Math.ceil(plen / Math.max(maxEdge, 1e-12)) : 1
+    const n = Math.max(1, Math.min(256, Math.max(nCurv, nLen)))
+    for (let k = 0; k < n; k++) {
+      const t = k / n
+      const u = 1 - t
+      const w0 = u * u * u
+      const w1 = 3 * u * u * t
+      const w2 = 3 * u * t * t
+      const w3 = t * t * t
+      out.push(w0 * p0[0] + w1 * c1[0] + w2 * c2[0] + w3 * p1[0], w0 * p0[1] + w1 * c1[1] + w2 * c2[1] + w3 * p1[1])
+    }
+  }
+  if (!closed) out.push(P[m - 1].co[0], P[m - 1].co[1])
+  return out
+}
+
+export function ringArea(r: ArrayLike<number>): number {
+  const n = r.length >> 1
+  let a = 0
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n
+    a += r[2 * i] * r[2 * j + 1] - r[2 * j] * r[2 * i + 1]
+  }
+  return a / 2
+}
+
+type P2 = [number, number]
+
+function isSpike(a: P2, v: P2, c: P2, wEps: number): boolean {
+  const ux = v[0] - a[0]
+  const uy = v[1] - a[1]
+  const wx = c[0] - v[0]
+  const wy = c[1] - v[1]
+  const lu = Math.hypot(ux, uy)
+  const lw = Math.hypot(wx, wy)
+  if (lu < 1e-300 || lw < 1e-300) return true
+  if ((ux * wx + uy * wy) / (lu * lw) > -0.9) return false
+  const cr = Math.abs(ux * wy - uy * wx)
+  return cr / lu < wEps || cr / lw < wEps
+}
+
+/**
+ * Merge near-duplicate consecutive points (incl. the wrap) and remove zero-width spikes and slits narrower than
+ * wEps = 20·eps (boolean-union seams), peeled from the tip inward.
+ */
+export function cleanRing(src: number[], eps: number, wEps = 20 * eps): number[] {
+  const n0 = src.length >> 1
+  if (n0 < 3) return src
+  let r: number[] = []
+  for (let i = 0; i < n0; i++) {
+    const j = (i - 1 + n0) % n0
+    if (Math.hypot(src[2 * i] - src[2 * j], src[2 * i + 1] - src[2 * j + 1]) > eps) r.push(src[2 * i], src[2 * i + 1])
+  }
+  if (!r.length) return src.slice(0, 2)
+  const n = r.length >> 1
+  if (n < 3) return r
+  let fold = false
+  for (let i = 0; i < n && !fold; i++) {
+    const p = (i - 1 + n) % n
+    const q = (i + 1) % n
+    const ax = r[2 * i] - r[2 * p]
+    const ay = r[2 * i + 1] - r[2 * p + 1]
+    const bx = r[2 * q] - r[2 * i]
+    const by = r[2 * q + 1] - r[2 * i + 1]
+    const c = (ax * bx + ay * by) / Math.max(Math.hypot(ax, ay) * Math.hypot(bx, by), 1e-300)
+    if (c < -0.9) fold = true
+  }
+  if (!fold) return r
+  let pts: P2[] = []
+  for (let i = 0; i < n; i++) pts.push([r[2 * i], r[2 * i + 1]])
+  const close = (a: P2, b: P2) => Math.hypot(a[0] - b[0], a[1] - b[1]) <= eps
+  for (let pass = 0; pass < 2; pass++) {
+    const out: P2[] = []
+    for (const p of pts) {
+      if (out.length && close(p, out[out.length - 1])) continue
+      out.push(p)
+      while (out.length >= 3 && isSpike(out[out.length - 3], out[out.length - 2], out[out.length - 1], wEps)) {
+        out.splice(out.length - 2, 1)
+        if (out.length >= 2 && close(out[out.length - 1], out[out.length - 2])) out.pop()
+      }
+    }
+    if (out.length < 3) {
+      r = []
+      for (const p of out) r.push(p[0], p[1])
+      return r
+    }
+    const h = out.length >> 1
+    pts = [...out.slice(h), ...out.slice(0, h)]
+  }
+  while (pts.length >= 3 && isSpike(pts[pts.length - 2], pts[pts.length - 1], pts[0], wEps)) pts.pop()
+  r = []
+  for (const p of pts) r.push(p[0], p[1])
+  return r
+}
+
+/** Guard points at `dist` from every corner sharper than minTurnDeg on both adjacent edges (edges > 3·dist). */
+export function guardRing(r: number[], dist: number, minTurnDeg = CORNER_DEG): number[] {
+  const n = r.length >> 1
+  if (n < 3 || dist <= 0) return r
+  const cosLim = Math.cos((minTurnDeg * Math.PI) / 180)
+  const sharp = new Uint8Array(n)
+  const lb = new Float64Array(n)
+  let any = false
+  for (let i = 0; i < n; i++) {
+    const p = (i - 1 + n) % n
+    const q = (i + 1) % n
+    const ax = r[2 * i] - r[2 * p]
+    const ay = r[2 * i + 1] - r[2 * p + 1]
+    const bx = r[2 * q] - r[2 * i]
+    const by = r[2 * q + 1] - r[2 * i + 1]
+    lb[i] = Math.hypot(bx, by)
+    const c = (ax * bx + ay * by) / Math.max(Math.hypot(ax, ay) * lb[i], 1e-300)
+    if (c < cosLim) {
+      sharp[i] = 1
+      any = true
+    }
+  }
+  if (!any) return r
+  const out: number[] = []
+  for (let i = 0; i < n; i++) {
+    const q = (i + 1) % n
+    const px = r[2 * i]
+    const py = r[2 * i + 1]
+    out.push(px, py)
+    const L = lb[i]
+    if (L <= 3 * dist) continue
+    const ux = (r[2 * q] - px) / L
+    const uy = (r[2 * q + 1] - py) / L
+    if (sharp[i]) out.push(px + ux * dist, py + uy * dist)
+    if (sharp[q]) out.push(r[2 * q] - ux * dist, r[2 * q + 1] - uy * dist)
+  }
+  return out
+}
+
+/** The SHAPE ring of a sample ring: the same polyline without its (nearly) collinear points. */
+export function simplifyRing(r: number[], tol: number): number[] {
+  let out = r
+  for (let it = 0; it < 16; it++) {
+    const n = out.length >> 1
+    if (n <= 4) return out
+    const rem = new Uint8Array(n)
+    let anyRem = false
+    for (let i = 0; i < n; i++) {
+      const a = (i - 1 + n) % n
+      const c = (i + 1) % n
+      const acx = out[2 * c] - out[2 * a]
+      const acy = out[2 * c + 1] - out[2 * a + 1]
+      const lac = Math.max(Math.hypot(acx, acy), 1e-300)
+      const ox = out[2 * i] - out[2 * a]
+      const oy = out[2 * i + 1] - out[2 * a + 1]
+      const dev = Math.abs(ox * acy - oy * acx) / lac
+      const t = (ox * acx + oy * acy) / (lac * lac)
+      if (dev < tol && t > 0 && t < 1) {
+        rem[i] = 1
+        anyRem = true
+      }
+    }
+    if (!anyRem) return out
+    let left = false
+    for (let i = 0; i < n; i++) {
+      if (rem[i] && i % 2 !== it % 2) rem[i] = 0
+      if (n % 2 === 1 && i === n - 1) rem[i] = 0
+      if (rem[i]) left = true
+    }
+    if (!left) continue
+    const next: number[] = []
+    for (let i = 0; i < n; i++) if (!rem[i]) next.push(out[2 * i], out[2 * i + 1])
+    out = next
+  }
+  return out
+}
+
+function pointInRing(x: number, y: number, r: ArrayLike<number>): boolean {
+  const n = r.length >> 1
+  let inside = false
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n
+    const x0 = r[2 * i]
+    const y0 = r[2 * i + 1]
+    const x1 = r[2 * j]
+    const y1 = r[2 * j + 1]
+    if (y0 > y !== y1 > y) {
+      const dy = Math.abs(y1 - y0) < 1e-300 ? 1e-300 : y1 - y0
+      if (x < x0 + ((y - y0) * (x1 - x0)) / dy) inside = !inside
+    }
+  }
+  return inside
+}
+
+function reversed(r: number[]): number[] {
+  const n = r.length >> 1
+  const out = new Array<number>(r.length)
+  for (let i = 0; i < n; i++) {
+    out[2 * i] = r[2 * (n - 1 - i)]
+    out[2 * i + 1] = r[2 * (n - 1 - i) + 1]
+  }
+  return out
+}
+
+function ringBox(r: ArrayLike<number>): [number, number, number, number] {
+  let x0 = Infinity
+  let y0 = Infinity
+  let x1 = -Infinity
+  let y1 = -Infinity
+  for (let i = 0; i < r.length; i += 2) {
+    if (r[i] < x0) x0 = r[i]
+    if (r[i] > x1) x1 = r[i]
+    if (r[i + 1] < y0) y0 = r[i + 1]
+    if (r[i + 1] > y1) y1 = r[i + 1]
+  }
+  return [x0, y0, x1, y1]
+}
+
+/** Even-odd nesting -> rings oriented outer CCW / hole CW, hole flags, island id (outer ring index) per ring. */
+export function organise(rings: number[][]): { rings: number[][]; hole: boolean[]; island: number[] } {
+  const R = rings.length
+  const bb = rings.map(ringBox)
+  const areas = rings.map(ringArea)
+  const depth = new Array<number>(R).fill(0)
+  const contains: boolean[][] = rings.map(() => new Array<boolean>(R).fill(false)) // contains[j][i]
+  for (let i = 0; i < R; i++) {
+    const ri = rings[i]
+    const n = ri.length >> 1
+    const probes = [0, Math.floor(n / 3), Math.floor((2 * n) / 3)]
+    for (let j = 0; j < R; j++) {
+      if (j === i || Math.abs(areas[j]) < Math.abs(areas[i])) continue
+      if (bb[j][0] > bb[i][0] || bb[j][1] > bb[i][1] || bb[j][2] < bb[i][2] || bb[j][3] < bb[i][3]) continue
+      let k = 0
+      for (const p of probes) if (pointInRing(ri[2 * p], ri[2 * p + 1], rings[j])) k++
+      if (k >= 2) {
+        contains[j][i] = true
+        depth[i]++
+      }
+    }
+  }
+  const hole = depth.map((d) => d % 2 === 1)
+  const island = rings.map((_, i) => i)
+  for (let i = 0; i < R; i++) {
+    if (!hole[i]) continue
+    let best = -1
+    for (let j = 0; j < R; j++)
+      if (contains[j][i] && depth[j] === depth[i] - 1 && (best < 0 || Math.abs(areas[j]) < Math.abs(areas[best]))) best = j
+    if (best >= 0) island[i] = best
+  }
+  const out = rings.map((r, i) => ((areas[i] > 0) !== hole[i] ? r : reversed(r)))
+  return { rings: out, hole, island }
+}
+
+export interface Outlines {
+  /** Sample rings (mesh outline), oriented outer CCW / hole CW. */
+  rings: Ring[]
+  /** SHAPE rings (same outline, no collinear subdivisions) for deep distance queries. */
+  shapes: Ring[]
+  hole: boolean[]
+  island: number[]
+}
+
+/** Splines -> oriented sample rings + shape rings, hole flags, island per ring (degenerate rings dropped). */
+export function outline(splines: Spline[], tol: number, maxEdge: number, eps: number, guard = 0): Outlines {
+  const rings: number[][] = []
+  const shapes: number[][] = []
+  for (const s of splines ?? []) {
+    if ((s.points ?? []).length < 2) continue
+    let r = cleanRing(flattenSpline(s, tol, maxEdge), eps)
+    if (r.length < 6 || Math.abs(ringArea(r)) < MIN_AREA) continue
+    const c = simplifyRing(r, 0.05 * tol)
+    if (guard > 0) r = guardRing(r, guard)
+    rings.push(r)
+    shapes.push(c)
+  }
+  if (!rings.length) return { rings: [], shapes: [], hole: [], island: [] }
+  const o = organise(rings)
+  const sh = shapes.map((c, i) => ((ringArea(c) > 0) === (ringArea(o.rings[i]) > 0) ? c : reversed(c)))
+  return {
+    rings: o.rings.map((r) => Float64Array.from(r)),
+    shapes: sh.map((r) => Float64Array.from(r)),
+    hole: o.hole,
+    island: o.island,
+  }
+}
+
+// ================================================================================================ distances
+/** Segment soup of rings with a uniform grid for exact nearest / softmin queries. */
+class SegmentSet {
+  readonly ax: Float64Array
+  readonly ay: Float64Array
+  readonly bx: Float64Array
+  readonly by: Float64Array
+  readonly ringOf: Int32Array
+  readonly prev: Int32Array
+  readonly next: Int32Array
+  private readonly x0: number
+  private readonly y0: number
+  private readonly cell: number
+  private readonly nx: number
+  private readonly ny: number
+  private readonly start: Int32Array
+  private readonly items: Int32Array
+  private readonly stamp: Int32Array
+  private tick = 0
+
+  constructor(rings: Ring[]) {
+    let M = 0
+    for (const r of rings) M += r.length >> 1
+    this.ax = new Float64Array(M)
+    this.ay = new Float64Array(M)
+    this.bx = new Float64Array(M)
+    this.by = new Float64Array(M)
+    this.ringOf = new Int32Array(M)
+    this.prev = new Int32Array(M)
+    this.next = new Int32Array(M)
+    this.stamp = new Int32Array(M)
+    let s = 0
+    let minX = Infinity
+    let minY = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
+    let total = 0
+    rings.forEach((r, k) => {
+      const n = r.length >> 1
+      for (let i = 0; i < n; i++) {
+        const j = (i + 1) % n
+        const g = s + i
+        this.ax[g] = r[2 * i]
+        this.ay[g] = r[2 * i + 1]
+        this.bx[g] = r[2 * j]
+        this.by[g] = r[2 * j + 1]
+        this.ringOf[g] = k
+        this.prev[g] = s + ((i - 1 + n) % n)
+        this.next[g] = s + j
+        total += Math.hypot(r[2 * j] - r[2 * i], r[2 * j + 1] - r[2 * i + 1])
+        if (r[2 * i] < minX) minX = r[2 * i]
+        if (r[2 * i] > maxX) maxX = r[2 * i]
+        if (r[2 * i + 1] < minY) minY = r[2 * i + 1]
+        if (r[2 * i + 1] > maxY) maxY = r[2 * i + 1]
+      }
+      s += n
+    })
+    const ext = Math.max(maxX - minX, maxY - minY, 1e-9)
+    // ~4 segments per occupied cell on average, at most 256 cells per side
+    const cell = Math.max(ext / 256, Math.min(ext / 8, M ? (4 * total) / M : ext))
+    this.cell = cell
+    this.x0 = minX - cell * 0.5
+    this.y0 = minY - cell * 0.5
+    this.nx = Math.max(1, Math.ceil((maxX - this.x0) / cell) + 1)
+    this.ny = Math.max(1, Math.ceil((maxY - this.y0) / cell) + 1)
+    const counts = new Int32Array(this.nx * this.ny + 1)
+    const span = (g: number): [number, number, number, number] => [
+      Math.max(0, Math.min(this.nx - 1, Math.floor((Math.min(this.ax[g], this.bx[g]) - this.x0) / cell))),
+      Math.max(0, Math.min(this.ny - 1, Math.floor((Math.min(this.ay[g], this.by[g]) - this.y0) / cell))),
+      Math.max(0, Math.min(this.nx - 1, Math.floor((Math.max(this.ax[g], this.bx[g]) - this.x0) / cell))),
+      Math.max(0, Math.min(this.ny - 1, Math.floor((Math.max(this.ay[g], this.by[g]) - this.y0) / cell))),
+    ]
+    for (let g = 0; g < M; g++) {
+      const [i0, j0, i1, j1] = span(g)
+      for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) counts[j * this.nx + i + 1]++
+    }
+    for (let c = 1; c < counts.length; c++) counts[c] += counts[c - 1]
+    this.start = counts
+    this.items = new Int32Array(counts[counts.length - 1])
+    const fill = counts.slice(0, -1)
+    for (let g = 0; g < M; g++) {
+      const [i0, j0, i1, j1] = span(g)
+      for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) this.items[fill[j * this.nx + i]++] = g
+    }
+  }
+
+  get size(): number {
+    return this.ax.length
+  }
+
+  /** Distance from (px, py) to segment g; writes the foot-to-point vector into out. */
+  segDist(g: number, px: number, py: number, out?: Float64Array): number {
+    const ax = this.ax[g]
+    const ay = this.ay[g]
+    const abx = this.bx[g] - ax
+    const aby = this.by[g] - ay
+    const L2 = abx * abx + aby * aby
+    const apx = px - ax
+    const apy = py - ay
+    let t = L2 > 1e-30 ? (apx * abx + apy * aby) / L2 : 0
+    t = t < 0 ? 0 : t > 1 ? 1 : t
+    const dx = apx - t * abx
+    const dy = apy - t * aby
+    if (out) {
+      out[0] = dx
+      out[1] = dy
+    }
+    return Math.sqrt(dx * dx + dy * dy)
+  }
+
+  /**
+   * Visit every segment whose distance to p may be ≤ limit(best) — cells are scanned in growing square rings until the
+   * ring's lower distance bound exceeds the (shrinking or fixed) limit. `visit` returns the current limit.
+   */
+  scan(px: number, py: number, visit: (g: number) => number): void {
+    if (!this.size) return
+    const cell = this.cell
+    const fi = (px - this.x0) / cell
+    const fj = (py - this.y0) / cell
+    const ci = Math.max(0, Math.min(this.nx - 1, Math.floor(fi)))
+    const cj = Math.max(0, Math.min(this.ny - 1, Math.floor(fj)))
+    // distance from p to its (clamped) start cell box: rings beyond r are at least (r − 1)·cell + base away
+    const bx = Math.max(this.x0 + ci * cell - px, 0, px - (this.x0 + (ci + 1) * cell))
+    const by = Math.max(this.y0 + cj * cell - py, 0, py - (this.y0 + (cj + 1) * cell))
+    const base = Math.hypot(bx, by)
+    this.tick++
+    if (this.tick > 2e9) {
+      this.stamp.fill(0)
+      this.tick = 1
+    }
+    const tick = this.tick
+    let limit = Infinity
+    const maxR = Math.max(this.nx, this.ny)
+    for (let r = 0; r <= maxR; r++) {
+      if (r > 0 && Math.max(base, (r - 1) * cell) > limit) break
+      const i0 = ci - r
+      const i1 = ci + r
+      const j0 = cj - r
+      const j1 = cj + r
+      for (let j = j0; j <= j1; j++) {
+        if (j < 0 || j >= this.ny) continue
+        const edge = j === j0 || j === j1
+        for (let i = i0; i <= i1; i += edge ? 1 : i1 - i0 || 1) {
+          if (i < 0 || i >= this.nx) continue
+          const c = j * this.nx + i
+          for (let s = this.start[c]; s < this.start[c + 1]; s++) {
+            const g = this.items[s]
+            if (this.stamp[g] === tick) continue
+            this.stamp[g] = tick
+            limit = visit(g)
+          }
+        }
+      }
+    }
+  }
+}
+
+const _v = new Float64Array(2)
+
+export interface NearestResult {
+  d: Float64Array
+  seg: Int32Array
+  /** Unit direction (or the softmin blend) from the outline toward each point. */
+  g: Float64Array
+}
+
+/**
+ * Distance of points P (flat x,y) to the segments -> (d, segment, g). With kappa > 0, g is the two-cluster softmin
+ * over FOOT POINTS (segments whose distance is a local minimum along their ring), weights exp(−(dist − d)/κ),
+ * κ = max(kappa, rel·d) — heightfield.nearest with `nbr`.
+ */
+function nearest(P: ArrayLike<number>, S: SegmentSet, kappa = 0, rel = 0): NearestResult {
+  const N = P.length >> 1
+  const d = new Float64Array(N)
+  const seg = new Int32Array(N)
+  const g = new Float64Array(N * 2)
+  if (!N || !S.size) return { d, seg, g }
+  const gathered: number[] = []
+  const gdist: number[] = []
+  const gvx: number[] = []
+  const gvy: number[] = []
+  const local = new Map<number, number>()
+  for (let q = 0; q < N; q++) {
+    const px = P[2 * q]
+    const py = P[2 * q + 1]
+    let best = Infinity
+    let bestG = 0
+    let bvx = 0
+    let bvy = 0
+    S.scan(px, py, (k) => {
+      const dist = S.segDist(k, px, py, _v)
+      if (dist < best) {
+        best = dist
+        bestG = k
+        bvx = _v[0]
+        bvy = _v[1]
+      }
+      return best
+    })
+    d[q] = best
+    seg[q] = bestG
+    const dm = Math.max(best, 1e-30)
+    if (!(kappa > 0)) {
+      g[2 * q] = bvx / dm
+      g[2 * q + 1] = bvy / dm
+      continue
+    }
+    const kap = Math.max(kappa, rel * best)
+    const reach = best + 2 * SOFT_REACH * kap
+    gathered.length = 0
+    gdist.length = 0
+    gvx.length = 0
+    gvy.length = 0
+    local.clear()
+    S.scan(px, py, (k) => {
+      const dist = S.segDist(k, px, py, _v)
+      if (dist <= reach) {
+        local.set(k, gathered.length)
+        gathered.push(k)
+        gdist.push(dist)
+        gvx.push(_v[0])
+        gvy.push(_v[1])
+      }
+      return reach
+    })
+    const ux0 = bvx / dm
+    const uy0 = bvy / dm
+    let Ws = 0
+    let Wo = 0
+    let sx = 0
+    let sy = 0
+    let ox = 0
+    let oy = 0
+    const tie = 1e-6
+    for (let m = 0; m < gathered.length; m++) {
+      const dist = gdist[m]
+      if (dist <= 1e-30) continue
+      const k = gathered[m]
+      const ip = local.get(S.prev[k])
+      const inx = local.get(S.next[k])
+      const dp = ip === undefined ? Infinity : gdist[ip]
+      const dn = inx === undefined ? Infinity : gdist[inx]
+      if (!(dist <= dp + tie && dist <= dn + tie)) continue
+      const w = Math.exp(-(dist - best) / kap)
+      const ux = gvx[m] / dist
+      const uy = gvy[m] / dist
+      if (ux * ux0 + uy * uy0 > 0.5) {
+        Ws += w
+        sx += w * ux
+        sy += w * uy
+      } else {
+        Wo += w
+        ox += w * ux
+        oy += w * uy
+      }
+    }
+    const sn = Math.max(Math.hypot(sx, sy), 1e-30)
+    const on = Math.max(Math.hypot(ox, oy), 1e-30)
+    const tot = Math.max(Ws + Wo, 1e-30)
+    g[2 * q] = (Ws * (sx / sn) + Wo * (ox / on)) / tot
+    g[2 * q + 1] = (Ws * (sy / sn) + Wo * (oy / on)) / tot
+  }
+  return { d, seg, g }
+}
+
+/** Even-odd raster (ys.length × xs.length) of closed rings: one scanline per row. */
+function scanInside(rings: Ring[], xs: number[], ys: number[]): Uint8Array {
+  const out = new Uint8Array(xs.length * ys.length)
+  const xc: number[] = []
+  ys.forEach((y, j) => {
+    xc.length = 0
+    for (const r of rings) {
+      const n = r.length >> 1
+      for (let i = 0; i < n; i++) {
+        const k = (i + 1) % n
+        const ya = r[2 * i + 1]
+        const yb = r[2 * k + 1]
+        if (ya > y !== yb > y) xc.push(r[2 * i] + ((y - ya) * (r[2 * k] - r[2 * i])) / (yb - ya))
+      }
+    }
+    if (!xc.length) return
+    xc.sort((a, b) => a - b)
+    let c = 0
+    xs.forEach((x, i) => {
+      while (c < xc.length && xc[c] < x) c++
+      if (c % 2 === 1) out[j * xs.length + i] = 1
+    })
+  })
+  return out
+}
+
+/** Distance queries against a piece outline: deep points on the SHAPE rings, points closer than `near` re-measured
+ * on the SAMPLE rings (the mesh outline itself). */
+export class OutlineQuery {
+  readonly o: Outlines
+  readonly near: number
+  readonly sample: SegmentSet
+  readonly shape: SegmentSet
+  constructor(o: Outlines, near: number) {
+    this.o = o
+    this.near = near
+    this.sample = new SegmentSet(o.rings)
+    this.shape = new SegmentSet(o.shapes)
+  }
+
+  /** -> (d, island id, g) of points P. */
+  query(P: ArrayLike<number>, kappa = 0, rel = 0): { d: Float64Array; isl: Int32Array; g: Float64Array } {
+    const r = nearest(P, this.shape, kappa, rel)
+    const N = r.d.length
+    const isl = new Int32Array(N)
+    const close: number[] = []
+    const idx: number[] = []
+    for (let q = 0; q < N; q++) {
+      isl[q] = this.o.island[this.shape.ringOf[r.seg[q]]]
+      if (r.d[q] < this.near) {
+        idx.push(q)
+        close.push(P[2 * q], P[2 * q + 1])
+      }
+    }
+    if (idx.length) {
+      const r2 = nearest(close, this.sample, kappa, rel)
+      idx.forEach((q, m) => {
+        r.d[q] = r2.d[m]
+        r.g[2 * q] = r2.g[2 * m]
+        r.g[2 * q + 1] = r2.g[2 * m + 1]
+        isl[q] = this.o.island[this.sample.ringOf[r2.seg[m]]]
+      })
+    }
+    return { d: r.d, isl, g: r.g }
+  }
+}
+
+const DIRS8: P2[] = [
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1],
+  [0.7, 0.7],
+  [-0.7, 0.7],
+  [0.7, -0.7],
+  [-0.7, -0.7],
+]
+
+/**
+ * Estimated inradius D per ring's island (holes carry their island's value): max d over a grid × grid scanline raster
+ * refined by 12 steps of pattern search from each island's best cell; `centres` receives {island: apex}.
+ */
+export function islandInradius(ol: OutlineQuery, grid = 40, centres?: Map<number, P2>): Float64Array {
+  const rings = ol.o.shapes
+  const island = ol.o.island
+  const R = rings.length
+  const D = new Float64Array(R)
+  if (!R) return D
+  let x0 = Infinity
+  let y0 = Infinity
+  let x1 = -Infinity
+  let y1 = -Infinity
+  for (const r of rings) {
+    const b = ringBox(r)
+    x0 = Math.min(x0, b[0])
+    y0 = Math.min(y0, b[1])
+    x1 = Math.max(x1, b[2])
+    y1 = Math.max(y1, b[3])
+  }
+  const h = Math.max(x1 - x0, y1 - y0) / grid
+  if (!(h > 0)) return D
+  const xs: number[] = []
+  const ys: number[] = []
+  for (let x = x0 + h / 2; x < x1; x += h) xs.push(x)
+  for (let y = y0 + h / 2; y < y1; y += h) ys.push(y)
+  const ins = scanInside(rings, xs, ys)
+  const P: number[] = []
+  ys.forEach((y, j) => xs.forEach((x, i) => ins[j * xs.length + i] && P.push(x, y)))
+  if (P.length) {
+    const near = nearest(P, ol.shape)
+    const N = P.length >> 1
+    const isl = new Int32Array(N)
+    const bestIdx = new Map<number, number>()
+    for (let q = 0; q < N; q++) {
+      const k = island[ol.shape.ringOf[near.seg[q]]]
+      isl[q] = k
+      if (near.d[q] > D[k]) D[k] = near.d[q]
+      const b = bestIdx.get(k)
+      if (b === undefined || near.d[q] > near.d[b]) bestIdx.set(k, q)
+    }
+    for (const [k, q0] of bestIdx) {
+      let px = P[2 * q0]
+      let py = P[2 * q0 + 1]
+      let step = 0.5 * h
+      let best = D[k]
+      for (let it = 0; it < 12; it++) {
+        const cand: number[] = []
+        for (const [dx, dy] of DIRS8) cand.push(px + step * dx, py + step * dy)
+        const r = nearest(cand, ol.shape)
+        let j = -1
+        let bv = -1
+        for (let c = 0; c < 8; c++) {
+          const ok = island[ol.shape.ringOf[r.seg[c]]] === k
+          const v = ok ? r.d[c] : -1
+          if (v > bv) {
+            bv = v
+            j = c
+          }
+        }
+        if (j >= 0 && bv >= 0 && r.d[j] > best) {
+          best = r.d[j]
+          px = cand[2 * j]
+          py = cand[2 * j + 1]
+        } else step *= 0.5
+      }
+      D[k] = Math.max(D[k], best)
+      centres?.set(k, [px, py])
+    }
+  }
+  // tiny islands the grid missed: a lower bound from the ring's own size
+  for (let k = 0; k < R; k++) {
+    if (island[k] === k && D[k] <= 0) {
+      const b = ringBox(rings[k])
+      D[k] = 0.25 * Math.min(b[2] - b[0], b[3] - b[1])
+    }
+  }
+  return Float64Array.from(island, (k) => D[k])
+}
+
+// ================================================================================================ Steiner points
+function median(v: number[]): number {
+  const s = [...v].sort((a, b) => a - b)
+  const n = s.length
+  return n % 2 ? s[(n - 1) >> 1] : (s[n / 2 - 1] + s[n / 2]) / 2
+}
+
+/** Grid-thinning: indices of the first point per cell (in input order). */
+function firstPerCell(pts: number[], cell: number): number[] {
+  const seen = new Set<string>()
+  const out: number[] = []
+  const c = Math.max(cell, 1e-12)
+  for (let i = 0; i < pts.length >> 1; i++) {
+    const key = `${Math.floor(pts[2 * i] / c)},${Math.floor(pts[2 * i + 1] / c)}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(i)
+  }
+  return out
+}
+
+/** For each point of P: is some point of Q closer than its rad? */
+function nearAny(P: number[], Q: number[], rad: number[]): boolean[] {
+  const nq = Q.length >> 1
+  let cell = 1e-12
+  for (const r of rad) cell = Math.max(cell, r)
+  const grid = new Map<string, number[]>()
+  for (let i = 0; i < nq; i++) {
+    const key = `${Math.floor(Q[2 * i] / cell)},${Math.floor(Q[2 * i + 1] / cell)}`
+    let l = grid.get(key)
+    if (!l) grid.set(key, (l = []))
+    l.push(i)
+  }
+  const out: boolean[] = []
+  for (let i = 0; i < P.length >> 1; i++) {
+    const kx = Math.floor(P[2 * i] / cell)
+    const ky = Math.floor(P[2 * i + 1] / cell)
+    let hit = false
+    for (let dx = -1; dx <= 1 && !hit; dx++)
+      for (let dy = -1; dy <= 1 && !hit; dy++) {
+        const l = grid.get(`${kx + dx},${ky + dy}`)
+        if (!l) continue
+        for (const j of l) {
+          const ex = Q[2 * j] - P[2 * i]
+          const ey = Q[2 * j + 1] - P[2 * i + 1]
+          if (ex * ex + ey * ey < rad[i] * rad[i]) {
+            hit = true
+            break
+          }
+        }
+      }
+    out.push(hit)
+  }
+  return out
+}
+
+/** Graded ring points + medial points (SAMPLING 2–3 of heightfield.py). Flat x,y pairs. */
+export function steinerPoints(
+  ol: OutlineQuery,
+  Dr: Float64Array,
+  bevel: number,
+  inflate: number,
+  segments: number,
+  maxEdge: number,
+  tanMin = 0,
+  scaleW = 1,
+): number[] {
+  const { rings, island } = ol.o
+  // rays: origin, direction, distance scale, island
+  const ox: number[] = []
+  const oy: number[] = []
+  const dx: number[] = []
+  const dy: number[] = []
+  const sc: number[] = []
+  const isl: number[] = []
+  const fanStep = (FAN_DEG * Math.PI) / 180
+  rings.forEach((r, k) => {
+    const n = r.length >> 1
+    for (let i = 0; i < n; i++) {
+      const p = (i - 1 + n) % n
+      const q = (i + 1) % n
+      let tix = r[2 * i] - r[2 * p]
+      let tiy = r[2 * i + 1] - r[2 * p + 1]
+      let l = Math.max(Math.hypot(tix, tiy), 1e-300)
+      tix /= l
+      tiy /= l
+      let tox = r[2 * q] - r[2 * i]
+      let toy = r[2 * q + 1] - r[2 * i + 1]
+      l = Math.max(Math.hypot(tox, toy), 1e-300)
+      tox /= l
+      toy /= l
+      const ninx = -tiy
+      const niny = tix
+      const noutx = -toy
+      const nouty = tox
+      const alpha = Math.atan2(tix * toy - tiy * tox, tix * tox + tiy * toy) // > 0: convex
+      let bx = ninx + noutx
+      let by = niny + nouty
+      const bn = Math.hypot(bx, by)
+      if (bn > 1e-6) {
+        bx /= bn
+        by /= bn
+      } else if (alpha > 0) {
+        bx = -tix
+        by = -tiy
+      } else {
+        bx = tix
+        by = tiy
+      }
+      ox.push(r[2 * i])
+      oy.push(r[2 * i + 1])
+      dx.push(bx)
+      dy.push(by)
+      sc.push(alpha > 0 ? 1 / Math.max(Math.cos(alpha / 2), 0.1) : 1)
+      isl.push(island[k])
+      if (alpha < -fanStep) {
+        const J = Math.ceil(Math.abs(alpha) / fanStep)
+        for (let s = 1; s < J; s++) {
+          const ang = (alpha * s) / J
+          const c = Math.cos(ang)
+          const sn = Math.sin(ang)
+          ox.push(r[2 * i])
+          oy.push(r[2 * i + 1])
+          dx.push(c * ninx - sn * niny)
+          dy.push(sn * ninx + c * niny)
+          sc.push(1)
+          isl.push(island[k])
+        }
+      }
+    }
+  })
+  const out: number[] = []
+  const islands = [...new Set(isl)].sort((a, b) => a - b)
+  for (const I of islands) {
+    const sel: number[] = []
+    isl.forEach((v, i) => v === I && sel.push(i))
+    const D = Dr[I]
+    const ds = ringDistances(bevel, inflate, D, segments)
+    const K = ds.length
+    if (!K) continue
+    const Rn = sel.length
+    const P = new Float64Array(Rn * K * 2)
+    sel.forEach((ri, a) => {
+      for (let j = 0; j < K; j++) {
+        const t = sc[ri] * ds[j]
+        P[(a * K + j) * 2] = ox[ri] + dx[ri] * t
+        P[(a * K + j) * 2 + 1] = oy[ri] + dy[ri] * t
+      }
+    })
+    const dtrue = ol.query(P).d
+    const firstBad = new Int32Array(Rn)
+    for (let a = 0; a < Rn; a++) {
+      let j = 0
+      while (j < K && dtrue[a * K + j] >= (1 - RING_TOL) * ds[j]) j++
+      firstBad[a] = j
+    }
+    const gaps = ds.map((x, i) => x - (i ? ds[i - 1] : 0))
+    const kept: number[] = []
+    for (let j = 0; j < K; j++) {
+      const sl = slope(ds[j], bevel, inflate, D)
+      const tan = Math.min(Math.max((TAN_K * scaleW) / Math.sqrt(Math.max(sl, 1e-6)), tanMin), TAN_MAX * scaleW)
+      const q: number[] = []
+      for (let a = 0; a < Rn; a++) if (firstBad[a] > j) q.push(P[(a * K + j) * 2], P[(a * K + j) * 2 + 1])
+      if (!q.length) continue
+      const cellr = Math.max(0.45 * Math.min(gaps[j], maxEdge), 0.8 * tan)
+      for (const i of firstPerCell(q, cellr)) kept.push(q[2 * i], q[2 * i + 1])
+    }
+    // medial points: halfway between the last valid ring point (or the outline vertex) and the first failure
+    let med: number[] = []
+    let rad: number[] = []
+    for (let a = 0; a < Rn; a++) {
+      const fb = firstBad[a]
+      if (fb >= K) continue
+      const ri = sel[a]
+      const ax = fb > 0 ? P[(a * K + fb - 1) * 2] : ox[ri]
+      const ay = fb > 0 ? P[(a * K + fb - 1) * 2 + 1] : oy[ri]
+      med.push(0.5 * (ax + P[(a * K + fb) * 2]), 0.5 * (ay + P[(a * K + fb) * 2 + 1]))
+      const dmed = 0.5 * ((fb > 0 ? ds[fb - 1] : 0) + ds[fb])
+      let si = 0
+      while (si < K && ds[si] < dmed) si++
+      rad.push(0.35 * Math.min(gaps[Math.min(si, K - 1)], maxEdge))
+    }
+    if (med.length) {
+      const first = firstPerCell(med, 2 * median(rad))
+      med = first.flatMap((i) => [med[2 * i], med[2 * i + 1]])
+      rad = first.map((i) => rad[i])
+      if (kept.length && med.length) {
+        const hit = nearAny(med, kept, rad)
+        med = med.filter((_, i) => !hit[i >> 1])
+      }
+      if (med.length) {
+        const dm = ol.query(med).d
+        for (let i = 0; i < dm.length; i++) if (dm[i] > 0.25 * ds[0]) kept.push(med[2 * i], med[2 * i + 1])
+      }
+    }
+    for (const v of kept) out.push(v)
+  }
+  return out
+}
+
+/** Steiner points + the apex (inradius centre) of every island whose profile still rises at D (inflate, or D < b),
+ * unless a Steiner point already lies within APEX_CLEAR × (D − its last ring distance). */
+export function withApices(
+  steiner: number[],
+  centres: Map<number, P2>,
+  Dr: Float64Array,
+  bevel: number,
+  inflate: number,
+  segments: number,
+): number[] {
+  const out = steiner.slice()
+  for (const [q, c] of centres) {
+    const D = Dr[q]
+    if (D <= 0 || !(inflate > 0 || D < bevel)) continue
+    const ds = ringDistances(bevel, inflate, D, segments)
+    const clear = APEX_CLEAR * (D - (ds.length ? ds[ds.length - 1] : 0))
+    let near = false
+    for (let i = 0; i < steiner.length && !near; i += 2) if (Math.hypot(steiner[i] - c[0], steiner[i + 1] - c[1]) < clear) near = true
+    if (!near) out.push(c[0], c[1])
+  }
+  return out
+}
+
+/** Drop points within about q of an earlier point (or a fixed point): rounding to a q-grid and a half-cell shifted grid. */
+export function mergePoints(P: number[], q: number, fixed: number[] = []): number[] {
+  const n = P.length >> 1
+  const keep = new Uint8Array(n).fill(1)
+  for (const off of [0, 0.5]) {
+    const seen = new Set<string>()
+    const key = (x: number, y: number) => `${Math.round(x / q + off)},${Math.round(y / q + off)}`
+    for (let i = 0; i < fixed.length; i += 2) seen.add(key(fixed[i], fixed[i + 1]))
+    for (let i = 0; i < n; i++) {
+      if (!keep[i]) continue
+      const k = key(P[2 * i], P[2 * i + 1])
+      if (seen.has(k)) keep[i] = 0
+      else seen.add(k)
+    }
+  }
+  const out: number[] = []
+  for (let i = 0; i < n; i++) if (keep[i]) out.push(P[2 * i], P[2 * i + 1])
+  return out
+}
+
+// ================================================================================================ triangulation
+interface TriPoint {
+  x: number
+  y: number
+  i: number
+}
+
+export interface Triangulation {
+  /** Vertex positions (flat x,y): outline vertices first (in ring order), then Steiner points. */
+  V: number[]
+  /** Triangles (vertex index triplets), CCW. */
+  T: number[]
+  /** Number of outline vertices (indices < nOutline are on the outline). */
+  nOutline: number
+  /** Islands that needed a fallback (poly2tri failure). */
+  fallbacks: number
+}
+
+function islandOf(ol: OutlineQuery, x: number, y: number, guess: number, groups: Map<number, number[]>): number {
+  const inIsland = (I: number) => {
+    const rs = groups.get(I)
+    if (!rs) return false
+    if (!pointInRing(x, y, ol.o.rings[rs[0]])) return false
+    for (let m = 1; m < rs.length; m++) if (pointInRing(x, y, ol.o.rings[rs[m]])) return false
+    return true
+  }
+  if (inIsland(guess)) return guess
+  for (const I of groups.keys()) if (I !== guess && inIsland(I)) return I
+  return -1
+}
+
+/**
+ * Deterministic sub-tolerance jitter (JITTER local units) of the triangulator's INPUT copy of every point: poly2tri
+ * rejects exactly collinear constraint points ("EdgeEvent: Collinear not supported!" — straight runs subdivided by
+ * MAX_EDGE, axis-aligned edges). The mesh keeps the exact positions (poly2tri only returns indices).
+ */
+export const JITTER = 1e-8
+function jit(i: number, axis: number): number {
+  const s = Math.sin(i * 12.9898 + axis * 78.233) * 43758.5453
+  return (s - Math.floor(s) - 0.5) * 2 * JITTER
+}
+
+/** Relative size (× the island's extent) of a touch between rings, and of the separating nudge (see separateHoles). */
+const TOUCH_REL = 1e-6
+const NUDGE_REL = 4e-6
+
+/**
+ * Triangulator-input offsets that pull every HOLE vertex touching another ring of its island (a shared vertex, or a
+ * hole edge lying on the outer / another hole: pathops output can do both) NUDGE_REL × the island's extent into its
+ * own hole. poly2tri rejects coincident / overlapping constraints; mathutils' CDT merges them. The gap left is a
+ * sliver at d ≈ 0 (wall height), far below a pixel; the mesh keeps the exact positions (indices only).
+ */
+function separateHoles(rings: Ring[], ringIdx: number[]): Map<number, P2> {
+  const off = new Map<number, P2>()
+  if (ringIdx.length < 2) return off
+  const [x0, y0, x1, y1] = ringBox(rings[ringIdx[0]])
+  const ext = Math.max(x1 - x0, y1 - y0, 1e-12)
+  const touch = TOUCH_REL * ext
+  const nudge = NUDGE_REL * ext
+  const near = (x: number, y: number, k: number) => {
+    const r = rings[k]
+    const n = r.length >> 1
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n
+      const ax = r[2 * i]
+      const ay = r[2 * i + 1]
+      const dx = r[2 * j] - ax
+      const dy = r[2 * j + 1] - ay
+      const l2 = dx * dx + dy * dy
+      const t = l2 > 0 ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / l2)) : 0
+      if (Math.hypot(x - ax - t * dx, y - ay - t * dy) <= touch) return true
+    }
+    return false
+  }
+  for (let m = 1; m < ringIdx.length; m++) {
+    const k = ringIdx[m]
+    const r = rings[k]
+    const n = r.length >> 1
+    const into = ringArea(r) > 0 ? 1 : -1 // the hole's own interior: left of a CCW ring, right of a CW one
+    for (let i = 0; i < n; i++) {
+      const x = r[2 * i]
+      const y = r[2 * i + 1]
+      if (!ringIdx.some((q) => q !== k && near(x, y, q))) continue
+      const p = (i + n - 1) % n
+      const q = (i + 1) % n
+      const e1x = x - r[2 * p]
+      const e1y = y - r[2 * p + 1]
+      const e2x = r[2 * q] - x
+      const e2y = r[2 * q + 1] - y
+      const l1 = Math.hypot(e1x, e1y) || 1
+      const l2 = Math.hypot(e2x, e2y) || 1
+      // left normals of the two edges, averaged → toward the hole's interior (× into)
+      let nx = into * (-e1y / l1 - e2y / l2)
+      let ny = into * (e1x / l1 + e2x / l2)
+      const nl = Math.hypot(nx, ny)
+      if (nl < 1e-12) {
+        nx = into * (-e2y / l2)
+        ny = into * (e2x / l2)
+      } else {
+        nx /= nl
+        ny /= nl
+      }
+      off.set(k * 0x100000 + i, [nudge * nx, nudge * ny])
+    }
+  }
+  return off
+}
+
+function triangulateIsland(
+  ol: OutlineQuery,
+  ringIdx: number[],
+  starts: number[],
+  steiner: TriPoint[],
+  separate = false,
+): number[] | null {
+  const rings = ol.o.rings
+  const off = separate ? separateHoles(rings, ringIdx) : null
+  const contour = (k: number): TriPoint[] => {
+    const r = rings[k]
+    const n = r.length >> 1
+    const pts: TriPoint[] = []
+    for (let i = 0; i < n; i++) {
+      const id = starts[k] + i
+      const o = off?.get(k * 0x100000 + i)
+      pts.push({ x: r[2 * i] + jit(id, 0) + (o ? o[0] : 0), y: r[2 * i + 1] + jit(id, 1) + (o ? o[1] : 0), i: id })
+    }
+    return pts
+  }
+  const ctx = new poly2tri.SweepContext(contour(ringIdx[0]), { cloneArrays: false })
+  for (let m = 1; m < ringIdx.length; m++) ctx.addHole(contour(ringIdx[m]))
+  if (steiner.length) ctx.addPoints(steiner.map((p) => ({ x: p.x + jit(p.i, 0), y: p.y + jit(p.i, 1), i: p.i })))
+  ctx.triangulate()
+  const T: number[] = []
+  for (const t of ctx.getTriangles()) {
+    const a = t.getPoint(0) as unknown as TriPoint
+    const b = t.getPoint(1) as unknown as TriPoint
+    const c = t.getPoint(2) as unknown as TriPoint
+    // CCW in the triangulator's own (jittered) coordinates: exact-coordinate slivers keep a consistent winding
+    const ar = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y)
+    if (ar < 0) T.push(a.i, c.i, b.i)
+    else T.push(a.i, b.i, c.i)
+  }
+  return T
+}
+
+/** Earcut fallback (no Steiner points) for an island poly2tri cannot triangulate (touching rings). */
+function earcutIsland(ol: OutlineQuery, ringIdx: number[], starts: number[]): number[] {
+  // THREE.ShapeUtils lives in three; a tiny ear-clipping import keeps this module three-free for node tests.
+  const rings = ringIdx.map((k) => ol.o.rings[k])
+  const flat: number[] = []
+  const holes: number[] = []
+  const map: number[] = []
+  rings.forEach((r, m) => {
+    if (m) holes.push(flat.length >> 1)
+    for (let i = 0; i < r.length >> 1; i++) {
+      flat.push(r[2 * i], r[2 * i + 1])
+      map.push(starts[ringIdx[m]] + i)
+    }
+  })
+  return earcut(flat, holes).map((i) => map[i])
+}
+
+/**
+ * CDT of the outline (rings) + Steiner points, one poly2tri sweep per island. Steiner points are assigned to the island
+ * that contains them; an island poly2tri rejects is retried without its Steiner points closest to the outline, then
+ * ear-clipped without any.
+ */
+export function triangulate(ol: OutlineQuery, steiner: number[]): Triangulation {
+  const rings = ol.o.rings
+  const starts: number[] = []
+  const V: number[] = []
+  for (const r of rings) {
+    starts.push(V.length >> 1)
+    for (const v of r) V.push(v)
+  }
+  const nOutline = V.length >> 1
+  const groups = new Map<number, number[]>()
+  ol.o.island.forEach((I, k) => {
+    let g = groups.get(I)
+    if (!g) groups.set(I, (g = []))
+    if (k === I) g.unshift(k)
+    else g.push(k)
+  })
+  // islands whose first ring is not their outer (malformed nesting) are dropped
+  for (const [I, g] of groups) if (g[0] !== I) groups.delete(I)
+  const per = new Map<number, TriPoint[]>()
+  if (steiner.length) {
+    const guess = ol.query(steiner).isl
+    for (let s = 0; s < steiner.length >> 1; s++) {
+      const x = steiner[2 * s]
+      const y = steiner[2 * s + 1]
+      const I = islandOf(ol, x, y, guess[s], groups)
+      if (I < 0) continue
+      let l = per.get(I)
+      if (!l) per.set(I, (l = []))
+      l.push({ x, y, i: V.length >> 1 })
+      V.push(x, y)
+    }
+  }
+  const T: number[] = []
+  let fallbacks = 0
+  for (const [I, ringIdx] of groups) {
+    const pts = per.get(I) ?? []
+    let tri: number[] | null = null
+    try {
+      tri = triangulateIsland(ol, ringIdx, starts, pts)
+    } catch {
+      tri = null
+    }
+    let safe: TriPoint[] | null = null
+    if (!tri && pts.length) {
+      // drop Steiner points hugging the outline (poly2tri: points on / next to constraint edges)
+      const d = ol.query(pts.flatMap((p) => [p.x, p.y])).d
+      let lim = 0
+      for (const v of d) lim = Math.max(lim, v)
+      safe = pts.filter((_, i) => d[i] > 1e-3 * lim).map((p) => ({ x: p.x, y: p.y, i: p.i }))
+      try {
+        tri = triangulateIsland(ol, ringIdx, starts, safe)
+      } catch {
+        tri = null
+      }
+    }
+    // rings touching each other (a hole on the outer / on another hole): separate them by a sub-pixel nudge
+    for (const sp of [pts, safe]) {
+      if (tri || !sp || ringIdx.length < 2) continue
+      try {
+        tri = triangulateIsland(ol, ringIdx, starts, sp, true)
+      } catch {
+        tri = null
+      }
+    }
+    if (!tri) {
+      fallbacks++
+      try {
+        tri = earcutIsland(ol, ringIdx, starts)
+      } catch {
+        tri = []
+      }
+      // CCW (earcut's winding follows its input)
+      for (let t = 0; t < tri.length; t += 3) {
+        const a = tri[t]
+        const b = tri[t + 1]
+        const c = tri[t + 2]
+        const ar = (V[2 * b] - V[2 * a]) * (V[2 * c + 1] - V[2 * a + 1]) - (V[2 * c] - V[2 * a]) * (V[2 * b + 1] - V[2 * a + 1])
+        if (ar < 0) {
+          tri[t + 1] = c
+          tri[t + 2] = b
+        }
+      }
+    }
+    for (const v of tri) T.push(v)
+  }
+  const cons = new Set<number>()
+  rings.forEach((r, k) => {
+    const n = r.length >> 1
+    for (let i = 0; i < n; i++) {
+      const a = starts[k] + i
+      const b = starts[k] + ((i + 1) % n)
+      cons.add(a < b ? a * nOutline + b : b * nOutline + a)
+    }
+  })
+  delaunayFlips(V, T, (a, b) => a < nOutline && b < nOutline && cons.has(a < b ? a * nOutline + b : b * nOutline + a))
+  return { V, T, nOutline, fallbacks }
+}
+
+/**
+ * Lawson edge flips until every unconstrained interior edge is locally Delaunay (empty circumcircle). poly2tri's sweep
+ * leaves a few non-Delaunay slivers between the graded rings (a ring vertex joined to a far vertex across a flat cap:
+ * its tilted normal then smeared across the cap as streaks); mathutils' CDT is exactly Delaunay.
+ */
+export function delaunayFlips(V: ArrayLike<number>, T: number[], constrained: (a: number, b: number) => boolean): number {
+  const nt = T.length / 3
+  if (!nt) return 0
+  let ext = 0
+  for (let i = 0; i < T.length; i++) ext = Math.max(ext, Math.abs(V[2 * T[i]]), Math.abs(V[2 * T[i] + 1]))
+  const eps = 1e-13 * Math.max(ext, 1e-6) ** 4
+  const N = V.length >> 1
+  const he = new Map<number, number>() // directed edge a→b → triangle
+  const key = (a: number, b: number) => a * N + b
+  for (let t = 0; t < nt; t++) for (let c = 0; c < 3; c++) he.set(key(T[3 * t + c], T[3 * t + ((c + 1) % 3)]), t)
+  const orient = (a: number, b: number, c: number) =>
+    (V[2 * b] - V[2 * a]) * (V[2 * c + 1] - V[2 * a + 1]) - (V[2 * c] - V[2 * a]) * (V[2 * b + 1] - V[2 * a + 1])
+  const incircle = (a: number, b: number, c: number, d: number) => {
+    const ax = V[2 * a] - V[2 * d]
+    const ay = V[2 * a + 1] - V[2 * d + 1]
+    const bx = V[2 * b] - V[2 * d]
+    const by = V[2 * b + 1] - V[2 * d + 1]
+    const cx = V[2 * c] - V[2 * d]
+    const cy = V[2 * c + 1] - V[2 * d + 1]
+    return (ax * ax + ay * ay) * (bx * cy - cx * by) - (bx * bx + by * by) * (ax * cy - cx * ay) + (cx * cx + cy * cy) * (ax * by - bx * ay)
+  }
+  const third = (t: number, a: number, b: number) => {
+    for (let c = 0; c < 3; c++) {
+      const v = T[3 * t + c]
+      if (v !== a && v !== b) return v
+    }
+    return -1
+  }
+  const stack: number[] = []
+  for (let t = 0; t < nt; t++)
+    for (let c = 0; c < 3; c++) {
+      const a = T[3 * t + c]
+      const b = T[3 * t + ((c + 1) % 3)]
+      if (a < b) stack.push(a, b)
+    }
+  let flips = 0
+  const cap = 40 * nt
+  while (stack.length && flips < cap) {
+    const b = stack.pop()!
+    const a = stack.pop()!
+    const t1 = he.get(key(a, b))
+    const t2 = he.get(key(b, a))
+    if (t1 === undefined || t2 === undefined || t1 === t2 || constrained(a, b)) continue
+    const c = third(t1, a, b) // t1 = (a, b, c) CCW
+    const d = third(t2, a, b) // t2 = (b, a, d) CCW
+    if (c < 0 || d < 0 || c === d) continue
+    if (incircle(a, b, c, d) <= eps) continue
+    // the flipped pair (a, d, c) + (d, b, c) must stay CCW (convex quadrilateral)
+    if (orient(a, d, c) <= 0 || orient(d, b, c) <= 0) continue
+    T[3 * t1] = a
+    T[3 * t1 + 1] = d
+    T[3 * t1 + 2] = c
+    T[3 * t2] = d
+    T[3 * t2 + 1] = b
+    T[3 * t2 + 2] = c
+    he.delete(key(a, b))
+    he.delete(key(b, a))
+    he.set(key(a, d), t1)
+    he.set(key(d, c), t1)
+    he.set(key(c, a), t1)
+    he.set(key(d, b), t2)
+    he.set(key(b, c), t2)
+    he.set(key(c, d), t2)
+    stack.push(a, d, d, b, b, c, c, a)
+    flips++
+  }
+  return flips
+}
+
+// ------------------------------------------------------------------------------------------------ ear clipping
+// Compact earcut (mapbox/earcut algorithm, ISC) — only used as the last-resort fallback triangulator.
+function earcut(data: number[], holeIndices: number[]): number[] {
+  type N = { i: number; x: number; y: number; prev: N; next: N; steiner: boolean }
+  const node = (i: number, x: number, y: number): N => {
+    const n = { i, x, y, steiner: false } as N
+    n.prev = n
+    n.next = n
+    return n
+  }
+  const insert = (i: number, x: number, y: number, last: N | null): N => {
+    const p = node(i, x, y)
+    if (!last) {
+      p.prev = p
+      p.next = p
+    } else {
+      p.next = last.next
+      p.prev = last
+      last.next.prev = p
+      last.next = p
+    }
+    return p
+  }
+  const remove = (p: N) => {
+    p.next.prev = p.prev
+    p.prev.next = p.next
+  }
+  const area = (p: N, q: N, r: N) => (q.y - p.y) * (r.x - q.x) - (q.x - p.x) * (r.y - q.y)
+  const equals = (p: N, q: N) => p.x === q.x && p.y === q.y
+  const signedArea = (start: number, end: number) => {
+    let s = 0
+    for (let i = start, j = end - 2; i < end; i += 2) {
+      s += (data[j] - data[i]) * (data[i + 1] + data[j + 1])
+      j = i
+    }
+    return s
+  }
+  const linked = (start: number, end: number, clockwise: boolean): N | null => {
+    let last: N | null = null
+    if (clockwise === signedArea(start, end) > 0) for (let i = start; i < end; i += 2) last = insert(i / 2, data[i], data[i + 1], last)
+    else for (let i = end - 2; i >= start; i -= 2) last = insert(i / 2, data[i], data[i + 1], last)
+    if (last && equals(last, last.next)) {
+      remove(last)
+      last = last.next
+    }
+    return last
+  }
+  const inTri = (ax: number, ay: number, bx: number, by: number, cx: number, cy: number, px: number, py: number) =>
+    (cx - px) * (ay - py) >= (ax - px) * (cy - py) &&
+    (ax - px) * (by - py) >= (bx - px) * (ay - py) &&
+    (bx - px) * (cy - py) >= (cx - px) * (by - py)
+  const isEar = (ear: N) => {
+    const a = ear.prev
+    const b = ear
+    const c = ear.next
+    if (area(a, b, c) >= 0) return false
+    let p = ear.next.next
+    while (p !== ear.prev) {
+      if (inTri(a.x, a.y, b.x, b.y, c.x, c.y, p.x, p.y) && area(p.prev, p, p.next) >= 0) return false
+      p = p.next
+    }
+    return true
+  }
+  const filter = (start: N, end?: N): N => {
+    end = end ?? start
+    let p = start
+    let again: boolean
+    do {
+      again = false
+      if (!p.steiner && (equals(p, p.next) || area(p.prev, p, p.next) === 0)) {
+        remove(p)
+        p = end = p.prev
+        if (p === p.next) break
+        again = true
+      } else p = p.next
+    } while (again || p !== end)
+    return end
+  }
+  const segIntersect = (p1: N, q1: N, p2: N, q2: N) => {
+    const o = (p: N, q: N, r: N) => Math.sign(area(p, q, r))
+    return o(p1, q1, p2) !== o(p1, q1, q2) && o(p2, q2, p1) !== o(p2, q2, q1)
+  }
+  const locallyInside = (a: N, b: N) =>
+    area(a.prev, a, a.next) < 0 ? area(a, b, a.next) >= 0 && area(a, a.prev, b) >= 0 : area(a, b, a.prev) < 0 || area(a, a.next, b) < 0
+  const split = (a: N, b: N): N => {
+    const a2 = node(a.i, a.x, a.y)
+    const b2 = node(b.i, b.x, b.y)
+    const an = a.next
+    const bp = b.prev
+    a.next = b
+    b.prev = a
+    a2.next = an
+    an.prev = a2
+    b2.next = a2
+    a2.prev = b2
+    bp.next = b2
+    b2.prev = bp
+    return b2
+  }
+  const findHoleBridge = (hole: N, outer: N): N | null => {
+    let p = outer
+    const hx = hole.x
+    const hy = hole.y
+    let qx = -Infinity
+    let m: N | null = null
+    do {
+      if (hy <= p.y && hy >= p.next.y && p.next.y !== p.y) {
+        const x = p.x + ((hy - p.y) * (p.next.x - p.x)) / (p.next.y - p.y)
+        if (x <= hx && x > qx) {
+          qx = x
+          m = p.x < p.next.x ? p : p.next
+          if (x === hx) return m
+        }
+      }
+      p = p.next
+    } while (p !== outer)
+    if (!m) return null
+    const stop = m
+    const mx = m.x
+    const my = m.y
+    let tanMin = Infinity
+    p = m
+    do {
+      if (hx >= p.x && p.x >= mx && hx !== p.x && inTri(hy < my ? hx : qx, hy, mx, my, hy < my ? qx : hx, hy, p.x, p.y)) {
+        const tan = Math.abs(hy - p.y) / (hx - p.x)
+        if (locallyInside(p, hole) && (tan < tanMin || (tan === tanMin && p.x > m!.x))) {
+          m = p
+          tanMin = tan
+        }
+      }
+      p = p.next
+    } while (p !== stop)
+    return m
+  }
+  let outer = linked(0, holeIndices.length ? holeIndices[0] * 2 : data.length, true)
+  const tris: number[] = []
+  if (!outer || outer.next === outer.prev) return tris
+  if (holeIndices.length) {
+    const queue: N[] = []
+    for (let i = 0; i < holeIndices.length; i++) {
+      const s = holeIndices[i] * 2
+      const e = i < holeIndices.length - 1 ? holeIndices[i + 1] * 2 : data.length
+      const list = linked(s, e, false)
+      if (!list) continue
+      if (list === list.next) list.steiner = true
+      let left = list
+      let p = list
+      do {
+        if (p.x < left.x || (p.x === left.x && p.y < left.y)) left = p
+        p = p.next
+      } while (p !== list)
+      queue.push(left)
+    }
+    queue.sort((a, b) => a.x - b.x)
+    for (const h of queue) {
+      const bridge = findHoleBridge(h, outer!)
+      if (!bridge) continue
+      const b2 = split(bridge, h)
+      filter(b2, b2.next)
+      outer = filter(bridge, bridge.next)
+    }
+  }
+  let ear: N = outer!
+  let stop = ear
+  let guard = 0
+  while (ear.prev !== ear.next && guard++ < 1e6) {
+    const prev = ear.prev
+    const next = ear.next
+    if (isEar(ear)) {
+      tris.push(prev.i, ear.i, next.i)
+      remove(ear)
+      ear = next.next
+      stop = next.next
+      continue
+    }
+    ear = next
+    if (ear === stop) {
+      // cure local self-intersections, else give up on the remainder
+      let p = ear
+      let cured = false
+      do {
+        const a = p.prev
+        const b = p.next.next
+        if (!equals(a, b) && segIntersect(a, p, p.next, b) && locallyInside(a, b) && locallyInside(b, a)) {
+          tris.push(a.i, p.i, b.i)
+          remove(p)
+          remove(p.next)
+          p = b
+          cured = true
+        }
+        p = p.next
+      } while (p !== ear)
+      if (!cured) break
+      ear = p
+      stop = p
+    }
+  }
+  return tris
+}
+
+// ================================================================================================ build
+export interface BodyArrays {
+  /** Non-indexed triangle soup: positions (x, y, z per corner), per-corner normals, art-square UVs. */
+  position: Float32Array
+  normal: Float32Array
+  uv: Float32Array
+  info: {
+    half: number
+    wall: number
+    bevel: number
+    inflate: number
+    D: number
+    rings: number
+    holes: number
+    islands: number
+    steiner: number
+    verts: number
+    faces: number
+    singular: number
+    fallbacks: number
+    ms: number
+  }
+}
+
+/** Indexed form used by the checks (heightfield.build's verts / loops / starts / normals). */
+export interface BodyMesh {
+  verts: Float64Array // (V, 3)
+  /** Triangles (top + bottom) then wall quads. */
+  tris: Int32Array // (T, 3)
+  triNormals: Float64Array // (T, 3 corners, 3)
+  quads: Int32Array // (Q, 4)
+  quadNormals: Float64Array // (Q, 4 corners, 3)
+}
+
+const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now())
+
+function edgesOf(T: number[]): Map<string, { a: number; b: number; n: number }> {
+  const m = new Map<string, { a: number; b: number; n: number }>()
+  for (let t = 0; t < T.length; t += 3)
+    for (let c = 0; c < 3; c++) {
+      const a = T[t + c]
+      const b = T[t + ((c + 1) % 3)]
+      const key = a < b ? `${a}_${b}` : `${b}_${a}`
+      const e = m.get(key)
+      if (e) e.n++
+      else m.set(key, { a, b, n: 1 })
+    }
+  return m
+}
+
+/**
+ * Height-field body of one piece (local units, centred on its mid-plane). Null when the outline is empty/degenerate.
+ * `mesh` (optional) receives the indexed form for checks.
+ */
+export function buildBody(
+  splines: Spline[],
+  thickness: number,
+  bevel: number,
+  inflate = 0,
+  segments = 6,
+  scale = 1,
+  mesh?: { out?: BodyMesh },
+): BodyArrays | null {
+  const t0 = now()
+  const sc = Math.max(scale, 1e-9)
+  const th = Math.max(thickness, MIN_THICKNESS / sc)
+  let b = Math.max(0, Math.min(bevel ?? 0, th / 2))
+  const k = Math.max(0, inflate || 0)
+  if (b < 1e-7 / sc) b = 0
+  const tol = CHORD_TOL / sc
+  const maxEdge = MAX_EDGE / sc
+  const eps = MERGE_EPS / sc
+  const guard = Math.min(Math.max(0.5 * b, GUARD_MIN / sc), GUARD_MAX / sc)
+  const o = outline(splines, tol, maxEdge, eps, guard)
+  if (!o.rings.length) return null
+  const ol = new OutlineQuery(o, Math.max(NEAR / sc, 16 * tol))
+  const centres = new Map<number, P2>()
+  const Dr = b > 0 || k > 0 ? islandInradius(ol, 40, centres) : new Float64Array(o.rings.length)
+  let steiner = b > 0 || k > 0 ? steinerPoints(ol, Dr, b, k, segments, maxEdge, TAN_MIN / sc, 1 / sc) : []
+  steiner = withApices(steiner, centres, Dr, b, k, segments)
+  const outlinePts: number[] = []
+  for (const r of o.rings) for (const v of r) outlinePts.push(v)
+  let extra = mergePoints(steiner, MERGE_Q / sc, outlinePts)
+  let tri: Triangulation | null = null
+  for (let pass = 0; pass <= CHORD_PASSES; pass++) {
+    tri = triangulate(ol, extra)
+    if (!tri.T.length) return null
+    const { V, T, nOutline } = tri
+    const cons = new Set<string>()
+    let s = 0
+    for (const r of o.rings) {
+      const n = r.length >> 1
+      for (let i = 0; i < n; i++) {
+        const a = s + i
+        const c = s + ((i + 1) % n)
+        cons.add(a < c ? `${a}_${c}` : `${c}_${a}`)
+      }
+      s += n
+    }
+    const add: number[] = []
+    // chords: interior edges joining two outline vertices that are not outline (constraint) edges
+    for (const [key, e] of edgesOf(T)) {
+      if (e.n === 2 && e.a < nOutline && e.b < nOutline && !cons.has(key))
+        add.push(0.5 * (V[2 * e.a] + V[2 * e.b]), 0.5 * (V[2 * e.a + 1] + V[2 * e.b + 1]))
+    }
+    if (!add.length) {
+      // triangles with three outline vertices and no chord (a whole small piece): their centroid
+      const cen: number[] = []
+      for (let t = 0; t < T.length; t += 3) {
+        if (T[t] < nOutline && T[t + 1] < nOutline && T[t + 2] < nOutline) {
+          cen.push(
+            (V[2 * T[t]] + V[2 * T[t + 1]] + V[2 * T[t + 2]]) / 3,
+            (V[2 * T[t] + 1] + V[2 * T[t + 1] + 1] + V[2 * T[t + 2] + 1]) / 3,
+          )
+        }
+      }
+      if (cen.length) {
+        const dd = ol.query(cen).d
+        for (let i = 0; i < dd.length; i++) if (dd[i] > 1e-6 / sc) add.push(cen[2 * i], cen[2 * i + 1])
+      }
+    }
+    if (!add.length || pass === CHORD_PASSES) break
+    extra = extra.concat(mergePoints(add, MERGE_Q / sc, outlinePts.concat(extra)))
+  }
+  const { V: Vall, T: Tall, nOutline } = tri!
+  // ---- compact to used vertices -----------------------------------------------------------------------
+  const nAll = Vall.length >> 1
+  const remap = new Int32Array(nAll).fill(-1)
+  let nv = 0
+  for (const v of Tall) if (remap[v] < 0) remap[v] = nv++
+  const V2 = new Float64Array(nv * 2)
+  const onB = new Uint8Array(nv)
+  for (let i = 0; i < nAll; i++) {
+    const r = remap[i]
+    if (r < 0) continue
+    V2[2 * r] = Vall[2 * i]
+    V2[2 * r + 1] = Vall[2 * i + 1]
+    if (i < nOutline) onB[r] = 1
+  }
+  const T = Int32Array.from(Tall, (v) => remap[v])
+  const nt3 = T.length / 3
+  // ---- outline (boundary) edges of the kept triangulation ---------------------------------------------
+  const em = edgesOf(Array.from(T))
+  const beA: number[] = []
+  const beB: number[] = []
+  const directed = new Set<string>()
+  for (let t = 0; t < T.length; t += 3)
+    for (let c = 0; c < 3; c++) directed.add(`${T[t + c]}>${T[t + ((c + 1) % 3)]}`)
+  for (const e of em.values()) {
+    if (e.n !== 1) continue
+    // directed a -> b with the interior on the left (as the CCW triangle runs it)
+    if (directed.has(`${e.a}>${e.b}`)) {
+      beA.push(e.a)
+      beB.push(e.b)
+    } else {
+      beA.push(e.b)
+      beB.push(e.a)
+    }
+  }
+  for (const v of beA) onB[v] = 1
+  for (const v of beB) onB[v] = 1
+  const gb = new Float64Array(nv * 2)
+  for (let m = 0; m < beA.length; m++) {
+    const a = beA[m]
+    const c = beB[m]
+    let ex = V2[2 * c] - V2[2 * a]
+    let ey = V2[2 * c + 1] - V2[2 * a + 1]
+    const l = Math.max(Math.hypot(ex, ey), 1e-300)
+    ex /= l
+    ey /= l
+    // inward (left) normal
+    gb[2 * a] += -ey
+    gb[2 * a + 1] += ex
+    gb[2 * c] += -ey
+    gb[2 * c + 1] += ex
+  }
+  // ---- distances, islands ---------------------------------------------------------------------------
+  const d = new Float64Array(nv)
+  const g = new Float64Array(nv * 2)
+  const Dv = new Float64Array(nv).fill(1)
+  const Dmax = Float64Array.from(Dr)
+  const inner: number[] = []
+  for (let i = 0; i < nv; i++) if (!onB[i]) inner.push(i)
+  if (inner.length) {
+    const P = new Float64Array(inner.length * 2)
+    inner.forEach((v, m) => {
+      P[2 * m] = V2[2 * v]
+      P[2 * m + 1] = V2[2 * v + 1]
+    })
+    const q = ol.query(P, KAPPA / sc, KAPPA_REL)
+    const maxBy = new Map<number, number>()
+    inner.forEach((v, m) => {
+      d[v] = q.d[m]
+      g[2 * v] = q.g[2 * m]
+      g[2 * v + 1] = q.g[2 * m + 1]
+      maxBy.set(q.isl[m], Math.max(maxBy.get(q.isl[m]) ?? 0, q.d[m]))
+    })
+    for (const [I, mx] of maxBy) {
+      const val = Math.max(Dmax[I], mx)
+      o.island.forEach((J, ring) => {
+        if (J === I) Dmax[ring] = val
+      })
+    }
+    inner.forEach((v, m) => {
+      Dv[v] = Math.max(Dmax[q.isl[m]], 1e-12)
+    })
+  }
+  const loose = new Uint8Array(nv)
+  for (let i = 0; i < nv; i++) {
+    if (!onB[i]) continue
+    const n = Math.hypot(gb[2 * i], gb[2 * i + 1])
+    d[i] = 0
+    if (n < 1e-9) {
+      loose[i] = 1
+      g[2 * i] = 0
+      g[2 * i + 1] = 0
+    } else {
+      g[2 * i] = gb[2 * i] / n
+      g[2 * i + 1] = gb[2 * i + 1] / n
+    }
+  }
+  // ---- heights + normals ------------------------------------------------------------------------------
+  let e = wallHalf(th, b)
+  if (e < 1e-7 / sc) e = 0
+  const z = new Float64Array(nv)
+  const nt = new Float64Array(nv * 3)
+  const vertical = new Uint8Array(nv)
+  for (let i = 0; i < nv; i++) {
+    z[i] = profile(d[i], th, b, k, Dv[i])
+    const s = slope(d[i], b, k, Dv[i])
+    let nx: number
+    let ny: number
+    let nz: number
+    if (!Number.isFinite(s) && !loose[i]) {
+      vertical[i] = 1
+      nx = -g[2 * i]
+      ny = -g[2 * i + 1]
+      nz = 0
+    } else {
+      const ss = Number.isFinite(s) ? s : 0
+      nx = -ss * g[2 * i]
+      ny = -ss * g[2 * i + 1]
+      nz = 1
+    }
+    const l = Math.max(Math.hypot(nx, ny, nz), 1e-300)
+    nt[3 * i] = nx / l
+    nt[3 * i + 1] = ny / l
+    nt[3 * i + 2] = nz / l
+  }
+  const P3 = new Float64Array(nv * 3)
+  for (let i = 0; i < nv; i++) {
+    P3[3 * i] = V2[2 * i]
+    P3[3 * i + 1] = V2[2 * i + 1]
+    P3[3 * i + 2] = z[i]
+  }
+  // face normals of the top
+  const fn = new Float64Array(nt3 * 3)
+  for (let t = 0; t < nt3; t++) {
+    const a = T[3 * t]
+    const c1 = T[3 * t + 1]
+    const c2 = T[3 * t + 2]
+    const ux = P3[3 * c1] - P3[3 * a]
+    const uy = P3[3 * c1 + 1] - P3[3 * a + 1]
+    const uz = P3[3 * c1 + 2] - P3[3 * a + 2]
+    const vx = P3[3 * c2] - P3[3 * a]
+    const vy = P3[3 * c2 + 1] - P3[3 * a + 1]
+    const vz = P3[3 * c2 + 2] - P3[3 * a + 2]
+    let x = uy * vz - uz * vy
+    let y = uz * vx - ux * vz
+    let w = ux * vy - uy * vx
+    const l = Math.max(Math.hypot(x, y, w), 1e-300)
+    x /= l
+    y /= l
+    w /= l
+    fn[3 * t] = x
+    fn[3 * t + 1] = y
+    fn[3 * t + 2] = w
+  }
+  // safe normals: blend free (non-vertical) vertex normals toward +Z until they face all their top faces
+  {
+    const todo = new Uint8Array(nv)
+    for (let i = 0; i < nv; i++) todo[i] = vertical[i] ? 0 : 1
+    const out = Float64Array.from(nt)
+    const mind = new Float64Array(nv)
+    const cand = new Float64Array(nv * 3)
+    for (const lam of [0, 0.25, 0.5, 0.75, 0.9, 1]) {
+      for (let i = 0; i < nv; i++) {
+        const x = (1 - lam) * nt[3 * i]
+        const y = (1 - lam) * nt[3 * i + 1]
+        const w = (1 - lam) * nt[3 * i + 2] + lam
+        const l = Math.max(Math.hypot(x, y, w), 1e-300)
+        cand[3 * i] = x / l
+        cand[3 * i + 1] = y / l
+        cand[3 * i + 2] = w / l
+      }
+      mind.fill(Infinity)
+      for (let t = 0; t < nt3; t++)
+        for (let c = 0; c < 3; c++) {
+          const v = T[3 * t + c]
+          const dt = cand[3 * v] * fn[3 * t] + cand[3 * v + 1] * fn[3 * t + 1] + cand[3 * v + 2] * fn[3 * t + 2]
+          if (dt < mind[v]) mind[v] = dt
+        }
+      let left = false
+      for (let i = 0; i < nv; i++) {
+        if (!todo[i]) continue
+        if (mind[i] >= NORMAL_MIN_DOT) {
+          out[3 * i] = cand[3 * i]
+          out[3 * i + 1] = cand[3 * i + 1]
+          out[3 * i + 2] = cand[3 * i + 2]
+          todo[i] = 0
+        } else left = true
+      }
+      if (!left) break
+    }
+    for (let i = 0; i < nv; i++)
+      if (todo[i]) {
+        out[3 * i] = 0
+        out[3 * i + 1] = 0
+        out[3 * i + 2] = 1
+      }
+    nt.set(out)
+  }
+  // ---- per-corner normals of the top; singular outline vertices -------------------------------------
+  const CT = new Float64Array(nt3 * 9)
+  const mind = new Float64Array(nv).fill(Infinity)
+  for (let t = 0; t < nt3; t++)
+    for (let c = 0; c < 3; c++) {
+      const v = T[3 * t + c]
+      CT[9 * t + 3 * c] = nt[3 * v]
+      CT[9 * t + 3 * c + 1] = nt[3 * v + 1]
+      CT[9 * t + 3 * c + 2] = nt[3 * v + 2]
+      const dt = nt[3 * v] * fn[3 * t] + nt[3 * v + 1] * fn[3 * t + 1] + nt[3 * v + 2] * fn[3 * t + 2]
+      if (dt < mind[v]) mind[v] = dt
+    }
+  // wall normals (outward) per boundary edge
+  const wn = new Float64Array(beA.length * 2)
+  for (let m = 0; m < beA.length; m++) {
+    const ex = V2[2 * beB[m]] - V2[2 * beA[m]]
+    const ey = V2[2 * beB[m] + 1] - V2[2 * beA[m] + 1]
+    const l = Math.max(Math.hypot(ex, ey), 1e-300)
+    wn[2 * m] = ey / l
+    wn[2 * m + 1] = -ex / l
+  }
+  const hz = new Float64Array(nv * 2)
+  for (let i = 0; i < nv; i++) {
+    const l = Math.max(Math.hypot(g[2 * i], g[2 * i + 1]), 1e-300)
+    hz[2 * i] = -g[2 * i] / l
+    hz[2 * i + 1] = -g[2 * i + 1] / l
+  }
+  if (wallHalf(th, b) >= 1e-7 / sc && beA.length) {
+    for (let m = 0; m < beA.length; m++)
+      for (const v of [beA[m], beB[m]]) {
+        const dt = hz[2 * v] * wn[2 * m] + hz[2 * v + 1] * wn[2 * m + 1]
+        if (dt < mind[v]) mind[v] = dt
+      }
+  }
+  const sing = new Uint8Array(nv)
+  let nSing = 0
+  for (let i = 0; i < nv; i++)
+    if (onB[i] && mind[i] < NORMAL_MIN_DOT) {
+      sing[i] = 1
+      nSing++
+    }
+  if (nSing) {
+    for (let t = 0; t < nt3; t++)
+      for (let c = 0; c < 3; c++) {
+        if (!sing[T[3 * t + c]]) continue
+        const v1 = T[3 * t + ((c + 1) % 3)]
+        const v2 = T[3 * t + ((c + 2) % 3)]
+        let x = nt[3 * v1] + nt[3 * v2]
+        let y = nt[3 * v1 + 1] + nt[3 * v2 + 1]
+        let w = nt[3 * v1 + 2] + nt[3 * v2 + 2]
+        const l = Math.max(Math.hypot(x, y, w), 1e-300)
+        x /= l
+        y /= l
+        w /= l
+        if (x * fn[3 * t] + y * fn[3 * t + 1] + w * fn[3 * t + 2] < NORMAL_MIN_DOT) {
+          x = fn[3 * t]
+          y = fn[3 * t + 1]
+          w = fn[3 * t + 2]
+        }
+        CT[9 * t + 3 * c] = x
+        CT[9 * t + 3 * c + 1] = y
+        CT[9 * t + 3 * c + 2] = w
+      }
+  }
+  // ---- assemble ---------------------------------------------------------------------------------------
+  const walls = e > 0
+  let nIn = 0
+  for (let i = 0; i < nv; i++) if (!onB[i]) nIn++
+  const nb = new Int32Array(nv)
+  let nVerts: number
+  if (walls) {
+    for (let i = 0; i < nv; i++) nb[i] = i + nv
+    nVerts = 2 * nv
+  } else {
+    let c = nv
+    for (let i = 0; i < nv; i++) nb[i] = onB[i] ? i : c++
+    nVerts = nv + nIn
+  }
+  const verts = new Float64Array(nVerts * 3)
+  verts.set(P3)
+  for (let i = 0; i < nv; i++) {
+    const j = nb[i]
+    if (j < nv) continue
+    verts[3 * j] = V2[2 * i]
+    verts[3 * j + 1] = V2[2 * i + 1]
+    verts[3 * j + 2] = -z[i]
+  }
+  const nQ = walls ? beA.length : 0
+  const tris = new Int32Array(2 * nt3 * 3)
+  const triN = new Float64Array(2 * nt3 * 9)
+  for (let t = 0; t < nt3; t++) {
+    tris.set([T[3 * t], T[3 * t + 1], T[3 * t + 2]], 3 * t)
+    triN.set(CT.subarray(9 * t, 9 * t + 9), 9 * t)
+    const u = nt3 + t
+    tris.set([nb[T[3 * t]], nb[T[3 * t + 2]], nb[T[3 * t + 1]]], 3 * u)
+    for (const [c, src] of [
+      [0, 0],
+      [1, 2],
+      [2, 1],
+    ] as const) {
+      triN[9 * u + 3 * c] = CT[9 * t + 3 * src]
+      triN[9 * u + 3 * c + 1] = CT[9 * t + 3 * src + 1]
+      triN[9 * u + 3 * c + 2] = -CT[9 * t + 3 * src + 2]
+    }
+  }
+  const quads = new Int32Array(nQ * 4)
+  const quadN = new Float64Array(nQ * 12)
+  if (walls) {
+    let flatRim = true
+    for (let i = 0; i < nv; i++) if (onB[i] && vertical[i]) flatRim = false
+    const crease = Uint8Array.from(sing)
+    if (flatRim) {
+      // flat rim (no bevel, no inflate): a corner turning more than CORNER_DEG is a vertical crease too
+      const mw = new Float64Array(nv).fill(Infinity)
+      for (let m = 0; m < nQ; m++)
+        for (const v of [beA[m], beB[m]]) {
+          const dt = hz[2 * v] * wn[2 * m] + hz[2 * v + 1] * wn[2 * m + 1]
+          if (dt < mw[v]) mw[v] = dt
+        }
+      const lim = Math.cos(((CORNER_DEG / 2) * Math.PI) / 180)
+      for (let i = 0; i < nv; i++) if (onB[i] && mw[i] < lim) crease[i] = 1
+    }
+    for (let m = 0; m < nQ; m++) {
+      const a = beA[m]
+      const c = beB[m]
+      quads.set([c, a, nb[a], nb[c]], 4 * m)
+      const corners = [c, a, a, c]
+      corners.forEach((v, j) => {
+        if (crease[v]) quadN.set([wn[2 * m], wn[2 * m + 1], 0], 12 * m + 3 * j)
+        else quadN.set([hz[2 * v], hz[2 * v + 1], 0], 12 * m + 3 * j)
+      })
+    }
+  }
+  if (mesh) mesh.out = { verts, tris, triNormals: triN, quads, quadNormals: quadN }
+  // ---- triangle soup for three.js -------------------------------------------------------------------
+  const nTri = 2 * nt3 + 2 * nQ
+  const position = new Float32Array(nTri * 9)
+  const normal = new Float32Array(nTri * 9)
+  const uv = new Float32Array(nTri * 6)
+  let w = 0
+  const put = (v: number, nx: number, ny: number, nz: number) => {
+    const x = verts[3 * v]
+    const y = verts[3 * v + 1]
+    position[3 * w] = x
+    position[3 * w + 1] = y
+    position[3 * w + 2] = verts[3 * v + 2]
+    normal[3 * w] = nx
+    normal[3 * w + 1] = ny
+    normal[3 * w + 2] = nz
+    uv[2 * w] = (x + 1) / 2
+    uv[2 * w + 1] = (y + 1) / 2
+    w++
+  }
+  for (let t = 0; t < 2 * nt3; t++)
+    for (let c = 0; c < 3; c++) put(tris[3 * t + c], triN[9 * t + 3 * c], triN[9 * t + 3 * c + 1], triN[9 * t + 3 * c + 2])
+  for (let m = 0; m < nQ; m++) {
+    for (const j of [0, 1, 2, 0, 2, 3])
+      put(quads[4 * m + j], quadN[12 * m + 3 * j], quadN[12 * m + 3 * j + 1], quadN[12 * m + 3 * j + 2])
+  }
+  let half = 0
+  for (let i = 0; i < nv; i++) half = Math.max(half, z[i])
+  let Dm = 0
+  for (const v of Dmax) Dm = Math.max(Dm, v)
+  return {
+    position,
+    normal,
+    uv,
+    info: {
+      half,
+      wall: e,
+      bevel: b,
+      inflate: k,
+      D: Dm,
+      rings: o.rings.length,
+      holes: o.hole.filter(Boolean).length,
+      islands: new Set(o.island).size,
+      steiner: steiner.length >> 1,
+      verts: nVerts,
+      faces: 2 * nt3 + nQ,
+      singular: nSing,
+      fallbacks: tri!.fallbacks,
+      ms: Math.round((now() - t0) * 100) / 100,
+    },
+  }
+}
+
+/** Largest island inradius of a piece (local units) — framing / lift estimates (heightfield.inradius). */
+export function inradius(splines: Spline[], scale = 1): number {
+  const sc = Math.max(scale, 1e-9)
+  const o = outline(splines, CHORD_TOL / sc, MAX_EDGE / sc, MERGE_EPS / sc)
+  if (!o.rings.length) return 0
+  let D = 0
+  for (const v of islandInradius(new OutlineQuery(o, 0))) D = Math.max(D, v)
+  return D
+}
+
+// ================================================================================================ checks
+/**
+ * Topology report of a body (heightfield.check_arrays + the BVH self-intersection test of check_mesh): non-manifold /
+ * mis-wound edges, signed volume, corner normals facing away from their faces, intersecting non-adjacent triangles.
+ */
+export function checkBody(m: BodyMesh, intersections = true) {
+  const V = m.verts
+  const faces: number[][] = []
+  const fnorm: number[][] = []
+  for (let t = 0; t < m.tris.length / 3; t++) {
+    faces.push([m.tris[3 * t], m.tris[3 * t + 1], m.tris[3 * t + 2]])
+    fnorm.push(Array.from(m.triNormals.subarray(9 * t, 9 * t + 9)))
+  }
+  for (let q = 0; q < m.quads.length / 4; q++) {
+    faces.push(Array.from(m.quads.subarray(4 * q, 4 * q + 4)))
+    fnorm.push(Array.from(m.quadNormals.subarray(12 * q, 12 * q + 12)))
+  }
+  const edges = new Map<string, { n: number; fwd: number }>()
+  let vol = 0
+  let inverted = 0
+  let minDot = 1
+  const tri: number[][] = [] // triangle soup for the intersection test
+  faces.forEach((f, fi) => {
+    let nx = 0
+    let ny = 0
+    let nz = 0
+    for (let j = 1; j < f.length - 1; j++) {
+      const p0 = f[0]
+      const p1 = f[j]
+      const p2 = f[j + 1]
+      const ax = V[3 * p1] - V[3 * p0]
+      const ay = V[3 * p1 + 1] - V[3 * p0 + 1]
+      const az = V[3 * p1 + 2] - V[3 * p0 + 2]
+      const bx = V[3 * p2] - V[3 * p0]
+      const by = V[3 * p2 + 1] - V[3 * p0 + 1]
+      const bz = V[3 * p2 + 2] - V[3 * p0 + 2]
+      const cx = ay * bz - az * by
+      const cy = az * bx - ax * bz
+      const cz = ax * by - ay * bx
+      vol += (V[3 * p0] * cx + V[3 * p0 + 1] * cy + V[3 * p0 + 2] * cz) / 6
+      nx += cx
+      ny += cy
+      nz += cz
+      tri.push([p0, p1, p2])
+    }
+    const nl = Math.hypot(nx, ny, nz)
+    for (let c = 0; c < f.length; c++) {
+      const a = f[c]
+      const b = f[(c + 1) % f.length]
+      const key = a < b ? `${a}_${b}` : `${b}_${a}`
+      const e = edges.get(key) ?? { n: 0, fwd: 0 }
+      e.n++
+      if (a < b) e.fwd++
+      edges.set(key, e)
+      if (nl > 1e-14) {
+        const dt = (fnorm[fi][3 * c] * nx + fnorm[fi][3 * c + 1] * ny + fnorm[fi][3 * c + 2] * nz) / nl
+        if (dt < -1e-3) inverted++
+        minDot = Math.min(minDot, dt)
+      }
+    }
+  })
+  let nonManifold = 0
+  let misoriented = 0
+  for (const e of edges.values()) {
+    if (e.n !== 2) nonManifold++
+    else if (e.fwd !== 1) misoriented++
+  }
+  return {
+    nonManifold,
+    misoriented,
+    volume: vol,
+    invertedNormals: inverted,
+    minNormalDot: minDot,
+    selfIntersections: intersections ? countIntersections(V, tri) : -1,
+  }
+}
+
+/** Pairs of non-adjacent triangles that intersect (uniform grid broad phase + Möller's tri-tri test). */
+function countIntersections(V: Float64Array, tris: number[][]): number {
+  const n = tris.length
+  const box = new Float64Array(n * 6)
+  let ext = 1e-9
+  let gx0 = Infinity
+  let gy0 = Infinity
+  let gz0 = Infinity
+  let gx1 = -Infinity
+  let gy1 = -Infinity
+  let gz1 = -Infinity
+  tris.forEach((t, i) => {
+    let x0 = Infinity
+    let y0 = Infinity
+    let z0 = Infinity
+    let x1 = -Infinity
+    let y1 = -Infinity
+    let z1 = -Infinity
+    for (const v of t) {
+      x0 = Math.min(x0, V[3 * v])
+      x1 = Math.max(x1, V[3 * v])
+      y0 = Math.min(y0, V[3 * v + 1])
+      y1 = Math.max(y1, V[3 * v + 1])
+      z0 = Math.min(z0, V[3 * v + 2])
+      z1 = Math.max(z1, V[3 * v + 2])
+    }
+    box.set([x0, y0, z0, x1, y1, z1], 6 * i)
+    gx0 = Math.min(gx0, x0)
+    gy0 = Math.min(gy0, y0)
+    gz0 = Math.min(gz0, z0)
+    gx1 = Math.max(gx1, x1)
+    gy1 = Math.max(gy1, y1)
+    gz1 = Math.max(gz1, z1)
+  })
+  ext = Math.max(gx1 - gx0, gy1 - gy0, 1e-9)
+  const cell = ext / Math.max(8, Math.min(128, Math.round(Math.sqrt(n) / 2)))
+  const grid = new Map<string, number[]>()
+  for (let i = 0; i < n; i++) {
+    const i0 = Math.floor((box[6 * i] - gx0) / cell)
+    const i1 = Math.floor((box[6 * i + 3] - gx0) / cell)
+    const j0 = Math.floor((box[6 * i + 1] - gy0) / cell)
+    const j1 = Math.floor((box[6 * i + 4] - gy0) / cell)
+    for (let a = i0; a <= i1; a++)
+      for (let b = j0; b <= j1; b++) {
+        const k = `${a},${b}`
+        let l = grid.get(k)
+        if (!l) grid.set(k, (l = []))
+        l.push(i)
+      }
+  }
+  const seen = new Set<number>()
+  let count = 0
+  for (const l of grid.values())
+    for (let p = 0; p < l.length; p++)
+      for (let q = p + 1; q < l.length; q++) {
+        const i = Math.min(l[p], l[q])
+        const j = Math.max(l[p], l[q])
+        const key = i * n + j
+        if (seen.has(key)) continue
+        seen.add(key)
+        const A = tris[i]
+        const B = tris[j]
+        if (A.some((v) => B.includes(v))) continue
+        if (
+          box[6 * i] > box[6 * j + 3] ||
+          box[6 * j] > box[6 * i + 3] ||
+          box[6 * i + 1] > box[6 * j + 4] ||
+          box[6 * j + 1] > box[6 * i + 4] ||
+          box[6 * i + 2] > box[6 * j + 5] ||
+          box[6 * j + 2] > box[6 * i + 5]
+        )
+          continue
+        if (triTri(V, A, B)) count++
+      }
+  return count
+}
+
+type V3 = [number, number, number]
+const sub3 = (a: V3, b: V3): V3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+const cross3 = (a: V3, b: V3): V3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+const dot3 = (a: V3, b: V3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+/** Proper intersection of two triangles (strict: touching within 1e-12 does not count). */
+function triTri(V: Float64Array, A: number[], B: number[]): boolean {
+  const p = (v: number): V3 => [V[3 * v], V[3 * v + 1], V[3 * v + 2]]
+  const a = A.map(p)
+  const b = B.map(p)
+  const eps = 1e-12
+  const n1 = cross3(sub3(a[1], a[0]), sub3(a[2], a[0]))
+  const db = b.map((x) => dot3(n1, sub3(x, a[0])))
+  if ((db[0] > eps && db[1] > eps && db[2] > eps) || (db[0] < -eps && db[1] < -eps && db[2] < -eps)) return false
+  const n2 = cross3(sub3(b[1], b[0]), sub3(b[2], b[0]))
+  const da = a.map((x) => dot3(n2, sub3(x, b[0])))
+  if ((da[0] > eps && da[1] > eps && da[2] > eps) || (da[0] < -eps && da[1] < -eps && da[2] < -eps)) return false
+  const dir = cross3(n1, n2)
+  if (dot3(dir, dir) < 1e-24) return false // coplanar: adjacent caps never overlap by construction
+  const interval = (t: V3[], dd: number[]): [number, number] | null => {
+    const proj = t.map((x) => dot3(dir, x))
+    const pts: number[] = []
+    for (let i = 0; i < 3; i++) {
+      const j = (i + 1) % 3
+      if ((dd[i] > 0 && dd[j] < 0) || (dd[i] < 0 && dd[j] > 0)) pts.push(proj[i] + ((proj[j] - proj[i]) * dd[i]) / (dd[i] - dd[j]))
+      else if (Math.abs(dd[i]) <= eps) pts.push(proj[i])
+    }
+    if (pts.length < 2) return null
+    return [Math.min(...pts), Math.max(...pts)]
+  }
+  const i1 = interval(a, da)
+  const i2 = interval(b, db)
+  if (!i1 || !i2) return false
+  const lo = Math.max(i1[0], i2[0])
+  const hi = Math.min(i1[1], i2[1])
+  return hi - lo > 1e-9 * Math.max(1, Math.abs(hi))
+}

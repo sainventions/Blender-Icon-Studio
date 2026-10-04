@@ -38,11 +38,22 @@ def material(preset: str) -> dict:
     return mats.get(preset) or mats["liquid_glass"]
 
 
+# param names of projects / looks saved before the single-Principled schema (PLAN §11) -> Principled params
+LEGACY_PARAMS = {"frost": "roughness", "coat": "coatWeight", "subsurface": "subsurfaceWeight",
+                 "strength": "emissionStrength", "anisotropy": "anisotropic", "sheen": "sheenWeight",
+                 "film": "thinFilmThickness", "filmIor": "thinFilmIor"}
+
+
 def material_params(preset: str, overrides: Optional[dict] = None) -> dict[str, Any]:
-    """Preset param defaults overlaid with user overrides (unknown keys kept, values clamped to range)."""
+    """Preset param defaults (the Principled schema) overlaid with user overrides (unknown keys kept, values clamped
+    to range; legacy names mapped when the new name is not given)."""
     spec = material(preset).get("params", {})
     out: dict[str, Any] = {k: v.get("default") for k, v in spec.items()}
-    for k, v in (overrides or {}).items():
+    ov = dict(overrides or {})
+    for old, new in LEGACY_PARAMS.items():
+        if old in ov and new not in ov:
+            ov[new] = ov.pop(old)
+    for k, v in ov.items():
         if v is None:
             continue
         p = spec.get(k)
@@ -62,8 +73,22 @@ def material_params(preset: str, overrides: Optional[dict] = None) -> dict[str, 
     return out
 
 
-def paint_mode(preset: str) -> str:
-    return material(preset).get("paint", "base")
+def resolve_material(layer_material: Optional[dict], element_material: Optional[dict] = None) -> tuple[str, dict]:
+    """(preset, full params) of one shape: the preset's defaults, then the layer's params, then the shape's own
+    (Layer.elementMaterials[elementId]). A shape override with ANOTHER preset starts from that preset's defaults (the
+    layer's params were tuned for its own preset and do not carry over). Unknown presets -> liquid_glass."""
+    lm = layer_material or {}
+    preset = str(lm.get("preset") or "liquid_glass")
+    params = dict(lm.get("params") or {})
+    em = element_material or {}
+    if em:
+        ep = str(em.get("preset") or preset)
+        if ep != preset:
+            preset, params = ep, {}
+        params.update(em.get("params") or {})
+    if preset not in load()["materials"]:
+        preset = "liquid_glass"
+    return preset, material_params(preset, params)
 
 
 def lighting(preset: str) -> dict:
@@ -76,8 +101,8 @@ def quality(tier: str) -> dict:
     return q.get(tier) or q["draft"]
 
 
-# render.colorMode the worker uses when a project carries none (commands._project). models.RenderSettings still
-# defaults to 'neutral' (a contract change the server owns); this is the round-5 'brand' decision.
+# render.colorMode the worker uses when a project carries none (commands._project) — the same default as
+# models.RenderSettings (the round-5 'brand' decision).
 DEFAULT_COLOR_MODE = "brand"
 
 

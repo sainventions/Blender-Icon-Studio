@@ -1,94 +1,57 @@
-// The icon plate: parametric outline (squircle / circle / rounded / square) extruded with a round bevel, front face at
-// z = 0, back face at −thickness (PLAN §3). Its fill is drawn in canvas space; glass plate materials (clear
-// renditions) render as fake glass over the backdrop so the layers above can still refract them.
+// The icon plate (worker scene._plate): a height-field body over the parametric outline (squircle / circle / rounded /
+// square) with a round edge, front face at z = 0, back at −thickness (PLAN §3), ONE Principled material from
+// plate.material painted by the plate fill (canvas space). A glass plate covered by glass layers is drawn opaque with
+// what lies behind it (three.js has no transmission through transmission).
 import { memo, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import type { Canvas as CanvasSpec, Presets } from '../../types'
-import {
-  applyIconMaterial,
-  blendInOpaquePass,
-  BLENDED_RENDER_ORDER,
-  describeMaterial,
-  IconMaterial,
-  type FakeGlassBinding,
-  type PaintTransform,
-} from '../../lib/materials3d'
+import { applyPrincipled, BLENDED_RENDER_ORDER, isTransmissive, PrincipledMaterial, resolveMaterial } from '../../lib/materials3d'
 import { useCached } from '../refCache'
-import { buildPlateGeometry, geometryCache, plateGeometryKey, plateParams } from '../geometry/layerGeometry'
-import { createWallpaperTexture, WALLPAPER_EXTENT } from '../textures/procedural'
+import { bodyCache, buildPlateBody, plateGeometryKey, plateParams } from '../geometry/layerGeometry'
 import type { ResolvedPaint } from './usePaint'
 
 interface Props {
   canvas: CanvasSpec
   presets: Presets | null
   paint: ResolvedPaint
-  /** Backdrop seen through a glass plate. */
-  behind: FakeGlassBinding
-  rimDir: THREE.Vector3
-  /** Liquid Glass self-illumination (worker `lit`). */
-  lit: number
-  /** Paint pre-compensation for the colour mode's view transform (worker display_paint). */
-  displayPaint: PaintTransform
+  /** Glass layers above a glass plate: draw it opaque × this colour (what lies behind it). Null = real transmission. */
+  covered: THREE.Color | null
 }
 
-export const Plate = memo(function Plate({ canvas, presets, paint, behind, rimDir, lit, displayPaint }: Props) {
+export const Plate = memo(function Plate({ canvas, presets, paint, covered }: Props) {
   const invalidate = useThree((s) => s.invalidate)
   const params = plateParams(canvas.shape, canvas.cornerRadius, canvas.plate)
   const key = plateGeometryKey(params)
-  const geometry = useCached(geometryCache, key, () => buildPlateGeometry(params))
-  const material = useMemo(() => new IconMaterial(), [])
+  const body = useCached(bodyCache, key, () => buildPlateBody(params))
+  const material = useMemo(() => new PrincipledMaterial(), [])
   const meshRef = useRef<THREE.Mesh>(null)
-  const blended = useRef(false)
   useEffect(() => () => material.dispose(), [material])
-
-  const spec = useMemo(() => describeMaterial(canvas.plate.material, presets), [canvas.plate.material, presets])
-  // Over a rendition wallpaper a glass plate uses the worker's backdrop-glass model (frosted pane, see FakeGlassBinding):
-  // the wallpaper as seen through the frost (blobs spread out), × glass colour, screened by the frost's scatter.
-  const frost = spec.transmission > 0 ? Math.round(spec.roughness * 100) / 100 : 0
-  const frosted = useMemo(
-    () => (behind.tone && behind.space === 'canvas' ? createWallpaperTexture(behind.tone, behind.extent ?? WALLPAPER_EXTENT, 256, frost) : null),
-    [behind.tone, behind.space, behind.extent, frost],
-  )
-  useEffect(() => () => frosted?.dispose(), [frosted])
-  const fake = useMemo<FakeGlassBinding>(
-    () => (behind.tone && frosted ? { ...behind, map: frosted, backdropGlass: true } : behind),
-    [behind, frosted],
-  )
+  const principled = useMemo(() => resolveMaterial(canvas.plate.material, null, presets).params, [canvas.plate.material, presets])
 
   useLayoutEffect(() => {
-    applyIconMaterial(material, spec, {
+    applyPrincipled(material, principled, {
       paint: paint.binding,
-      thickness: canvas.plate.thickness,
-      // The plate is always the bottom-most surface: a glass plate is faked over the backdrop.
-      fake,
-      rimDir,
-      opacity: paint.opacity,
-      lit,
-      displayPaint,
-      plate: true, // worker spec 'plate': no white-ice / white-milk body
+      opacity: 1,
+      thickness: Math.max(1e-4, canvas.plate.thickness),
+      covered,
     })
-    // A semi-transparent plate fill must stay in the opaque pass, or glass layers would neither show nor refract it.
-    material.blending = THREE.NormalBlending // undo an earlier routing (fill opacity back to 1)
-    const routed = blendInOpaquePass(material)
-    if (routed !== blended.current) {
-      blended.current = routed
-      material.needsUpdate = true
-    }
-    if (meshRef.current) meshRef.current.renderOrder = routed ? BLENDED_RENDER_ORDER.plate : 0
+    if (meshRef.current) meshRef.current.renderOrder = material.routed ? BLENDED_RENDER_ORDER.plate : 0
     invalidate()
-  }, [material, spec, paint, fake, rimDir, lit, displayPaint, canvas.plate.thickness, invalidate])
+  }, [material, principled, paint, covered, canvas.plate.thickness, invalidate])
 
-  if (!canvas.plate.visible || canvas.shape === 'none' || paint.none || !geometry) return null
+  if (!canvas.plate.visible || canvas.shape === 'none' || paint.none || !body) return null
   return (
     <mesh
       ref={meshRef}
       name="plate"
-      geometry={geometry}
+      geometry={body.geometry}
       material={material}
-      receiveShadow
+      position-z={-Math.max(0, canvas.plate.thickness) / 2}
+      // a glass plate mostly shows what lies behind it: the key's shadow on it is faint in Cycles
+      receiveShadow={!isTransmissive(principled)}
       castShadow={false}
-      renderOrder={blended.current ? BLENDED_RENDER_ORDER.plate : 0}
+      renderOrder={material.routed ? BLENDED_RENDER_ORDER.plate : 0}
     />
   )
 })

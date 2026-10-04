@@ -6,6 +6,7 @@ worker (GPU rule: ≤ 256 px drafts).
 from __future__ import annotations
 
 import io
+import json
 import os
 import sys
 import time
@@ -301,6 +302,63 @@ def test_same_project_twice_keeps_both_exports(ctx):
     assert len(set(urls)) == 2 and all(c.get(u).status_code == 200 for u in urls)
     names = set(zipfile.ZipFile(io.BytesIO(c.get(job["result"]["zip"]).content)).namelist())
     assert {"Icon Pack/Calculator/web/favicon.ico", "Icon Pack/Calculator (2)/web/favicon.ico"} <= names
+
+
+@needs_svg
+def test_batch_applies_a_principled_style_and_cad_view_heroes(ctx):
+    """PLAN 11: a pasted (legacy) style is cleaned to the Principled schema before it reaches any icon, per-shape
+    tweaks give way to the look, shadows are physical, and the pack's marketing heroes are the CAD-style POV
+    (iso 0.55 + isometric, real distances)."""
+    c = ctx.client
+    schema = set(json.loads((ROOT / "shared" / "presets.json").read_text(encoding="utf-8"))
+                 ["materials"]["liquid_glass"]["params"])
+    calc = c.get(f"/api/projects/{c.post('/api/projects', json={'sample': 'Calculator'}).json()['id']}").json()
+    first = calc["layers"][0]
+    first["elementMaterials"] = {first["elementIds"][0]: {"preset": "chrome", "params": {"roughness": 0.1}}}
+    assert c.put(f"/api/projects/{calc['id']}", json=calc).json()["layers"][0]["elementMaterials"]
+    style = {"layerDefaults": {"material": {"preset": "frosted_glass", "params": {"frost": 0.3, "glow": 1.0}},
+                               "shadow": {"kind": "chromatic", "opacity": 0.5}},
+             "plate": {"material": {"preset": "satin", "params": {"rim": 2.0, "coatWeight": 0.4}}},
+             "camera": {"iso": 0.0, "explode": 2.0}}
+    r = c.post("/api/batch", json={"sources": [{"projectId": calc["id"]}, {"sample": "Maps"}], "style": style,
+                                   "size": 32, "export": {"targets": ["marketing"], "appearances": ["light"],
+                                                          "quality": "draft"}})
+    assert r.status_code == 200, r.text
+    job = wait_job(c, r.json()["id"], timeout=180)
+    assert job["state"] == "done" and job["result"]["failed"] == 0, job
+    for it in job["result"]["items"]:
+        p = c.get(f"/api/projects/{it['projectId']}").json()
+        for l in p["layers"]:
+            assert l["material"] == {"preset": "frosted_glass", "params": {"roughness": 0.3}}
+            assert l["elementMaterials"] == {} and l["shadow"]["kind"] == "physical"
+            assert set(l["material"]["params"]) <= schema
+        assert p["canvas"]["plate"]["material"]["params"] == {"coatWeight": 0.4} and p["camera"]["explode"] == 1.0
+    renders = [a for _m, cmd, a in ctx.bridge.calls if cmd == "render"]
+    assert all(a["project"]["camera"]["explode"] == 1.0 for a in renders)
+    heroes = sorted(a["camera"]["iso"] for a in renders if (a.get("camera") or {}).get("iso", 0) > 0)
+    assert heroes == [0.55, 0.55, 1.0, 1.0]                            # hero + hero-iso for each of the 2 icons
+    names = set(zipfile.ZipFile(io.BytesIO(c.get(job["result"]["zip"]).content)).namelist())
+    assert {"Icon Pack/Maps/marketing/hero.png", "Icon Pack/Maps/marketing/hero-iso.png"} <= names
+    assert not any("exploded" in n for n in names)
+
+
+@needs_svg
+def test_batch_render_from_a_cad_pov_keeps_the_head_on_thumbnail(ctx):
+    """PLAN §11: the library thumbnail is the head-on icon. A pack item whose project sits in the CAD-style POV
+    (camera.iso > 0 - its own, or copied with a fromProject style) still renders, but never replaces it."""
+    c = ctx.client
+    p = c.post("/api/projects", json={"sample": "Maps", "strategy": "single"}).json()
+    thumb = ctx.settings.projects_dir / p["id"] / "thumbnail.png"
+    p["camera"]["iso"] = 0.6
+    assert c.put(f"/api/projects/{p['id']}", json=p).status_code == 200
+    before = thumb.read_bytes()
+    job = wait_job(c, c.post("/api/batch", json={"sources": [{"projectId": p["id"]}], "size": 48}).json()["id"])
+    assert job["state"] == "done" and job["result"]["items"][0]["renderUrl"], job
+    assert thumb.read_bytes() == before
+    p["camera"]["iso"] = 0.0
+    assert c.put(f"/api/projects/{p['id']}", json=p).status_code == 200
+    job = wait_job(c, c.post("/api/batch", json={"sources": [{"projectId": p["id"]}], "size": 48}).json()["id"])
+    assert job["state"] == "done" and thumb.read_bytes() != before
 
 
 # ---------------------------------------------------------------------------------------------- real Blender

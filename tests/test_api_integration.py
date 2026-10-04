@@ -24,6 +24,7 @@ from PIL import Image  # noqa: E402
 from bis.blender import FakeBridge  # noqa: E402
 from bis.main import create_app  # noqa: E402
 from bis.testing import make_test_settings  # noqa: E402
+from bis.util import files_path  # noqa: E402
 
 
 def _real_svg() -> bool:
@@ -143,6 +144,46 @@ def test_real_blender_small_export(tmp_path):
         mac = Image.open(out / "macos/AppIcon.iconset/icon_512x512@2x.png").convert("RGBA")
         assert mac.getpixel((20, 512))[3] == 0 and mac.getpixel((512, 512))[3] > 200
         print(f"\nreal export: {job['result']['masters']} masters in {job['result']['seconds']:.1f}s")
+
+
+def _alpha_aspect(im: Image.Image) -> float:
+    """height / width of the rendered subject (alpha bbox)."""
+    x0, y0, x1, y1 = im.convert("RGBA").getchannel("A").point(lambda a: 255 if a > 32 else 0).getbbox()
+    return (y1 - y0) / max(1, x1 - x0)
+
+
+@pytest.mark.skipif(not REAL, reason="set BIS_REAL_BLENDER=1 to run against real Blender 5.0 (GPU)")
+@pytest.mark.skipif(not _real_svg(), reason="bis.svg (workstream A) not importable yet")
+def test_real_blender_cad_pov_heroes_and_iso_animation(tmp_path):
+    """PLAN §11 View, end to end: the marketing heroes really ARE the CAD-style POV - head-on → hero (iso 0.55) →
+    hero-iso (isometric) foreshorten the square plate more and more (orthographic, real distances) - and the 'iso'
+    animation (also reached through the legacy 'explode' kind) moves the camera. Before the worker honoured
+    camera.iso, both heroes and every animation frame came out as the same head-on picture."""
+    settings = make_test_settings(tmp_path, blender_exe="__auto__", start_worker=False, auto_preview=False,
+                                  export_max_size=96)
+    if not settings.blender_found or not settings.oneshot_script.is_file():
+        pytest.skip("Blender 5.0 / blender_worker not available")
+    app = create_app(settings)
+    with TestClient(app) as c:
+        pid = c.post("/api/projects", json={"sample": "Gemini"}).json()["id"]
+        job = wait_job(c, c.post(f"/api/projects/{pid}/export", json={
+            "targets": ["marketing", "macos"], "appearances": ["light"], "quality": "draft"}).json()["id"], 900)
+        assert job["state"] == "done", job
+        out = Path(job["result"]["folder"])
+        head = Image.open(out / "macos/AppIcon.iconset/icon_512x512@2x.png")      # head-on master, same plate
+        hero = Image.open(out / "marketing/hero.png")
+        iso = Image.open(out / "marketing/hero-iso.png")
+        a_head, a_hero, a_iso = _alpha_aspect(head), _alpha_aspect(hero), _alpha_aspect(iso)
+        assert a_head > 0.9 and a_iso < 0.8 and a_iso + 0.03 < a_hero < a_head - 0.03, (a_head, a_hero, a_iso)
+
+        anim = wait_job(c, c.post(f"/api/projects/{pid}/animate", json={
+            "kind": "explode", "frames": 3, "size": 64, "quality": "draft", "format": "png"}).json()["id"], 600)
+        assert anim["state"] == "done" and anim["result"]["kind"] == "iso", anim
+        frames = [Image.open(files_path(settings.workspace, u)) for u in anim["result"]["frames"]]
+        aspects = [_alpha_aspect(f) for f in frames]
+        assert len(frames) == 3 and min(aspects) < max(aspects) - 0.1, aspects   # the POV really moves
+        print(f"\nCAD POV aspect h/w: head-on {a_head:.2f}, hero {a_hero:.2f}, hero-iso {a_iso:.2f}; "
+              f"iso animation frames {[round(a, 2) for a in aspects]}")
 
 
 @pytest.mark.skipif(not _real_svg(), reason="bis.svg (workstream A) not importable yet")

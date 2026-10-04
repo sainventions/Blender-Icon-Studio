@@ -51,9 +51,10 @@ def tier(quality: str) -> dict:
 
 
 def configure(scene: bpy.types.Scene, quality: str, size: Optional[int], *, transparent: bool,
-              color_mode: str = "neutral", max_frost: float = 0.0, volume: bool = False,
+              color_mode: str = "neutral", max_glass_roughness: float = 0.0,
               samples: Optional[int] = None) -> dict:
-    """Apply a quality tier + output settings. Returns the effective settings."""
+    """Apply a quality tier + output settings. Returns the effective settings. ``max_glass_roughness``: the
+    roughest transmissive surface (a transparent backdrop keeps glass up to it see-through)."""
     t = tier(quality)
     px = int(size or t["size"])
     px = max(16, min(MAX_SIZE, px))
@@ -99,9 +100,12 @@ def configure(scene: bpy.types.Scene, quality: str, size: Optional[int], *, tran
         cy.transparent_max_bounces = tpb
         cy.glossy_bounces = gb
         cy.diffuse_bounces = db
-        cy.volume_bounces = 2 if volume else 0
-        cy.caustics_reflective = False
-        cy.caustics_refractive = False
+        cy.volume_bounces = 0                      # no volume shaders (PLAN §11: one Principled BSDF)
+        # physical glass (PLAN §11): light reaches what lies beneath / behind glass through it — without caustic paths
+        # every glass body cast a black shadow and read as dark smoked glass. Plain path-traced caustics (filter
+        # flags, no kernel feature); MNEE (shadow caustics, a 164 s OptiX kernel compile) stays off
+        cy.caustics_reflective = True
+        cy.caustics_refractive = True
         preview = t["name"] == "preview"
         # preview: filter-glossy + albedo-guided denoise remove the glass "sparkle" at 48 spp (the normal
         # pass made the OptiX denoiser keep it); finals have the samples for full normal guidance
@@ -110,7 +114,7 @@ def configure(scene: bpy.types.Scene, quality: str, size: Optional[int], *, tran
         cy.denoising_input_passes = "RGB_ALBEDO" if preview else "RGB_ALBEDO_NORMAL"
         cy.sample_clamp_direct = 0.0
         cy.film_transparent_glass = bool(transparent)
-        cy.film_transparent_roughness = max(0.1, min(1.0, max_frost + 0.05))
+        cy.film_transparent_roughness = max(0.1, min(1.0, max_glass_roughness + 0.05))
         cy.pixel_filter_type = "BLACKMAN_HARRIS"
         cy.filter_width = 1.5 if t["name"] != "preview" else 1.3
         cy.use_auto_tile = True
@@ -341,7 +345,7 @@ def device_label(engine: str) -> str:
 # ------------------------------------------------------------------------------------------------
 # animations: per-frame scene overrides (fast incremental rebuild) -> PNG frames -> optional MP4
 # ------------------------------------------------------------------------------------------------
-ANIM_KINDS = ("turntable", "tilt", "float", "light-sweep", "explode")
+ANIM_KINDS = ("turntable", "tilt", "float", "light-sweep", "iso", "explode")
 
 
 def frame_overrides(kind: str, t: float, base_camera: dict, base_angle: float, layer_ids: list) -> dict:
@@ -357,9 +361,10 @@ def frame_overrides(kind: str, t: float, base_camera: dict, base_angle: float, l
         return {"camera": {**persp, "tiltX": 4.0 * s, "tiltY": 6.0 * c}, "layerZ": dz}
     if kind == "light-sweep":
         return {"lightAngle": base_angle + 80.0 * s}
-    if kind == "explode":
-        e = 0.5 - 0.5 * c   # 0 -> 1 -> 0
-        return {"camera": {**persp, "tiltX": 22.0 * e, "tiltY": -32.0 * e}, "explode": 1.0 + 2.2 * e}
+    if kind in ("iso", "explode"):
+        # CAD-style POV (PLAN §11): head-on -> isometric -> head-on, real z distances (camera.iso; 'explode' is the
+        # legacy alias — layers are never spread apart)
+        return {"camera": {"view": "front", "iso": 0.5 - 0.5 * c}}
     raise ValueError(f"unknown animation kind {kind!r}")
 
 

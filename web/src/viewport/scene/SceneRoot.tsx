@@ -1,32 +1,21 @@
-// Everything inside the <Canvas>: backdrop, studio lighting, camera rig, plate, layer stack, grid, post FX.
-import { useCallback, useEffect, useMemo, useRef } from 'react'
-import { useFrame, useThree } from '@react-three/fiber'
+// Everything inside the <Canvas>: backdrop, studio lighting, camera rig (CAD iso view / orbit), plate, layer stack,
+// grid, post FX. Shapes are physical height-field bodies with ONE Principled material each (PLAN §11).
+import { useCallback, useMemo, useRef } from 'react'
+import { useThree } from '@react-three/fiber'
 import * as THREE from 'three'
-import type { AppearanceId, Fill, GeometryBundle, LayerTransform, Paint, Presets, Project } from '../../types'
-import { appearanceWallpaper, isDarkAppearance, monoLutsFor } from '../../lib/appearance'
+import type { AppearanceId, Fill, GeometryBundle, LayerTransform, Presets, Project } from '../../types'
+import { appearanceWallpaper, isDarkAppearance } from '../../lib/appearance'
 import { plateOutline } from '../../lib/shapes'
-import { liquidGlassLit, monoLutTexture, paintTransformFor, type FakeGlassBinding } from '../../lib/materials3d'
-import { filmParamsFor, flushParams } from '../../lib/overlay3d'
-import { touchingOpaque } from '../geometry/layerGeometry'
-import { Backdrop, useBackdropBinding, useWallpaperBehind, type BackdropSpec, type StageElementGetter } from './Backdrop'
+import { bloomAmount, isTransmissive, resolveMaterial, type MonoParams } from '../../lib/materials3d'
+import { Backdrop, useBackdropBinding, wallpaperColor, type BackdropSpec, type StageElementGetter } from './Backdrop'
 import { CameraRig } from './CameraRig'
-import { colorModeId, displayTransformFor } from './displayTransform'
+import { displayTransformFor } from './displayTransform'
 import { Effects } from './Effects'
 import { GridOverlay } from './GridOverlay'
-import {
-  LayerBody,
-  buildStack,
-  iconLumRange,
-  stackFramePoints,
-  stackTop,
-  type MonoLutTextures,
-  type PlateFrame,
-  type StackEntry,
-} from './LayerStack'
+import { LayerBody, buildStack, stackFramePoints, stackTop, type PlateFrame, type StackEntry } from './LayerStack'
 import { Plate } from './Plate'
-import { lightDir, resolveRig } from './rig'
+import { resolveRig } from './rig'
 import { StudioLighting } from './StudioLighting'
-import { damp, useViewportStore } from './store'
 import { fillPreviewColor, usePaint } from './usePaint'
 
 export interface SceneRootProps {
@@ -38,75 +27,19 @@ export interface SceneRootProps {
   selectedLayerId: string | null
   onSelectLayer: (id: string | null) => void
   onLayerTransform?: (id: string, t: LayerTransform) => void
-  explode: number
+  /** CAD iso view amount (0 head-on .. 1 isometric). */
+  iso: number
   view: 'front' | 'orbit'
   showGrid: boolean
+  /** Tinted renditions: the worker's env mono (lib/appearance.appearanceMono). */
+  mono: MonoParams | null
   /** Element whose CSS background the transparent (checker) backdrop continues — see Backdrop.tsx. */
   stage?: StageElementGetter
 }
 
-/** Representative linear paint of a layer (fill override or the mean of its region paints), as the worker's paint_rgb. */
-function layerPaintLinear(entry: StackEntry): [number, number, number] {
-  const f = entry.layer.fill
-  const cols: string[] = []
-  const add = (p: Fill | Paint | null | undefined) => {
-    if (!p) return
-    if (p.type === 'solid') cols.push(p.color)
-    else if (p.type === 'linear' || p.type === 'radial') p.stops.forEach((st) => cols.push(st.color))
-  }
-  if (f.type === 'auto') entry.lg.regions.forEach((r) => add(r.paint))
-  else add(f)
-  if (!cols.length) return [1, 1, 1]
-  const c = new THREE.Color()
-  const sum = [0, 0, 0]
-  for (const h of cols) {
-    c.setStyle(h)
-    sum[0] += c.r
-    sum[1] += c.g
-    sum[2] += c.b
-  }
-  return [sum[0] / cols.length, sum[1] / cols.length, sum[2] / cols.length]
-}
-
-/** Worker _shadow_color as a grey shadow strength: opacity × (1 − Y(target)) (see shadowStrength). */
-export function shadowAmount(entry: StackEntry): number {
-  const sh = entry.layer.shadow
-  if (sh.kind === 'none') return 0
-  let op = Math.max(0, Math.min(1, sh.opacity))
-  if (entry.spec.unlit) op *= 0.6
-  const strength = entry.spec.transmission > 0 ? 0.85 : 0.95
-  let y = 1 - strength
-  if (sh.kind === 'chromatic') {
-    // HSV(hue, saturation, 0.72) of the paint = the paint scaled to a peak of 0.72 (black: grey 0.72)
-    const c = layerPaintLinear(entry)
-    const mx = Math.max(...c)
-    const t = mx > 1e-6 ? c.map((v) => (0.72 * v) / mx) : [0.72, 0.72, 0.72]
-    y = 0.2126 * t[0] + 0.7152 * t[1] + 0.0722 * t[2]
-  }
-  return op * (1 - y)
-}
-
-function ExplodeDriver({ target }: { target: number }) {
-  const store = useViewportStore()
-  const invalidate = useThree((s) => s.invalidate)
-  useEffect(() => {
-    store.explode.target = Math.max(0, Math.min(1, Number.isFinite(target) ? target : 0))
-    invalidate()
-  }, [store, target, invalidate])
-  useFrame((state, dt) => {
-    const ex = store.explode
-    if (ex.current === ex.target) return
-    const next = damp(ex.current, ex.target, 7, dt)
-    ex.current = Math.abs(next - ex.target) < 5e-4 ? ex.target : next
-    state.invalidate()
-  }, -2)
-  return null
-}
-
 /**
  * Like the worker: clear / tinted renditions always have their wallpaper behind the icon (glass refracts it); a
- * 'wallpaper' backdrop shows it for every rendition. An explicit colour backdrop wins; 'transparent' = checker,
- * except where the wallpaper is part of the rendition (it is what the frosted plate shows through itself).
+ * 'wallpaper' backdrop shows it for every rendition. An explicit colour backdrop wins; 'transparent' = checker.
  */
 function backdropSpec(project: Project, appearance: AppearanceId): BackdropSpec {
   const r = project.render
@@ -117,10 +50,22 @@ function backdropSpec(project: Project, appearance: AppearanceId): BackdropSpec 
   return { kind: 'checker' }
 }
 
+/**
+ * Live shadow darkness of one layer (the key's VSM map is grey and shared): Cycles casts a real shadow whose glass
+ * share is partly filled by the light the body transmits (caustics are on in every tier), so transmissive casters
+ * cast lighter shadows. `none` casts nothing (worker: visible_shadow False).
+ */
+export function shadowAmount(entry: StackEntry): number {
+  if (entry.layer.shadow?.kind === 'none') return 0
+  let t = 0
+  for (const p of entry.params.values()) t = Math.max(t, p.transmission)
+  return 1 - 0.45 * t
+}
+
 export function SceneRoot(p: SceneRootProps) {
   const { project, geometry, presets } = p
   const { canvas, lighting } = project
-  const gl = useThree((s) => s.gl)
+  const dpr = useThree((s) => s.gl.getPixelRatio())
 
   // Stable callback identities so memoised layer bodies do not re-render on every parent render.
   const selectRef = useRef(p.onSelectLayer)
@@ -131,17 +76,8 @@ export function SceneRoot(p: SceneRootProps) {
   const onTransform = useCallback((id: string, t: LayerTransform) => transformRef.current?.(id, t), [])
 
   const rig = useMemo(() => resolveRig(lighting, presets), [lighting, presets])
-  const rimDir = useMemo(() => lightDir(rig.angle, rig.elevation), [rig.angle, rig.elevation])
-  const rimColor = useMemo(() => new THREE.Color(rig.rimColors[0] ?? '#ffffff'), [rig.rimColors])
-  // Worker `lit`: Liquid Glass self-illumination follows the key light (dark renditions: key × 0.85).
-  const lit = liquidGlassLit(rig.key)
-
-  // Backdrop + plate paint (shared: the plate fill is what lower "fake glass" layers show through themselves).
   const bspec = backdropSpec(project, p.appearance)
   const display = useMemo(() => displayTransformFor(project.render.colorMode), [project.render.colorMode])
-  // Worker display_paint: paints are pre-compensated for the colour mode's view transform ('brand': the inverse soft
-  // clip; 'neutral': inverse Khronos PBR Neutral). Missing / unknown modes are the worker's default, 'brand'.
-  const displayPaint = paintTransformFor(project.render.colorMode)
   const backdrop = useBackdropBinding(bspec, display)
   const rawPlateFill = canvas.plate.fill
   const plateFill = useMemo<Fill>(
@@ -151,43 +87,33 @@ export function SceneRoot(p: SceneRootProps) {
   const platePaint = usePaint(plateFill, null, fillPreviewColor(plateFill, '#ffffff'))
   const plateVisible = canvas.plate.visible && canvas.shape !== 'none' && !platePaint.none
 
-  const backdropBehind = backdrop.behind
-  // Like the worker, a clear / tinted rendition keeps its wallpaper under a glass plate even when the backdrop is an
-  // explicit colour (only the background outside the plate takes the colour).
-  const plateWall = useWallpaperBehind(bspec.kind === 'color' ? appearanceWallpaper(p.appearance) : null)
-  const plateBackdrop = plateWall ?? backdropBehind
-  const plateBehind = useMemo<FakeGlassBinding>(() => {
-    if (!plateVisible) return backdropBehind
-    return { map: platePaint.binding.map, color: platePaint.binding.color.clone(), space: 'canvas' }
-  }, [plateVisible, platePaint, backdropBehind])
-
   const stack = useMemo(
-    () => buildStack(project.layers, geometry?.layers, canvas.art, project.camera.explode ?? 1, presets),
-    [project.layers, geometry, canvas.art, project.camera.explode, presets],
+    () => buildStack(project.layers, geometry?.layers, canvas.art, presets, plateVisible),
+    [project.layers, geometry, canvas.art, presets, plateVisible],
   )
-  const top = useCallback((e: number) => stackTop(stack, e), [stack])
-  const lumRange = useMemo(() => iconLumRange(stack), [stack])
-  const intentLum = useMemo<[number, number]>(() => lumRange, [lumRange[0], lumRange[1]]) // eslint-disable-line react-hooks/exhaustive-deps
-  // Round 5 mono maps (worker env mono / monoCombined `lut`) of the clear / tinted renditions, over every visible paint.
-  const effAppearance = canvas.platform === 'watchos' ? 'light' : p.appearance // watchOS ignores appearances
-  const monoLuts = useMemo<MonoLutTextures | null>(() => {
-    const luts = monoLutsFor(effAppearance, project.layers, geometry?.layers)
-    return luts ? { mono: monoLutTexture(luts.mono), combined: monoLutTexture(luts.combined) } : null
-  }, [effAppearance, project.layers, geometry])
-  // Round 5 (worker scene._flush_params / _film_params): Liquid Glass flush with the plate outline, and translucent
-  // Liquid Glass pieces as display-space blend films (light / dark renditions).
-  const flushShape = plateVisible ? canvas.shape : 'none'
-  const flush = useMemo(
-    () => flushParams(project.layers, geometry?.layers, canvas, flushShape),
-    [project.layers, geometry, canvas, flushShape],
+  const plateParams = useMemo(() => resolveMaterial(canvas.plate.material, null, presets).params, [canvas.plate.material, presets])
+
+  // What covered glass shows through itself (three.js has no transmission through transmission): under the plate the
+  // backdrop (the rendition wallpaper is kept under a glass plate even when the backdrop is a colour); under the layers
+  // the plate — its paint, or for a glass plate its base colour over that backdrop.
+  const wall = appearanceWallpaper(p.appearance)
+  const plateGlass = plateVisible && isTransmissive(plateParams)
+  const glassLayers = stack.some((e) => e.transmissive)
+  const behindPlate = useMemo(
+    () => (bspec.kind === 'color' && wall ? wallpaperColor(wall) : backdrop.color.clone()),
+    [bspec.kind, wall, backdrop.color],
   )
-  const cm = colorModeId(project.render.colorMode)
-  const films = useMemo(
-    () => filmParamsFor(project, geometry?.layers, cm, monoLuts !== null, touchingOpaque, canvas.shape),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [project.layers, project.canvas, geometry, cm, monoLuts],
-  )
-  // Camera framing hull: the plate outline (front + back face) and every layer box at a given explode amount.
+  const plateCovered = plateGlass && glassLayers ? behindPlate : null
+  const behindLayers = useMemo(() => {
+    if (!plateVisible) return backdrop.color.clone()
+    const paint = platePaint.binding.color
+    if (!plateGlass) return paint.clone()
+    const base = new THREE.Color(1, 1, 1).lerp(paint, Math.max(0, Math.min(1, plateParams.tint)))
+    return base.multiply(behindPlate)
+  }, [plateVisible, plateGlass, platePaint, plateParams.tint, behindPlate, backdrop.color])
+
+  // Camera framing hull: the plate outline (front + back face) or the canvas square, and every layer's hull at its
+  // real z span (worker subject_points).
   const plateFrame = useMemo<PlateFrame | null>(
     () =>
       plateVisible
@@ -195,76 +121,55 @@ export function SceneRoot(p: SceneRootProps) {
         : null,
     [plateVisible, canvas.shape, canvas.cornerRadius, canvas.plate.thickness],
   )
-  const framePoints = useCallback(
-    (e: number, out: number[]) => stackFramePoints(stack, e, plateFrame, out),
-    [stack, plateFrame],
-  )
-  // Worker _shadow_color: a shadow ray loses opacity × (1 − luminance of the target transmittance) of the light —
-  // neutral: 0.85 (glass) / 0.95 (solids); chromatic: the paint's hue at HSV value 0.72 (light paints cast faint
-  // coloured shadows) — × 0.6 for unlit `flat` layers. One (grey) shadow map serves all layers: the strongest caster
-  // sets the darkness.
-  const shadowStrength = useMemo(() => {
+  const framePoints = useCallback((out: number[]) => stackFramePoints(stack, plateFrame, out), [stack, plateFrame])
+  const shadowIntensity = useMemo(() => {
     let k = 0
     for (const s of stack) k = Math.max(k, shadowAmount(s))
     return k
   }, [stack])
-  const bloom = useMemo(() => Math.max(0, ...stack.map((s) => s.spec.bloom)), [stack])
-  const bloomIds = useMemo(() => stack.filter((s) => s.spec.bloom > 0).map((s) => s.layer.id), [stack])
-  const dpr = gl.getPixelRatio()
+  const casterHeight = useMemo(() => {
+    let h = 0
+    for (const s of stack) if (shadowAmount(s) > 0) h = Math.max(h, s.height)
+    return h
+  }, [stack])
+  const bloom = useMemo(() => bloomAmount(stack.flatMap((s) => [...s.params.values()])), [stack])
+  const bloomIds = useMemo(
+    () =>
+      stack
+        .filter((s) => [...s.params.values()].some((q) => q.paintMode !== 'base' && q.emissionStrength > 1))
+        .map((s) => s.layer.id),
+    [stack],
+  )
 
   return (
     <>
-      <ExplodeDriver target={p.explode} />
       <Backdrop binding={backdrop} zoom={project.camera.zoom || 1} display={display} stage={p.stage} />
-      <StudioLighting rig={rig} shadowStrength={shadowStrength} shadows={shadowStrength > 0} />
+      <StudioLighting rig={rig} shadowIntensity={shadowIntensity} casterHeight={casterHeight} />
       <CameraRig
         view={p.view}
         zoom={project.camera.zoom || 1}
         fov={project.camera.fov || 30}
+        iso={p.iso}
         points={framePoints}
       />
       <group name="icon">
-        {plateVisible && (
-          <Plate
-            canvas={canvas}
-            presets={presets}
-            paint={platePaint}
-            behind={plateBackdrop}
-            rimDir={rimDir}
-            lit={lit}
-            displayPaint={displayPaint}
-          />
-        )}
+        {plateVisible && <Plate canvas={canvas} presets={presets} paint={platePaint} covered={plateCovered} />}
         {stack.map((entry) => (
           <LayerBody
             key={entry.layer.id}
             entry={entry}
             art={canvas.art}
-            plateBehind={plateBehind}
-            rimDir={rimDir}
-            rimColor={rimColor}
             view={p.view}
             draggable={!!p.onLayerTransform}
             onSelect={onSelect}
             onTransform={onTransform}
-            intentLum={intentLum}
-            monoLuts={monoLuts}
-            flush={flush.get(entry.layer.id) ?? null}
-            films={films}
-            presets={presets}
-            lit={lit}
-            displayPaint={displayPaint}
+            mono={p.mono}
+            behind={behindLayers}
           />
         ))}
       </group>
       {p.showGrid && (
-        <GridOverlay
-          shape={canvas.shape}
-          cornerRadius={canvas.cornerRadius}
-          platform={canvas.platform}
-          z={stackTop(stack, 0) + 0.01}
-          stackTop={top}
-        />
+        <GridOverlay shape={canvas.shape} cornerRadius={canvas.cornerRadius} platform={canvas.platform} z={stackTop(stack) + 0.01} />
       )}
       <Effects
         colorMode={project.render.colorMode}

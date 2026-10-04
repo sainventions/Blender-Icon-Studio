@@ -1,5 +1,5 @@
 // Per-viewport mutable state that must not re-render the whole scene: hover, the mesh registry used by the
-// selection/hover outlines, animated values (explode) and the active drag.
+// selection/hover outlines, animated values (the CAD iso view amount) and the active drag.
 import { createContext, useContext } from 'react'
 import type * as THREE from 'three'
 
@@ -9,8 +9,8 @@ export class ViewportStore {
   hovered: string | null = null
   /** layerId → meshes of that layer (outline selection sets). */
   readonly meshes = new Map<string, Set<THREE.Mesh>>()
-  /** Animated UI explode (0..1), damped toward `target` every frame. */
-  readonly explode = { current: 0, target: 0 }
+  /** Animated CAD iso view amount (0 = head-on .. 1 = isometric), damped toward `target` every frame. */
+  readonly iso = { current: 0, target: 0 }
   /** Layer being dragged (front view) — suppresses hover outlines while moving. */
   dragging: string | null = null
   version = 0
@@ -86,6 +86,3 @@ export function damp(current: number, target: number, lambda: number, dt: number
   // dt is capped: in demand-driven rendering the first frame after idle reports the whole idle time.
   return target + (current - target) * Math.exp(-lambda * Math.min(dt, 1 / 30))
 }
-
-/** Layer z spread per stack level at explode = 1 (art units). */
-export const EXPLODE_SPREAD = 0.42

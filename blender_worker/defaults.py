@@ -16,12 +16,12 @@ from typing import Any, Optional
 # ------------------------------------------------------------------------------------------------
 LAYER_TRANSFORM = {"x": 0.0, "y": 0.0, "scale": 1.0}
 LAYER_DEPTH = {"z": 0.0, "thickness": 0.10, "bevel": 0.045, "bevelSegments": 6, "inflate": 0.0}
-LAYER_SHADOW = {"kind": "neutral", "opacity": 0.5}
+LAYER_SHADOW = {"kind": "physical", "opacity": 0.5}
 MATERIAL_SPEC = {"preset": "liquid_glass", "params": {}}
 ART_TRANSFORM = {"scale": 1.0, "x": 0.0, "y": 0.0}
 LIGHTING = {"preset": "studio", "angle": -45.0, "elevation": 50.0, "intensity": 1.0, "rim": 1.0, "fill": 1.0,
             "environment": 1.0, "shadowSoftness": 0.5}
-CAMERA = {"view": "front", "tiltX": 0.0, "tiltY": 0.0, "fov": 30.0, "zoom": 1.0, "explode": 1.0}
+CAMERA = {"view": "front", "tiltX": 0.0, "tiltY": 0.0, "fov": 30.0, "zoom": 1.0, "iso": 0.0, "explode": 1.0}
 TINT = {"color": "#3b82f6", "strength": 0.8}
 RENDER_SETTINGS = {"quality": "draft", "size": None, "colorMode": "brand", "backdrop": "transparent",
                    "backdropColor": "#1c1c22", "autoPreview": True}
@@ -97,6 +97,8 @@ def norm_layer(layer: Any, index: int = 0) -> dict:
         "transform": _over(LAYER_TRANSFORM, L.get("transform")),
         "depth": _over(LAYER_DEPTH, L.get("depth")),
         "material": norm_material(L.get("material")),
+        "elementMaterials": {str(k): norm_material(v) for k, v in _d(L.get("elementMaterials")).items()
+                             if isinstance(v, dict)},
         "shadow": _over(LAYER_SHADOW, L.get("shadow")),
     }
 

@@ -23,10 +23,12 @@ def default_bevel(safe_r: float) -> float:
 
 
 def shadow_for(members: Sequence[Elem]) -> LayerShadow:
+    """Real (Cycles) shadows on by default (PLAN §11); the opacity keeps the source drop-shadow strength for the
+    .icon export and the viewport."""
     ops = [m.shadow["opacity"] for m in members if m.shadow]
     if ops:
-        return LayerShadow(kind="neutral", opacity=round(min(1.0, max(ops) / 0.6), 4))
-    return LayerShadow(kind="neutral", opacity=DEFAULT_SHADOW_OPACITY)
+        return LayerShadow(kind="physical", opacity=round(min(1.0, max(ops) / 0.6), 4))
+    return LayerShadow(kind="physical", opacity=DEFAULT_SHADOW_OPACITY)
 
 
 def layer_name(members: Sequence[Elem]) -> str:

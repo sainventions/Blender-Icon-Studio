@@ -50,6 +50,9 @@ def _norm_tuples(x):
     {"appearances": {"dark": {}, "tint": {"color": "#ff00ff"}}},
     {"appearances": {"mono": {"layers": {"L0": {"opacity": 0.5}}}}},
     {"render": {"quality": "preview", "colorMode": "agx"}, "appearance": "tinted-dark"},
+    {"layers": [{"id": "L4", "name": "e", "elementIds": ["e1"], "material": {"preset": "satin"},
+                 "elementMaterials": {"e1": {"preset": "chrome", "params": {"roughness": 0.2}}, "e2": {}}}],
+     "camera": {"iso": 0.5}},
 ])
 def test_project_defaults_mirror_models(partial):
     raw = {**MINIMAL, **partial}

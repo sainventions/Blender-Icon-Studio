@@ -14,6 +14,13 @@ Layout of a project directory::
 
 All public methods are synchronous (file + CPU work); the API layer runs them in a thread pool. Every
 read-modify-write of a project holds that project's lock.
+
+PLAN §11 (round 6): every load and every save passes the project through ``bis.materials.normalize_project`` —
+material params outside the shared Principled schema are dropped (a few legacy params are renamed), legacy shadow
+kinds ``neutral`` / ``chromatic`` become ``physical``, ``camera.explode`` is reset to 1 and ``camera.iso`` clamped
+to 0..1, per-shape overrides of elements a layer no longer holds are dropped. Loading a legacy project.json does
+not rewrite it (the cleaned copy is served; the file follows on the next save). Layer edits (split / merge / move)
+carry ``Layer.elementMaterials`` along with their elements.
 """
 from __future__ import annotations
 
@@ -26,8 +33,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .config import Settings
+from .materials import carry_element_materials, normalize_project
 from .models import GeometryBundle, Layer, Project, SourceInfo
 from .pipeline import SvgPipeline, SvgPipelineUnavailable
+from .presets import PresetStore
 from .schemas import ProjectSummary
 from .util import (
     atomic_write_bytes,
@@ -71,9 +80,11 @@ class ProjectStore:
         settings: Settings,
         svg: SvgPipeline,
         on_event: Callable[[str, str], None] | None = None,
+        presets: PresetStore | None = None,
     ) -> None:
         self.settings = settings
         self.svg = svg
+        self.presets = presets or PresetStore(settings)
         self.root = settings.projects_dir
         self.root.mkdir(parents=True, exist_ok=True)
         self._locks: dict[str, threading.RLock] = {}
@@ -146,6 +157,9 @@ class ProjectStore:
         project = Project.model_validate(data)
         if broken:
             self._repair_layer_modes(project, broken)
+        # PLAN §11: legacy material params / shadow kinds / explode come back on the Principled contract. The
+        # cleaned copy is what everyone (UI, renders, styles) sees; the file follows on the next save.
+        normalize_project(project, self.presets)
         return project
 
     def _repair_layer_modes(self, project: Project, layer_ids: set[str]) -> None:
@@ -171,6 +185,7 @@ class ProjectStore:
 
     def save(self, project: Project, touch: bool = True, emit: bool = True) -> Project:
         d = self.dir(project.id)
+        normalize_project(project, self.presets)  # every write stays on the §11 contract (see bis.materials)
         with self.lock(project.id):
             if touch:
                 project.updatedAt = now_iso()
@@ -330,6 +345,7 @@ class ProjectStore:
     def _mutate(self, pid: str, fn: Callable[[Project, Path], None]) -> Project:
         with self.lock(pid):
             project = self.load(pid)
+            before = [l.model_copy(deep=True) for l in project.layers]
             try:
                 fn(project, self.dir(pid))
             except ProjectError:
@@ -337,6 +353,7 @@ class ProjectStore:
             except ValueError as e:  # bis.svg reports invalid edits (incl. ZOrderError) as ValueError
                 raise ProjectError(str(e)) from e
             _prune_overrides(project)
+            carry_element_materials(before, project.layers)  # per-shape materials follow their elements
             return self.save(project)
 
     def split(self, pid: str, strategy: str) -> Project:

@@ -5,7 +5,7 @@ import { APPEARANCE_IDS } from '../../lib/projectOps'
 import { useEditor } from '../../store/editor'
 import { useRender } from '../../store/render'
 import { useUi, type StageMode } from '../../store/ui'
-import { animateExplode, duplicateProject } from './actions'
+import { animateIso, duplicateProject } from './actions'
 import { copyStyle, pasteStyle } from '../looks/styleActions'
 
 export interface ShortcutDef {
@@ -27,7 +27,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { keys: '1 – 6', label: 'Switch appearance (Default, Dark, Clear Light, Clear Dark, Tinted Light, Tinted Dark)', group: 'View' },
   { keys: 'V', label: 'Cycle stage: Viewport → Render → Compare → Matrix', group: 'View' },
   { keys: 'O', label: 'Front / orbit view', group: 'View' },
-  { keys: 'X', label: 'Explode layer stack', group: 'View' },
+  { keys: 'I', label: 'Head-on ↔ isometric view (real layer distances)', group: 'View' },
   { keys: 'G', label: 'Icon grid overlay', group: 'View' },
   { keys: 'Mod+\\', label: 'Toggle side panels', group: 'View' },
   { keys: 'Mod+0', label: 'Zoom to fit', group: 'View' },
@@ -118,9 +118,9 @@ export function useEditorShortcuts() {
         case 'g':
           if (ui.stageMode === 'matrix') return // no grid in the matrix (finished renders only)
           return handled(), ui.set({ showGrid: !ui.showGrid })
-        case 'x':
-          if (ui.stageMode === 'matrix') return
-          return handled(), animateExplode()
+        case 'i':
+          if (ui.stageMode === 'matrix') return // the matrix shows head-on renditions
+          return handled(), animateIso()
         case 'o':
           return handled(), ui.set({ view3d: ui.view3d === 'front' ? 'orbit' : 'front' })
         case 'v': {

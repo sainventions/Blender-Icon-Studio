@@ -41,6 +41,25 @@ export const LIVE_CAL = 1.088
  */
 export const LIVE_LIGHT_CAL = { key: 1.29, fill: 0.595, dome: 0.935, front: 0.948, softbox: 1.207, rim: 1.0 } as const
 
+/**
+ * Typical caster → receiver gap (art units) the key's single VSM blur radius is sized for: a layer's body over the plate
+ * or the layer below it (z gap 0.13 − thickness 0.1, or its own 0.1 height) — round 5: was 0.25, which smeared the
+ * contact shadows Cycles draws along every glyph's lower edge into a faint wide haze.
+ */
+export const SHADOW_GAP = 0.05
+/**
+ * Tall bodies (thick round glass, sphere heads, inflated domes: 0.3–0.5 high) cast from well above the plate: Cycles' big
+ * disk key spreads their shadow into a wide, faint penumbra, while the fixed 0.05 gap drew a hard, long, dark slab beside
+ * them. The gap follows half the tallest caster's height (default 0.1-thick layers keep SHADOW_GAP), up to this.
+ */
+export const SHADOW_GAP_MAX = 0.3
+
+/** Caster → receiver gap of the live key's VSM blur for the tallest shadow-casting body (world height). */
+export function shadowGap(casterHeight: number | null | undefined): number {
+  const h = Number.isFinite(casterHeight) ? (casterHeight as number) : 0
+  return Math.max(SHADOW_GAP, Math.min(SHADOW_GAP_MAX, 0.5 * h))
+}
+
 /** Linear-light colours used by the worker for warm keys and cool fills. */
 export const WARM = new THREE.Color(1.0, 0.82, 0.64)
 export const COOL = new THREE.Color(0.72, 0.84, 1.0)

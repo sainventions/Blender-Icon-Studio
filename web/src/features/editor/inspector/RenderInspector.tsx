@@ -83,7 +83,7 @@ export function RenderInspector() {
       <Section id="render.look" title="Look" icon={<Paintbrush />}>
         <Row
           label="Colour"
-          hint="View transform. Brand-exact (the default) shows every SVG colour exactly and rolls highlights off softly; Neutral is Khronos PBR Neutral."
+          hint="View transform of the renders. The default (Standard + a soft highlight roll-off) keeps lit paint close to the SVG; glass shows what lies beneath it. AgX is more photographic."
         >
           <Select
             value={effectiveColorMode(r.colorMode, presets)}

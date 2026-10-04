@@ -1,4 +1,5 @@
-"""Perspective auto-framing maths (blender_worker/framing.py) — pure numpy, no Blender needed."""
+"""Auto-framing maths (blender_worker/framing.py): perspective views and the CAD iso view (PLAN §11 View) — pure
+numpy, no Blender needed."""
 from __future__ import annotations
 
 import math
@@ -117,3 +118,93 @@ def test_tall_exploded_stack_keeps_the_camera_outside():
 def test_empty_subject_has_a_sane_plan():
     plan = F.plan([(np.zeros((0, 3)), 20, -25)], fov=30)
     assert plan["tan"] > 0 and np.isfinite(plan["shift"]).all() and plan["dist"] == F.orbit_distance(30)
+
+
+# ------------------------------------------------------------------------------------------------ CAD iso view
+def _ortho(points, plan, iso):
+    """Normalised frame coordinates in [-1, 1] of points seen by the iso camera of an ortho plan."""
+    pos, rot = F.ortho_pose(plan, iso)
+    pc = (points - pos) @ rot
+    half = plan["scale"] / 2
+    sx, sy = plan["shift"]
+    return (pc[:, 0] - sx * plan["scale"]) / half, (pc[:, 1] - sy * plan["scale"]) / half, -pc[:, 2]
+
+
+def test_iso_basis_runs_from_head_on_to_isometric():
+    d0, r0 = F.iso_basis(0.0)
+    assert np.allclose(r0, np.eye(3)) and np.allclose(d0, (0, 0, 1))        # head-on: the plain front view
+    d1, r1 = F.iso_basis(1.0)
+    assert np.allclose(d1, np.array([1, -1, 1]) / math.sqrt(3))
+    assert math.isclose(math.degrees(math.asin(d1[2])), 35.264, abs_tol=1e-3)   # pitch above the icon plane
+    assert math.isclose(math.degrees(math.atan2(d1[0], -d1[1])), 45.0, abs_tol=1e-9)   # yaw
+    assert np.allclose(r1[:, 0], np.array([1, 1, 0]) / math.sqrt(2))         # screen x: no roll
+    assert r1[2, 1] > 0.8                                                     # the stack axis points up on screen
+    assert np.allclose(F.iso_basis(-3)[1], r0)                                # clamped to 0..1
+    assert np.allclose(F.iso_basis(7)[1], r1)
+    prev = 91.0
+    for t in np.linspace(0, 1, 21):
+        d, r = F.iso_basis(t)
+        assert np.allclose(r.T @ r, np.eye(3), atol=1e-12) and math.isclose(np.linalg.det(r), 1.0)
+        assert np.allclose(r[:, 2], d)
+        elev = math.degrees(math.asin(d[2]))
+        assert elev < prev + 1e-9                                             # one monotone sweep, no detour
+        if 0 < t < 1:
+            # the slerp turns at a constant rate: the elevation drops ~linearly 90 -> 35.264
+            assert abs(elev - (90 - t * (90 - 35.264))) < 3.0, (t, elev)
+        prev = elev
+
+
+def test_iso_shows_real_distances():
+    """Orthographic: a layer gap of h appears as h · cos(elevation) on screen — never spread apart."""
+    for t in (0.0, 0.5, 1.0):
+        d, rot = F.iso_basis(t)
+        for h in (0.05, 0.3):
+            a = np.array([0.2, -0.1, 0.0]) @ rot
+            b = np.array([0.2, -0.1, h]) @ rot
+            screen = math.hypot(b[0] - a[0], b[1] - a[1])
+            assert math.isclose(screen, h * math.sqrt(1 - d[2] ** 2), abs_tol=1e-12)
+    # isometric: z foreshortens by sqrt(2/3) like every other axis
+    _, r1 = F.iso_basis(1.0)
+    for axis in np.eye(3):
+        assert math.isclose(math.hypot(*(axis @ r1)[:2]), math.sqrt(2 / 3), rel_tol=1e-12)
+
+
+def test_iso_zero_continues_the_front_framing():
+    pts = np.vstack([_subject(), F.canvas_square(0.0)])
+    plan = F.ortho_plan([(pts, 0.0)])
+    assert plan["kind"] == "ortho"
+    assert math.isclose(plan["scale"], 2.24, rel_tol=1e-9)                 # the front view's ortho scale
+    u, v, _ = _ortho(pts, plan, 0.0)
+    assert math.isclose(u.max() - u.min(), 2.0 / 1.12, rel_tol=1e-9)        # canvas fills 2.0 / 2.24 of the frame
+    assert abs(u.min() + u.max()) < 1e-9 and abs(v.min() + v.max()) < 1e-9
+    assert math.isclose(F.ortho_plan([(pts, 0.0)], zoom=2.0)["scale"], 1.12, rel_tol=1e-9)
+
+
+def test_iso_still_is_centred_and_fits():
+    pts = np.vstack([_subject(), F.canvas_square(0.0)])
+    for t in (0.25, 0.5, 1.0):
+        plan = F.ortho_plan([(pts, t)])
+        u, v, depth = _ortho(pts, plan, t)
+        assert abs(u.min() + u.max()) < 1e-9 and abs(v.min() + v.max()) < 1e-9
+        assert math.isclose(max(u.max() - u.min(), v.max() - v.min()) / 2, 1 - 2 * F.FRONT_MARGIN, rel_tol=1e-9)
+        assert depth.min() > 1.0 and depth.max() < plan["clip"]               # in front of the camera, inside the clip
+
+
+def test_iso_sweep_shares_one_framing():
+    """The 'iso' animation (head-on -> iso -> head-on): one ortho scale + shift for the whole clip, every frame
+    inside the margin, the widest one touching it."""
+    pts = np.vstack([_subject(), F.canvas_square(0.0)])
+    isos = [0.5 - 0.5 * math.cos(2 * math.pi * k / 16) for k in range(16)]
+    plan = F.ortho_plan([(pts, t) for t in isos])
+    worst = 0.0
+    for t in isos:
+        u, v, _ = _ortho(pts, plan, t)
+        worst = max(worst, np.abs(u).max(), np.abs(v).max())
+    assert worst <= 1 - 2 * F.FRONT_MARGIN + 1e-9
+    assert worst > 1 - 2 * F.FRONT_MARGIN - 1e-3
+    assert np.allclose(F.ortho_pose(plan, 0.0)[0] - plan["target"], [0, 0, plan["dist"]])
+
+
+def test_empty_iso_subject_has_a_sane_plan():
+    plan = F.ortho_plan([(np.zeros((0, 3)), 0.5)])
+    assert plan["scale"] > 0 and np.isfinite(plan["shift"]).all()

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Clapperboard, Download, LoaderCircle, Orbit, Rotate3d, Sparkles, SunMedium, Waves, Boxes, X, CircleAlert } from 'lucide-react'
+import { Clapperboard, Download, LoaderCircle, Orbit, Rotate3d, Sparkles, SunMedium, Waves, Box, X, CircleAlert } from 'lucide-react'
 import type { AnimateRequest, Quality } from '../../types'
 import { errorMessage, jobsApi, projectsApi } from '../../api'
 import { cn, formatSeconds } from '../../lib/format'
@@ -11,14 +11,19 @@ import { useUi } from '../../store/ui'
 import { Button, Dialog, ProgressBar, Row, Segmented, SliderRow } from '../../components/ui'
 import { continueInToast, isActive, useJob } from './useJob'
 
-const KIND_ICON: Record<AnimateRequest['kind'], React.ReactNode> = {
+type AnimationKind = Exclude<AnimateRequest['kind'], 'explode'>
+
+const KIND_ICON: Record<AnimationKind, React.ReactNode> = {
   tilt: <Rotate3d />,
   turntable: <Orbit />,
   float: <Waves />,
   'light-sweep': <SunMedium />,
-  iso: <Boxes />,
-  explode: <Boxes />,
+  iso: <Box />,
 }
+
+/** lib/meta's kinds; the CAD-style "Iso sweep" (PLAN §11) replaced the retired "explode" (the server maps old requests
+ *  to it), which only stays in the request type for old clients. */
+const KINDS = ANIMATION_KINDS.filter((k): k is { id: AnimationKind; label: string; description: string } => k.id !== 'explode')
 
 const ANIMATE_TOAST: Parameters<typeof continueInToast>[1] = {
   title: 'Rendering animation',
@@ -154,7 +159,7 @@ export function AnimateDialog() {
       ) : (
         <div className="space-y-5">
           <div className="grid grid-cols-5 gap-2">
-            {ANIMATION_KINDS.map((k) => {
+            {KINDS.map((k) => {
               const on = req.kind === k.id
               return (
                 <button
@@ -175,7 +180,7 @@ export function AnimateDialog() {
               )
             })}
           </div>
-          <p className="-mt-2 text-center text-2xs text-fg-4">{ANIMATION_KINDS.find((k) => k.id === req.kind)?.description}</p>
+          <p className="-mt-2 text-center text-2xs text-fg-4">{KINDS.find((k) => k.id === req.kind)?.description}</p>
 
           <div className="grid grid-cols-2 gap-x-6 gap-y-[9px]">
             <SliderRow label="Frames" value={req.frames} min={12} max={360} step={1} decimals={0} onChange={(v) => setReq((r) => ({ ...r, frames: Math.round(v) }))} />

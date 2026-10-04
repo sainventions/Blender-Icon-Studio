@@ -4,7 +4,8 @@ Used by the API test-suite and by ``BIS_FAKE_BLENDER=1`` (UI development without
 2D approximation with Pillow: the plate in its canvas shape and fill, and every visible layer's regions from
 the geometry bundle (bezier splines, holes, solid/gradient paint → first stop colour). Camera framing follows
 the real rules (ortho_scale = 2.24/zoom, fullBleed → square plate + ortho 2.0), so export packaging and alpha
-masks can be verified without Blender.
+masks can be verified without Blender. Materials are ignored (flat paint) and every view is drawn head-on: the
+CAD-style POV (``camera.iso``) and the ``iso`` animation are not simulated.
 """
 from __future__ import annotations
 

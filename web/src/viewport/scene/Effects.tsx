@@ -1,9 +1,8 @@
 // Post-processing: neon bloom (selective — like the worker's Glare on the Emission pass only, so a bright white plate
-// never glows) + a faint highlight bloom → tone mapping matching the project's colour mode ('brand' = Standard + the
+// or a chrome rim never glows) → tone mapping matching the project's colour mode ('brand' = Standard + the
 // worker's highlight soft clip by default, round 5; Khronos PBR Neutral, AgX) → selection + hover outlines → SMAA.
 import { use, useEffect, useMemo, useSyncExternalStore } from 'react'
 import {
-  Bloom,
   EffectComposer,
   EffectComposerContext,
   HueSaturation,
@@ -99,7 +98,6 @@ export function Effects({ colorMode: rawColorMode, selectedId, bloom, bloomIds, 
   return (
     <EffectComposer multisampling={multisampling} autoClear={false} frameBufferType={HalfFloatType}>
       {bloom > 0 && neon.length > 0 && <NeonBloom selection={neon} strength={bloom} />}
-      <Bloom mipmapBlur intensity={0.1} luminanceThreshold={6} luminanceSmoothing={0.25} radius={0.55} />
       {colorMode === 'brand' ? <primitive object={softClip} /> : <ToneMapping mode={mode} />}
       <HueSaturation
         saturation={colorMode === 'agx-punchy' ? AGX_PUNCHY_SATURATION : 0}

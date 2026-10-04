@@ -4,7 +4,7 @@ import type { Look, MaterialSpec, Presets, Project, StyleSpec } from '../types'
 import { safeStorage } from './hooks'
 
 // ------------------------------------------------------------------------------------------ reserved params
-/** `__*` material params are render-time "intent flags" written by lib/appearance.ts — never shown or saved. */
+/** `__*` material params: legacy render-time "intent flags" (pre PLAN §11 appearances) — never shown or saved. */
 export function isReservedParam(key: string): boolean {
   return key.startsWith('__')
 }

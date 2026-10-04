@@ -1,9 +1,9 @@
 """Regression tests for the QA round-2 render-quality defects — launches REAL Blender 5.0 (OptiX). Skipped when
 Blender is missing. GPU rules: renders ≤ 256 px, ≤ 32 spp.
 
-Synthetic scenes (scene builders below are also used by scratch before/after scripts) isolate each defect:
-hollow open fills, bevel growth on thin rings, dark translucent overlays, plate colour under Khronos PBR
-Neutral, EEVEE alpha speckle, clear-light glyph contrast, hidden shadow-caster layers, editable .blend files.
+Synthetic scenes (scene builders below are also used by test_materials.py and scratch before/after scripts) isolate
+each defect: hollow open fills, bevel growth on thin rings, sharp concave corners, hidden shadow-caster layers,
+editable .blend files.
 """
 from __future__ import annotations
 
@@ -51,7 +51,8 @@ def square(h, cx=0.0, cy=0.0):
 
 def layer(lid, z=0.0, preset="liquid_glass", params=None, shadow=0.5, bevel=0.045, thickness=0.1):
     return {"id": lid, "name": lid, "visible": True, "fill": {"type": "auto"}, "mode": "individual",
-            "material": {"preset": preset, "params": params or {}}, "shadow": {"kind": "neutral", "opacity": shadow},
+            "material": {"preset": preset, "params": params or {}},
+            "shadow": {"kind": "physical" if shadow > 0 else "none", "opacity": shadow},
             "depth": {"z": z, "thickness": thickness, "bevel": bevel, "bevelSegments": 6, "inflate": 0.0}}
 
 
@@ -87,25 +88,8 @@ def thin_ring_scene():
                  {"A": geo([("e", [circle(0.4), circle(0.38, hole=True)], "#0e190b", 1.0)], safe=0.3)}, shape="none")
 
 
-def dark_overlay_scene(opacity=0.33):
-    """Camera lens / Calculator ÷: 33 % black over a flat mid-grey plate (SVG: 0.67 × 128 = 86 in sRGB)."""
-    return scene([layer("A")], {"A": geo([("e", [circle(0.45)], "#000000", opacity)])},
-                 plate_fill="#808080", plate_preset="flat", color_mode="standard")
-
-
 def plate_scene(colour):
     return scene([], {}, plate_fill=colour)
-
-
-def glyph_scene():
-    """A white disc glyph on a saturated plate (Discord / Whatsapp)."""
-    return scene([layer("A")], {"A": geo([("e", [circle(0.4)], "#ffffff", 1.0)])}, plate_fill="#5865f2")
-
-
-def mono_scene():
-    """Ti84: a dark and a white part side by side."""
-    return scene([layer("A")], {"A": geo([("d", [circle(0.25, -0.4)], "#202020", 1.0),
-                                          ("w", [circle(0.25, 0.4)], "#ffffff", 1.0)])}, plate_fill="#7f8590")
 
 
 def rect(x0, y0, x1, y1, hole=False):
@@ -125,11 +109,14 @@ HOLE = (-0.35, -0.15, 0.35, 0.15)
 
 
 def cell_scene(zoom=1.6):
-    """Sheets: a white glass slab with a rectangular hole (sharp concave corners, straight edges)."""
-    proj, bundle = scene([layer("A", shadow=0.0)],
+    """Sheets: a white slab with a rectangular hole (sharp concave corners, straight edges). Opaque satin lit by the key
+    on the view axis only: the bevel geometry is under test — physical glass would show the refracted plate in the
+    bands, and a grazing key puts the bands at its terminator, where real shading varies along them (12-20/255)."""
+    proj, bundle = scene([layer("A", preset="satin", shadow=0.0)],
                          {"A": geo([("e", [rect(-0.6, -0.4, 0.6, 0.4), rect(*HOLE, hole=True)], "#ffffff", 1.0)],
                                    safe=0.15)}, plate_fill="#1f8f55")
     proj["camera"] = {"view": "front", "zoom": zoom}
+    proj["lighting"] = {"preset": "studio", "elevation": 0, "rim": 0, "fill": 0, "environment": 0.5}
     return proj, bundle
 
 
@@ -151,15 +138,6 @@ def patch(a, cx, cy, r=6):
     h = a.shape[0]
     col, row = int((cx + 1.12) / 2.24 * h), int((1.12 - cy) / 2.24 * h)
     return a[row - r:row + r + 1, col - r:col + r + 1]
-
-
-def lab(rgb):
-    c = np.asarray(rgb, float) / 255
-    lin = np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
-    xyz = lin @ np.array([[0.4124564, 0.3575761, 0.1804375], [0.2126729, 0.7151522, 0.0721750],
-                          [0.0193339, 0.1191920, 0.9503041]]).T / np.array([0.95047, 1.0, 1.08883])
-    f = np.where(xyz > (6 / 29) ** 3, np.cbrt(xyz), xyz / (3 * (6 / 29) ** 2) + 4 / 29)
-    return np.array([116 * f[1] - 16, 500 * (f[0] - f[1]), 200 * (f[1] - f[2])])
 
 
 def render(w, proj_bundle, out, **kw):
@@ -254,7 +232,7 @@ def piece_scene(piece, size):
 def test_qa_piece_renders_exactly_its_silhouette(worker, outdir, piece):
     """Real pieces from the QA round-2 report, rendered flat and zoomed: nothing outside the outline (inverted /
     growing bevels: DJI blade, Ti73 ring hole, '+' inner corners), its core filled (hollow open-subpath dots),
-    and the baked mesh passes the worker's own cap / growth check (Scandit's hollow bracket and 'D')."""
+    and the body mesh passes the worker's own check (watertight, no self-intersections, no flipped normals)."""
     from scipy import ndimage
     size = 256
     proj, bundle, inside, bevel_px = piece_scene(piece, size)
@@ -270,7 +248,8 @@ def test_qa_piece_renders_exactly_its_silhouette(worker, outdir, piece):
         assert (alpha[core] > 200).mean() > 0.995, ("hollow core", piece["why"], float((alpha[core] > 200).mean()))
     info = worker.result("scene_info", {"check": True})
     (ob,) = [o for o in info["objects"] if o["name"] == "BIS A r0"]
-    assert ob["check"]["holesN"] <= 1 and ob["check"]["growN"] <= 1, (ob["route"], ob["reason"], ob["check"])
+    ck = ob["check"]
+    assert ck["nonManifold"] == 0 and ck["selfIntersections"] == 0 and ck["invertedNormals"] == 0, (ob["route"], ck)
 
 
 @pytest.mark.parametrize("quality", ["draft", "preview"])
@@ -305,59 +284,7 @@ def test_sharp_concave_corners_shade_evenly(worker, outdir, quality):
     assert corner[1] > corner[0] + 40, corner           # plate green, not the white slab
 
 
-# ------------------------------------------------------------------------------------------------ materials
-@pytest.mark.parametrize("quality", ["draft", "preview"])
-def test_dark_overlay_composites_like_the_svg(worker, outdir, quality):
-    out = outdir / f"overlay_{quality}.png"
-    render(worker, dark_overlay_scene(), out, quality=quality)
-    v = patch(rgba(out), 0.0, 0.0, 5)[..., :3].mean()
-    assert abs(v - 0.67 * 128) < 6, v            # SVG: 33 % black over #808080 = 86 (was 94)
-    if quality == "draft":   # alpha-blended in EEVEE: no dither speckle
-        noise = patch(rgba(out), 0.0, 0.0, 8)[..., :3].mean(axis=2).std()
-        assert noise < 4.0, noise
-        mats = worker.result("scene_info")["materials"]
-        assert mats["BIS Mat A"]["renderMethod"] == "BLENDED"
-
-
-@pytest.mark.parametrize("colour,limit", [("#fc3a00", 18.0), ("#5865f2", 8.0), ("#f0f0f0", 5.0), ("#1d2230", 8.0)])
-def test_plate_colour_close_to_svg(worker, outdir, colour, limit):
-    """Satin plate under the default 'neutral' colour mode: mean plate colour ΔE76 vs the SVG fill."""
-    out = outdir / f"plate_{colour[1:]}.png"
-    render(worker, plate_scene(colour), out, quality="preview")
-    a = rgba(out)
-    m = np.vstack([patch(a, x, y, 5)[..., :3].reshape(-1, 3) for x in (-0.4, 0.0, 0.4) for y in (-0.4, 0.0, 0.4)])
-    want = [int(colour[i:i + 2], 16) for i in (1, 3, 5)]
-    de = float(np.linalg.norm(lab(m.mean(axis=0)) - lab(want)))
-    assert de < limit, (colour, m.mean(axis=0).round(), de)
-
-
-def test_white_glyph_keeps_contrast_on_saturated_plate(worker, outdir):
-    out = outdir / "glyph.png"
-    render(worker, glyph_scene(), out, quality="preview")
-    a = rgba(out)
-    glyph = patch(a, 0.0, 0.05, 6)[..., :3].mean(axis=(0, 1))
-    assert glyph.min() > 239, glyph                # near-white body, not plate-tinted (was 237)
-
-
-def test_clear_light_glyph_reads_against_the_plate(worker, outdir):
-    out = outdir / "clear_light.png"
-    render(worker, glyph_scene(), out, quality="preview", appearance="clear-light")
-    a = rgba(out)
-    g = lab(patch(a, 0.0, 0.05, 6)[..., :3].reshape(-1, 3).mean(axis=0))[0]
-    p = lab(np.vstack([patch(a, x, y, 4)[..., :3].reshape(-1, 3) for x, y in ((-0.7, 0.7), (0.7, -0.7))]).mean(0))[0]
-    assert g - p > 11.0, (g, p)                    # L* difference (was 7.6)
-
-
-@pytest.mark.parametrize("appearance", ["clear-light", "clear-dark"])
-def test_clear_renditions_keep_dark_parts_dark(worker, outdir, appearance):
-    out = outdir / f"mono_{appearance}.png"
-    render(worker, mono_scene(), out, quality="preview", appearance=appearance)
-    a = rgba(out)
-    dark = patch(a, -0.4, 0.0, 5)[..., :3].mean()
-    white = patch(a, 0.4, 0.0, 5)[..., :3].mean()
-    assert white - dark > 45, (dark, white)
-
-
+# ------------------------------------------------------------------------------------------------ scene
 def test_hidden_shadow_caster_is_not_seen_through_glass(worker, outdir):
     out = outdir / "hidden.png"
     r = render(worker, hidden_scene(), out, quality="preview")
@@ -370,35 +297,33 @@ def test_hidden_shadow_caster_is_not_seen_through_glass(worker, outdir):
 
 # ------------------------------------------------------------------------------------------------ .blend
 def test_save_blend_is_editable(worker, outdir):
-    """'Open in Blender': the .blend holds live curves (round bevel) / GN modifier stacks, not baked meshes."""
+    """'Open in Blender': the .blend holds the same watertight body meshes the renders use (PLAN §11 height-field
+    bodies; the curve-bevel route is retired), each with its own single-Principled material."""
     proj, bundle = scene([layer("A"), layer("B", z=0.13)],
                          {"A": geo([("a", [circle(0.4)], "#3366ff", 1.0)]),
                           "B": geo([("b", [square(0.2)], "#ffffff", 1.0)], safe=0.01)})
     out = outdir / "editable.blend"
     r = worker.result("save_blend", {"project": proj, "geometry": bundle, "out": str(out)})
-    assert r["editable"]["meshes"] == 0 and r["editable"]["curves"] == 3
-    assert r["editable"]["bevelCurves"] >= 2 and r["editable"]["modifierStacks"] >= 1   # B: GN (tiny safeRadius)
+    assert r["editable"]["meshes"] == 3 and r["editable"]["curves"] == 0
     script = outdir / "inspect.py"
     script.write_text(
-        "import bpy, json\n"
-        "dg = bpy.context.evaluated_depsgraph_get()\n"
+        "import bpy, bmesh, json\n"
         "o = {}\n"
         "for ob in bpy.data.objects:\n"
-        "    if ob.name.startswith('BIS ') and ob.type == 'CURVE':\n"
-        "        me = ob.evaluated_get(dg).to_mesh()\n"
-        "        o[ob.name] = [ob.data.bevel_depth, ob.data.offset, [m.type for m in ob.modifiers], len(me.polygons)]\n"
-        "        ob.evaluated_get(dg).to_mesh_clear()\n"
+        "    if ob.name.startswith('BIS ') and ob.type == 'MESH' and ob.name != 'BIS Wallpaper':\n"
+        "        bm = bmesh.new(); bm.from_mesh(ob.data)\n"
+        "        o[ob.name] = [len(ob.data.polygons), sum(1 for e in bm.edges if not e.is_manifold),\n"
+        "                      ob.active_material.name if ob.active_material else None]\n"
+        "        bm.free()\n"
         "print('INSPECT ' + json.dumps(o))\n", encoding="utf-8")
     p = subprocess.run([str(wc.BLENDER), "-b", "--factory-startup", str(out), "--python", str(script)],
                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180)
     line = next(ln for ln in p.stdout.splitlines() if ln.startswith("INSPECT "))
     objs = json.loads(line[8:])
-    plate = objs["BIS Plate"]
-    assert plate[0] > 0.01 and abs(plate[1] + plate[0]) < 1e-6 and plate[3] > 100      # live bevel, offset −bevel
-    a = objs["BIS A r0"]
-    assert a[0] > 0.01 and a[2] == [] and a[3] > 100
-    b = objs["BIS B r0"]
-    assert b[2] == ["NODES", "SOLIDIFY", "BEVEL"] and b[3] > 6
-    # the worker renders baked meshes again afterwards
+    assert set(objs) == {"BIS Plate", "BIS A r0", "BIS B r0"}, objs
+    for name, (faces, nonmanifold, mat) in objs.items():
+        assert faces > 100 and nonmanifold == 0 and mat and mat.startswith("BIS "), (name, objs[name])
+    assert objs["BIS A r0"][2] == "BIS A / a" and objs["BIS B r0"][2] == "BIS B / b"
+    # the worker keeps rendering afterwards
     render(worker, (proj, bundle), outdir / "after_blend.png")
     assert all(o["type"] == "MESH" for o in worker.result("scene_info")["objects"] if o["name"] in ("BIS A r0", "BIS Plate"))

@@ -6,13 +6,14 @@ Layout (PLAN §3, D1): icon in the XY plane, camera on +Z looking −Z, 1 BU = 1
       BIS Plate                       canvas space; back at −thickness, front face at z = 0
       BIS Art          (empty)        canvas.art: uniform scale + (x, y)
         BIS Layer <id> (empty)        layer.transform (scale about the canvas origin, then translate)
-                                      + z = depth.z · camera.explode + ε  (expressed in Art-local units)
-          BIS <id> r<i> / sil / img<k>  baked mesh objects (geometry.solid_mesh); object coords == art coords
-    BIS Rig (collection)              camera, 4 area lights, wallpaper plane
+                                      + z = depth.z + ε (REAL distances; camera.explode is legacy, ignored)
+          BIS <id> r<i> / sil / img<k>  height-field body meshes (heightfield.piece_mesh); object coords == art
+                                      coords, mid-plane at z + thickness/2 (+ lift: an inflated layer's lowest
+                                      point stays on z)
+    BIS Rig (collection)              camera (front / CAD iso orthographic / perspective), lights, wallpaper
 
-Everything is updated in place between renders: objects/empties are reused by name, piece meshes (baked
-once from the bevelled curve / GN stack) come from geometry's cache (layer hash + depth params), materials
-update their node values in place.
+Everything is updated in place between renders: objects/empties are reused by name, piece meshes come from
+heightfield's cache (layer hash + depth params), materials update their node values in place.
 """
 from __future__ import annotations
 
@@ -25,8 +26,7 @@ import numpy as np
 from mathutils import Matrix, Vector
 
 from . import appearance as appearance_mod
-from . import framing, geometry, lighting, materials, overlay
-from . import presets
+from . import framing, geometry, heightfield, lighting, materials
 from .defaults import norm_bundle, norm_camera, norm_project
 from .gpu import configure_scene
 from .util import gradient_samples, hex_to_linear, hex_to_srgb, log, srgb_to_linear, stable_hash
@@ -62,8 +62,8 @@ def _empty(name: str, col: bpy.types.Collection, parent: Optional[bpy.types.Obje
 
 def _mesh_object(name: str, data: bpy.types.Mesh, col: bpy.types.Collection,
                  parent: Optional[bpy.types.Object]) -> bpy.types.Object:
-    """Object showing a baked piece mesh (geometry.solid_mesh). No modifiers: nothing is re-evaluated
-    per render."""
+    """Object showing a cached body mesh (heightfield.piece_mesh). No modifiers: nothing is re-evaluated
+    per render (saved .blend files get the same plain meshes)."""
     ob = bpy.data.objects.get(name)
     if ob is not None and ob.type != "MESH":
         bpy.data.objects.remove(ob)
@@ -73,28 +73,10 @@ def _mesh_object(name: str, data: bpy.types.Mesh, col: bpy.types.Collection,
     elif ob.data != data:
         old = ob.data
         ob.data = data
-        if old is not None and old.users == 0 and not geometry.is_cached_mesh(old):
+        if old is not None and old.users == 0 and not heightfield.is_cached_mesh(old):
             bpy.data.meshes.remove(old)
     for m in list(ob.modifiers):
         ob.modifiers.remove(m)
-    if ob.name not in col.objects:
-        col.objects.link(ob)
-    if ob.parent != parent:
-        ob.parent = parent
-        ob.matrix_parent_inverse = Matrix.Identity(4)
-    return ob
-
-
-def _curve_object(name: str, cu: bpy.types.Curve, col: bpy.types.Collection,
-                  parent: Optional[bpy.types.Object]) -> bpy.types.Object:
-    """Editable piece (saved .blend files): the cached curve datablock itself — live extrude / round bevel /
-    offset on the curve route; the GN route adds live Fill Curve → Solidify → Bevel modifiers."""
-    ob = bpy.data.objects.get(name)
-    if ob is not None and (ob.type != "CURVE" or ob.data != cu):
-        bpy.data.objects.remove(ob, do_unlink=True)
-        ob = None
-    if ob is None:
-        ob = bpy.data.objects.new(name, cu)
     if ob.name not in col.objects:
         col.objects.link(ob)
     if ob.parent != parent:
@@ -113,8 +95,12 @@ def _set_material(ob: bpy.types.Object, mat: bpy.types.Material) -> None:
         slot.material = mat
 
 
-def _bbox_intersects(a, b) -> bool:
-    return not (a[2] < b[0] or b[2] < a[0] or a[3] < b[1] or b[3] < a[1])
+def _iso(cam: dict) -> float:
+    """camera.iso clamped to 0..1 (0 = head-on, 1 = isometric; PLAN §11 View)."""
+    try:
+        return max(0.0, min(1.0, float(cam.get("iso", 0.0) or 0.0)))
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def geo_key(g: dict, lid: str) -> str:
@@ -132,13 +118,17 @@ def geo_key(g: dict, lid: str) -> str:
 # ------------------------------------------------------------------------------------------------
 # paint specs
 # ------------------------------------------------------------------------------------------------
-def paint_spec(fill: dict, texture: Optional[str], bbox=(-1.0, -1.0, 1.0, 1.0)) -> dict:
-    """Layer/plate fill -> material paint spec (object coordinates of the target object)."""
+def paint_spec(fill: dict, texture: Optional[str], bbox=(-1.0, -1.0, 1.0, 1.0),
+               region_paint: Optional[dict] = None) -> dict:
+    """Layer/plate fill -> material paint spec (object coordinates of the target object). 'auto' = the layer's
+    rasterised art texture, else (hand-written bundles) the shape's own region paint."""
     t = (fill or {}).get("type", "auto")
     if t == "auto":
         if texture and os.path.isfile(texture):
             return {"kind": "texture", "image": texture}
-        return {"kind": "object"}
+        if region_paint and region_paint.get("type") not in (None, "auto", "none"):
+            return paint_spec(region_paint, None, bbox)
+        return {"kind": "solid", "color": (1.0, 1.0, 1.0), "has_alpha": False}
     if t == "solid":
         return {"kind": "solid", "color": hex_to_linear(fill.get("color", "#ffffff")),
                 "has_alpha": False}
@@ -204,37 +194,8 @@ def image_quad(im: dict, fallback_bbox) -> list:
     return [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
 
 
-THIN_RATIO = 0.75            # a layer whose bevel is >= this x its safe radius is made of thin strokes ...
-THIN_SOLID = 0.85            # ... whose Liquid Glass body keeps this share across the bevel (materials 'solid_edge')
-RASTER_RIM = 0.4             # rim strength on raster (alpha-traced) pieces
-HALO_SOFT_MIN = 0.25         # share of the visible pixels that are soft (0.02 < alpha < 0.6)
-GLOW_SOFT_MIN = 0.5          # ... above this a raster region IS a glow (light, not an object): card only
-_SOFT_ALPHA: dict = {}
-
-
-def soft_alpha_fraction(path: str) -> float:
-    """Share of an image's visible pixels (alpha > 0.02) that are only partly opaque (alpha < 0.6) around a
-    solid core: glow halos that an alpha-traced extrusion drops (0 without a solid core). Cached by path +
-    mtime."""
-    try:
-        key = (os.path.normcase(os.path.abspath(path)), os.path.getmtime(path))
-    except OSError:
-        return 0.0
-    hit = _SOFT_ALPHA.get(key)
-    if hit is not None:
-        return hit
-    frac = 0.0
-    img = materials.load_image(path)
-    if img is not None and img.size[0] * img.size[1] > 0:
-        px = np.empty(img.size[0] * img.size[1] * 4, dtype=np.float32)
-        img.pixels.foreach_get(px)
-        a = px[3::4]
-        vis = int((a > 0.02).sum())
-        frac = float(((a > 0.02) & (a < 0.6)).sum()) / vis if vis else 0.0
-        if vis and float((a >= 0.6).sum()) / vis < 0.1:
-            frac = 0.0          # no solid core (a translucent shading overlay, e.g. Find Device): no halo
-    _SOFT_ALPHA[key] = frac
-    return frac
+PLATE_MATERIAL = "BIS Plate"
+WALLPAPER_MATERIAL = "BIS Wallpaper"
 
 
 def touching_opaque(g: dict, images: Optional[dict] = None) -> bool:
@@ -279,10 +240,7 @@ class SceneBuilder:
         self.editable = False
         self._hidden: set = set()
         self._cover_cache: dict = {}
-        self._film: dict = {}
-        self._film_cache: dict = {}
-        self._flush: dict = {}
-        self._flush_cache: dict = {}
+        self._shape_names: set = set()
 
     # -------------------------------------------------------------------------- setup
     @property
@@ -293,7 +251,7 @@ class SceneBuilder:
         """Empty file (keeps preferences: OptiX) + fresh collections."""
         bpy.ops.wm.read_homefile(use_empty=True)
         configure_scene(self.scene)
-        geometry.reset_caches()
+        heightfield.reset_caches()
         self.info = {}
 
     def collections(self):
@@ -305,10 +263,10 @@ class SceneBuilder:
     def build(self, project: dict, bundle: dict, appearance: str = "light", *, camera: Optional[dict] = None,
               full_bleed: bool = False, backdrop: Optional[str] = None, backdrop_color: Optional[str] = None,
               overrides: Optional[dict] = None, editable: bool = False, engine: Optional[str] = None) -> dict:
-        """Build/update the scene. ``overrides`` (animations): {'lightAngle', 'explode', 'layerZ': {id: dz}}.
-        ``editable`` (save_blend): pieces become live curve objects (round bevel / GN modifier stack) instead
-        of the baked meshes renders use, so the .blend can be tweaked in Blender. ``engine`` (render engine
-        id of the tier about to render) selects the per-engine light calibration (lighting.ENGINE_CAL)."""
+        """Build/update the scene. ``overrides`` (animations): {'lightAngle', 'camera', 'layerZ': {id: dz},
+        'framing': one shared framing plan}. ``editable`` (save_blend): kept for the API — renders and .blend
+        files use the same plain body meshes. ``engine`` (render engine id of the tier about to render)
+        selects the per-engine light calibration (lighting.ENGINE_CAL)."""
         self.warnings = []
         self.editable = bool(editable)
         overrides = overrides or {}
@@ -317,34 +275,38 @@ class SceneBuilder:
         res = appearance_mod.resolve(proj, appearance, bnd)
         eff, env = res["project"], res["env"]
         cam = norm_camera(camera, eff["camera"]) if camera else dict(eff["camera"])
-        if "explode" in overrides:
-            cam["explode"] = overrides["explode"]
         if "camera" in overrides:
             cam.update(overrides["camera"])
+        cam["explode"] = 1.0           # legacy (PLAN §11): layers always sit at their REAL z (use camera.iso)
+        cam["iso"] = _iso(cam)
         lighting_spec = dict(eff["lighting"])
         rset = eff["render"]
         backdrop = backdrop or rset.get("backdrop", "transparent")
         backdrop_color = backdrop_color or rset.get("backdropColor", "#1c1c22")
-        # paints are pre-compensated for the view transform of the colour mode (materials.display_paint)
-        self._cm = presets.color_mode_id(rset.get("colorMode"))
 
         icon_col, rig_col = self.collections()
         scene = self.scene
         self._specs = []
+        self._shape_names = set()
         rig = lighting.resolve(lighting_spec, env["envScale"], env["keyScale"], overrides.get("lightAngle"))
-        L = lighting.key_vector(rig)
-        self._lit = max(0.4, min(1.4, 0.55 + 0.45 * float(rig["key"])))
         lighting.update_lights(scene, rig_col, rig, engine)
         lighting.update_world(scene, rig, (*hex_to_linear(backdrop_color), 1.0), engine)
-        # perspective views are auto-framed on the subject (framing.py); animations pass one shared plan
+        # CAD iso (orthographic) and perspective views are auto-framed on the subject (framing.py); animations
+        # pass one shared plan for the whole clip
         fplan = None
-        if cam.get("view", "front") != "front" and not full_bleed:
-            fplan = overrides.get("framing")
-            if not fplan:
-                hulls = self.subject_hulls(eff, bnd, full_bleed)
-                pts = self.subject_points(hulls, float(cam.get("explode", 1.0)), overrides.get("layerZ") or {})
+        given = overrides.get("framing") or None
+        zoom = float(cam.get("zoom", 1.0) or 1.0)
+        if not full_bleed and cam.get("view", "front") != "front":
+            fplan = given if given and given.get("kind", "persp") == "persp" else None
+            if fplan is None:
+                pts = self.subject_points(self.subject_hulls(eff, bnd, full_bleed), overrides.get("layerZ") or {})
                 fplan = framing.plan([(pts, float(cam.get("tiltX", 0.0)), float(cam.get("tiltY", 0.0)))],
-                                     float(cam.get("fov", 30.0) or 30.0), float(cam.get("zoom", 1.0) or 1.0))
+                                     float(cam.get("fov", 30.0) or 30.0), zoom)
+        elif not full_bleed and (cam["iso"] > 0.0 or (given and given.get("kind") == "ortho")):
+            fplan = given if given and given.get("kind") == "ortho" else None
+            if fplan is None:
+                pts = self.subject_points(self.subject_hulls(eff, bnd), overrides.get("layerZ") or {}, canvas=True)
+                fplan = framing.ortho_plan([(pts, cam["iso"])], zoom)
         self._camera(rig_col, cam, full_bleed, fplan)
 
         canvas = eff["canvas"]
@@ -352,55 +314,21 @@ class SceneBuilder:
         keep: set[str] = set()
         used_mats: set[str] = set()
 
-        # ---- EEVEE roles: glass refracts only when no glass layer above overlaps it (D7) -------------
         layers = [Lr for Lr in eff["layers"] if Lr.get("visible", True)]
         geo_by_id = bnd["layers"]
-        boxes = {}
-        for Lr in layers:
-            g = geo_by_id.get(Lr["id"])
-            if g is None:
-                continue
-            boxes[Lr["id"]] = self._canvas_bbox(g["bbox"], canvas["art"], Lr["transform"])
-        presets_eff = {Lr["id"]: ("flat" if not Lr.get("glass", True) else Lr["material"]["preset"]) for Lr in layers}
-        roles = {}
-        glass_ids = [Lr["id"] for Lr in layers if Lr["id"] in boxes and materials.is_glass(presets_eff[Lr["id"]])]
-        by_id = {Lr["id"]: Lr for Lr in layers}
-        for i, lid in enumerate(glass_ids):
-            above = [o for o in glass_ids[i + 1:] if _bbox_intersects(boxes[lid], boxes[o])]
-            roles[lid] = "fake" if any(self._overlaps(by_id[lid], by_id[o], geo_by_id, canvas["art"])
-                                       for o in above) else "refract"
 
         # ---- pieces the SVG hides completely under opaque higher art (Translate's magenta shadow-caster under
         # the blue card): glass above must not reveal them (they still cast shadows / show their sides) --------
         self._hidden = self._covered_pieces(layers, geo_by_id, canvas["art"])
-
-        # ---- translucent Liquid Glass pieces blend like the SVG (display space): film coefficients -------------
-        self._film = self._film_params(eff, bnd, layers, presets_eff, env, shape)
-        # ---- art flush with the plate outline: no glass rim along it (materials._flush_keep) ---------------
-        plate_vis = canvas["plate"].get("visible", True) and (canvas["plate"]["fill"] or {}).get("type") != "none"
-        self._flush = self._flush_params(layers, geo_by_id, canvas, shape if plate_vis else "none", presets_eff)
 
         # ---- plate ---------------------------------------------------------------------------------
         plate = canvas["plate"]
         plate_ok = plate.get("visible", True) and shape != "none" and (plate["fill"].get("type") != "none")
         wp_kind = env.get("wallpaper") or (("dark" if env.get("dark") else "light") if backdrop == "wallpaper" else None)
         if plate_ok:
-            pp = plate["material"]["preset"]
-            backdrop_wp = None
-            if materials.is_glass(pp) and wp_kind:
-                # EEVEE: a frosted glass plate over the wallpaper (clear / tinted renditions) cannot refract a
-                # camera-invisible wallpaper (screen-space tracing falls back to the dark studio world). The
-                # draft shades it as frosted glass over the *known* wallpaper instead (no raytraced refraction),
-                # which also puts the plate into the depth buffer so the glass layers above refract it.
-                # Cycles stays physically exact.
-                backdrop_wp = appearance_mod.wallpaper_linear(wp_kind, PLATE_WALLPAPER_GAP + plate["thickness"])
-                role = "backdrop"
-            else:
-                role = "refract" if materials.is_glass(pp) else "opaque"
-            self._plate(icon_col, plate, shape, canvas.get("cornerRadius", 0.225), role, L, env, full_bleed,
-                        backdrop_wp)
+            self._plate(icon_col, plate, shape, canvas.get("cornerRadius", 0.225), full_bleed)
             keep.add("BIS Plate")
-            used_mats.add("BIS Mat Plate")
+            used_mats.add(PLATE_MATERIAL)
 
         # ---- art root --------------------------------------------------------------------------------
         art = canvas["art"]
@@ -411,16 +339,14 @@ class SceneBuilder:
         art_ob.rotation_euler = (0.0, 0.0, 0.0)
         keep.add(art_ob.name)
 
-        explode = float(cam.get("explode", 1.0))
-        stats = {"layers": 0, "pieces": 0, "gnFallback": 0, "clampedBevel": 0}
+        stats = {"layers": 0, "pieces": 0}
         layer_z = overrides.get("layerZ") or {}
         for Lr in layers:
             g = geo_by_id.get(Lr["id"])
             if g is None:
                 self.warnings.append(f"layer {Lr['id']} has no geometry in the bundle")
                 continue
-            names, mats = self._layer(icon_col, art_ob, Lr, g, sa, explode, roles.get(Lr["id"], "opaque"),
-                                      presets_eff[Lr["id"]], L, env, stats, float(layer_z.get(Lr["id"], 0.0)))
+            names, mats = self._layer(icon_col, art_ob, Lr, g, sa, env, stats, float(layer_z.get(Lr["id"], 0.0)))
             keep |= names
             used_mats |= mats
             stats["layers"] += 1
@@ -429,33 +355,29 @@ class SceneBuilder:
         if wp_kind:
             self._wallpaper(rig_col, wp_kind, plate["thickness"], camera_visible=(backdrop == "wallpaper"))
             keep.add("BIS Wallpaper")
-            used_mats.add("BIS Mat Wallpaper")
 
         # ---- cleanup stale BIS objects / materials ---------------------------------------------------
         for ob in list(icon_col.objects) + [o for o in rig_col.objects if o.name == "BIS Wallpaper"]:
             if ob.name not in keep:
                 data = ob.data if ob.type == "MESH" else None
                 bpy.data.objects.remove(ob, do_unlink=True)
-                if data is not None and data.users == 0 and not geometry.is_cached_mesh(data):
+                if data is not None and data.users == 0 and not heightfield.is_cached_mesh(data):
                     bpy.data.meshes.remove(data)
-        for m in list(bpy.data.materials):
-            if m.name.startswith("BIS Mat") and m.name not in used_mats and m.users == 0:
-                bpy.data.materials.remove(m)
-        geometry.purge_unused_curves()
-        geometry.purge_unused_meshes()
+        materials.purge_unused(used_mats)
+        heightfield.purge_unused_meshes()
         materials.purge_unused_images()
 
         # ---- scene-level flags ---------------------------------------------------------------------------
         all_specs = self._specs
-        neon = [s for s in all_specs if s["preset"] == "neon"]
         self.info = {
             "appearance": res["appearance"],
             "backdrop": backdrop,
             "backdropColor": backdrop_color,
             "wallpaper": appearance_mod.wallpaper(wp_kind) if wp_kind else None,
-            "maxFrost": max([materials.max_frost(s) for s in all_specs] + [0.0]),
-            "volume": any(materials.uses_volume(s) for s in all_specs),
-            "neonBloom": max([float(s["params"].get("bloom", 0.6)) for s in neon] + [0.0]) if neon else 0.0,
+            # transparent backdrops: Cycles keeps glass up to this roughness see-through (film_transparent_roughness)
+            "maxGlassRoughness": materials.max_glass_roughness(all_specs),
+            # compositor bloom (a render setting): glowing emission above the flat-art level (strength 1) blooms
+            "bloom": max(0.0, min(1.0, (materials.max_emission(all_specs) - 1.0) / 4.0)),
             "fullBleed": bool(full_bleed),
             "camera": cam,
             "light": {"angle": rig["angle"], "elevation": rig["elevation"]},
@@ -475,12 +397,23 @@ class SceneBuilder:
         zoom = max(0.05, float(cam.get("zoom", 1.0)))
         cd.clip_start = 0.05
         cd.clip_end = 200.0
-        if cam.get("view", "front") == "front" or full_bleed or not fplan:
+        if full_bleed or not fplan:
             # front: the fixed App-Store framing (room for shadows); unchanged by auto-framing
             cd.type = "ORTHO"
             cd.ortho_scale = (2.0 if full_bleed else 2.24) / zoom
             cd.shift_x = cd.shift_y = 0.0
             ob.matrix_world = Matrix.Translation((0.0, 0.0, 10.0))
+        elif fplan.get("kind") == "ortho":
+            # CAD iso view: orthographic, rotated head-on -> isometric, real z distances (framing.ortho_plan)
+            cd.type = "ORTHO"
+            cd.sensor_fit = "AUTO"
+            pos, rot = framing.ortho_pose(fplan, _iso(cam))
+            cd.ortho_scale = float(fplan["scale"])
+            cd.shift_x, cd.shift_y = (float(s) for s in fplan["shift"])
+            m = Matrix([list(r) for r in rot]).to_4x4()
+            m.translation = Vector([float(c) for c in pos])
+            ob.matrix_world = m
+            cd.clip_end = max(200.0, float(fplan.get("clip", 200.0)))
         else:
             cd.type = "PERSP"
             cd.sensor_fit = "AUTO"
@@ -497,9 +430,9 @@ class SceneBuilder:
 
     # -------------------------------------------------------------------------- framing subject
     def subject_hulls(self, eff: dict, bnd: dict, full_bleed: bool = False) -> list:
-        """Convex hulls (canvas XY) of everything visible + their z spans, for perspective auto-framing:
-        [(hull (M, 2), z_base, thickness, explode_scaled, layer id | None)]. The plate spans −thickness..0;
-        a layer spans z·explode + ε + dz .. + thickness."""
+        """Convex hulls (canvas XY) of everything visible + their REAL z spans, for auto-framing:
+        [(hull (M, 2), z0, z1, layer id | None)]. The plate spans −thickness..0; a layer spans its body:
+        z + ε .. + max(thickness, 2 × half height) (inflated bodies are taller, see :meth:`_layer`)."""
         canvas = eff["canvas"]
         shape = "square" if full_bleed else canvas["shape"]
         out = []
@@ -508,7 +441,7 @@ class SceneBuilder:
             th = max(0.0, float(plate.get("thickness", 0.16)))
             ring = [p for s in geometry.plate_outline(shape, canvas.get("cornerRadius", 0.225))
                     for p in geometry._flatten_ring(s["points"], True, 6)]
-            out.append((framing.hull2d(np.asarray(ring)), -th, th, False, None))
+            out.append((framing.hull2d(np.asarray(ring)), -th, 0.0, None))
         art = canvas["art"]
         sa, ax, ay = float(art.get("scale", 1.0)), float(art.get("x", 0.0)), float(art.get("y", 0.0))
         for Lr in eff["layers"]:
@@ -533,98 +466,87 @@ class SceneBuilder:
             tr = Lr["transform"]
             sl, tx, ty = float(tr.get("scale", 1.0)), float(tr.get("x", 0.0)), float(tr.get("y", 0.0))
             pts = (np.asarray(ring, dtype=np.float64) * sa + np.array([ax, ay])) * sl + np.array([tx, ty])
-            dp = Lr["depth"]
-            out.append((framing.hull2d(pts), float(dp.get("z", 0.0)), max(0.0, float(dp.get("thickness", 0.1))),
-                        True, Lr["id"]))
+            z0 = float(Lr["depth"].get("z", 0.0)) + LAYER_EPS
+            out.append((framing.hull2d(pts), z0, z0 + self._body_height(Lr, g, sa * sl), Lr["id"]))
         return out
 
     @staticmethod
-    def subject_points(hulls: list, explode: float, layer_z: Optional[dict] = None) -> np.ndarray:
+    def _body_height(Lr: dict, g: dict, S: float) -> float:
+        """World height of a layer's bodies: its thickness, or twice the half height of an inflated body (the
+        silhouette's inradius bounds every piece's)."""
+        dp = Lr["depth"]
+        th = max(0.0, float(dp.get("thickness", 0.1)))
+        k = max(0.0, float(dp.get("inflate", 0.0) or 0.0))
+        if k <= 0.0:
+            return th
+        spl = g.get("silhouette") or [s for r in g.get("regions") or [] for s in r.get("splines") or []]
+        D = heightfield.inradius(spl, S, "D-" + geo_key(g, Lr["id"])) * S
+        b = min(max(0.0, float(dp.get("bevel", 0.045))), th / 2.0)
+        return max(th, 2.0 * heightfield.half_height(th, b, k, D))
+
+    @staticmethod
+    def subject_points(hulls: list, layer_z: Optional[dict] = None, canvas: bool = False) -> np.ndarray:
+        """Prisms of the subject hulls (layers moved by the animation's per-layer dz). ``canvas`` (CAD iso view):
+        without a visible plate the canvas square −1..1 at z = 0 joins the subject, so iso 0 continues the front
+        framing; a plate's outline already spans −1..1 (its square's corners would only pad turned views)."""
         layer_z = layer_z or {}
         chunks = []
-        for hull, z, th, scaled, lid in hulls:
-            z0 = (z * explode + LAYER_EPS + float(layer_z.get(lid, 0.0))) if scaled else z
-            chunks.append(framing.prism(hull, z0, z0 + th))
+        for hull, z0, z1, lid in hulls:
+            dz = float(layer_z.get(lid, 0.0)) if lid is not None else 0.0
+            chunks.append(framing.prism(hull, z0 + dz, z1 + dz))
+        if canvas and not any(h[3] is None for h in hulls):
+            chunks.append(framing.canvas_square(0.0))
         return np.vstack(chunks) if chunks else np.zeros((0, 3))
 
     def plan_animation(self, project: dict, bundle: dict, appearance: str, frame_overrides: list,
                        camera: Optional[dict] = None) -> Optional[dict]:
-        """One framing plan (framing.plan) for every perspective frame of an animation: the union of the
-        sampled frames' subject bounds. None when no frame is perspective."""
+        """One framing plan for every frame of an animation: the union of the sampled frames' subject bounds —
+        framing.plan for perspective frames, framing.ortho_plan for CAD iso frames (front view with iso > 0 in
+        some frame: the iso sweep). None when every frame is the plain front view."""
         proj = norm_project(project)
         bnd = norm_bundle(bundle)
         eff = appearance_mod.resolve(proj, appearance, bnd)["project"]
         base = norm_camera(camera, eff["camera"]) if camera else dict(eff["camera"])
-        hulls = None
-        frames = []
+        hulls = self.subject_hulls(eff, bnd)
+        persp, ortho = [], []
         for ov in frame_overrides:
             cam = dict(base)
             cam.update(ov.get("camera") or {})
-            if "explode" in ov:
-                cam["explode"] = ov["explode"]
+            lz = ov.get("layerZ") or {}
             if cam.get("view", "front") == "front":
-                continue
-            if hulls is None:
-                hulls = self.subject_hulls(eff, bnd)
-            frames.append((self.subject_points(hulls, float(cam.get("explode", 1.0)), ov.get("layerZ") or {}),
-                           float(cam.get("tiltX", 0.0)), float(cam.get("tiltY", 0.0))))
-        if not frames:
-            return None
-        return framing.plan(frames, float(base.get("fov", 30.0) or 30.0), float(base.get("zoom", 1.0) or 1.0))
+                ortho.append((self.subject_points(hulls, lz, canvas=True), _iso(cam)))
+            else:
+                persp.append((self.subject_points(hulls, lz), float(cam.get("tiltX", 0.0)), float(cam.get("tiltY", 0.0))))
+        zoom = float(base.get("zoom", 1.0) or 1.0)
+        if persp:
+            return framing.plan(persp, float(base.get("fov", 30.0) or 30.0), zoom)
+        if any(iso > 0.0 for _, iso in ortho):
+            return framing.ortho_plan(ortho, zoom)
+        return None
 
     # -------------------------------------------------------------------------- plate
-    def _plate(self, col, plate: dict, shape: str, corner_radius: float, role: str, L, env: dict,
-               full_bleed: bool = False, backdrop_wp: Optional[dict] = None) -> None:
+    def _plate(self, col, plate: dict, shape: str, corner_radius: float, full_bleed: bool = False) -> None:
         th = max(0.0, float(plate.get("thickness", 0.16)))
-        bevel_req = max(0.0, float(plate.get("bevel", 0.04)))
-        bevel, route = geometry.effective_bevel(bevel_req, th, 1.0)
+        bevel = min(max(0.0, float(plate.get("bevel", 0.04))), th / 2.0)
         splines = geometry.plate_outline(shape, corner_radius)
         kp = {"plate": shape, "cr": round(corner_radius, 4)}
-        data, route = geometry.solid_mesh(kp, splines, th, bevel, route, 8, gn_bevel=bevel_req)
-        if self.editable:
-            cu, route = geometry.curve_data(kp, splines, th, bevel, route, 8, bevel_req)
-            ob = _curve_object("BIS Plate", cu, col, None)
-        else:
-            ob = _mesh_object("BIS Plate", data, col, None)
+        data, _info = heightfield.piece_mesh(kp, splines, th, bevel, 0.0, 8, 1.0)
+        ob = _mesh_object("BIS Plate", data, col, None)
         ob.location = (0.0, 0.0, -th / 2.0)
         # full-bleed masters: push the bevelled rim just outside the 2.0-wide frame (flat face edge to edge)
         grow = 1.0 + (bevel + 0.01 if full_bleed else 0.0)
         ob.scale = (grow, grow, 1.0)
         ob.color = (1.0, 1.0, 1.0, 1.0)
-        pm = plate["material"]
+        preset, params = materials.resolve(plate["material"])
         paint = paint_spec(plate["fill"], None, (-1.0, -1.0, 1.0, 1.0))
-        spec = materials.make_spec(
-            pm.get("preset", "satin"), pm.get("params"), paint,
-            mono=None, clear=False, alpha=bool(paint.get("has_alpha")),
-            shadow={"kind": "none", "opacity": 0.0}, role=role, thickness=th, light=L,
-            bbox=(-1.0, -1.0, 1.0, 1.0), inflate=0.0, emission=0.0,
-            preview_color=paint.get("color", (0.9, 0.9, 0.9)), eevee_backdrop=backdrop_wp, obj_scale=grow,
-            cm=getattr(self, "_cm", "neutral"), plate=True,
-        )
-        mat = materials.ensure("BIS Mat Plate", spec)
+        spec = materials.make_spec(preset, params, paint, thickness=th, shape="plate",
+                                   preview_color=paint.get("color", (0.9, 0.9, 0.9)))
+        mat = materials.ensure(PLATE_MATERIAL, spec)
         _set_material(ob, mat)
-        if self.editable:
-            geometry.apply_route(ob, route, th, float(cu.get("bis_gb", 0.0) or 0.0), 8, mat)
         self._specs.append(spec)
         ob.visible_shadow = True
 
     # -------------------------------------------------------------------------- layers
-    @staticmethod
-    def _overlaps(a: dict, b: dict, geos: dict, art: dict) -> bool:
-        """Silhouette overlap of two layers in canvas space (coarse raster, 1-cell dilation)."""
-        def mask(L):
-            g = geos[L["id"]]
-            sa, sl = float(art.get("scale", 1)), float(L["transform"].get("scale", 1))
-            dx = float(art.get("x", 0)) * sl + float(L["transform"].get("x", 0))
-            dy = float(art.get("y", 0)) * sl + float(L["transform"].get("y", 0))
-            sil = g["silhouette"] or [s for r in g["regions"] for s in r["splines"]]
-            return geometry.occupancy(geo_key(g, L["id"]), sil, sa * sl, dx, dy)
-        try:
-            return bool((mask(a) & mask(b)).any())
-        except Exception as ex:  # never let a heuristic break a render
-            log("overlap test failed:", ex)
-            return True
-
     def _covered_pieces(self, layers: list, geos: dict, art: dict) -> set:
         """{(layer id, region index)} of pieces completely covered (≥ 99.7 % on a 64² raster of the piece) by
         the union of opaque regions of HIGHER visible layers (normal blend, opacity 1). In the SVG they are
@@ -696,107 +618,25 @@ class SceneBuilder:
         self._cover_cache[key] = hidden
         return hidden
 
-    def _film_params(self, eff: dict, bnd: dict, layers: list, presets_eff: dict, env: dict, shape: str) -> dict:
-        """{(layer id, region index): {'t', 'e'}} for translucent, solid-painted Liquid Glass pieces of the light /
-        dark renditions (overlay.py: the SVG blend over an estimate of what lies beneath, through the colour
-        mode's view transform). Clear / tinted renditions (mono paints over frosted glass) keep the alpha model."""
-        cm = getattr(self, "_cm", "neutral")
-        if env.get("mono") is not None or cm not in overlay.FILM_MODES:
-            return {}
-        cands = []
-        for L in layers:
-            g = bnd["layers"].get(L["id"])
-            fill = L.get("fill") or {"type": "auto"}
-            # combined bodies (mode or touching opaque pieces: one 'sil' piece) have no per-region pieces to film
-            if (g is None or presets_eff[L["id"]] != "liquid_glass" or L.get("mode") == "combined"
-                    or fill.get("type") not in ("auto", "solid") or touching_opaque(g)):
-                continue
-            # raster regions as _build_layer sees them (a missing PNG leaves its piece on the layer material)
-            imgs = {im.get("elementId") for im in g.get("images") or [] if im.get("path") and os.path.isfile(im["path"])}
-            lop = float(L.get("opacity", 1.0))
-            mine, blocked = [], False
-            for i, r in enumerate(g.get("regions") or []):
-                op = float(r.get("opacity", 1.0)) * lop
-                if op >= 0.999:
-                    continue
-                if r.get("elementId") in imgs and fill.get("type", "auto") == "auto":
-                    continue            # a raster piece: its own (alpha) material, never a film
-                paint = fill if fill.get("type") == "solid" else (r.get("paint") or {})
-                if r.get("elementId") not in imgs and paint.get("type") == "solid":
-                    mine.append((L["id"], i, paint.get("color", "#ffffff"), op))
-                else:
-                    # a translucent piece the film cannot express (gradient paint, a raster under a fill override)
-                    # shares the layer material: with film on it read black (no bis_blend_* on it) - the whole
-                    # layer keeps the alpha model instead (reviewer, round 5)
-                    blocked = True
-            if not blocked:
-                cands += mine
-        if not cands:
-            return {}
-        key = stable_hash([cm, shape, cands, eff["canvas"], [[L["id"], L.get("transform"), L.get("opacity", 1.0),
-                           L.get("fill"), geo_key(bnd["layers"][L["id"]], L["id"]) if L["id"] in bnd["layers"] else None]
-                           for L in layers]])
-        hit = self._film_cache.get(key)
-        if hit is not None:
-            return hit
-        out = {}
-        for lid, i, colour, op in cands:
-            try:
-                below = overlay.beneath_srgb(eff, bnd, lid, i, shape)
-            except Exception as ex:  # a heuristic never breaks a render
-                log("beneath estimate failed:", ex)
-                below = None
-            out[(lid, i)] = overlay.film_params(hex_to_srgb(colour), op, below, cm)
-        if len(self._film_cache) > 32:
-            self._film_cache.clear()
-        self._film_cache[key] = out
-        return out
+    def _shape_material(self, Lr: dict, layer_material: dict, element: str, paint: dict, opacity: float,
+                        thickness: float, env: dict, preview, mats: set) -> bpy.types.Material:
+        """The single-Principled material of one shape (PLAN §11): the layer material merged with
+        Layer.elementMaterials[element], named 'BIS <layer name> / <element id>'."""
+        em = (Lr.get("elementMaterials") or {}).get(element) if Lr.get("glass", True) else None
+        preset, params = materials.resolve(layer_material, em)
+        name = materials.shape_name(Lr.get("name") or Lr["id"], element)
+        if name in self._shape_names:          # (a trimmed name shared by two shapes)
+            name = materials.shape_name(f"{Lr['id']} {len(self._shape_names)}", element)
+        self._shape_names.add(name)
+        spec = materials.make_spec(preset, params, paint, opacity=max(0.0, min(1.0, float(opacity))),
+                                   mono=env.get("mono"), thickness=thickness, preview_color=preview,
+                                   shape=f"{Lr['id']}/{element}")
+        mat = materials.ensure(name, spec)
+        self._specs.append(spec)
+        mats.add(mat.name)
+        return mat
 
-    def _flush_params(self, layers: list, geos: dict, canvas: dict, shape: str, presets_eff: dict) -> dict:
-        """{layer id: materials 'flush' spec} for Liquid Glass layers whose outline runs along the plate outline."""
-        if shape == "none":
-            return {}
-        art = canvas["art"]
-        key = stable_hash([shape, canvas.get("cornerRadius"), art, [[L["id"], geo_key(geos[L["id"]], L["id"]) if L["id"] in
-                           geos else None, L.get("transform"), L.get("depth"), presets_eff.get(L["id"])] for L in layers]])
-        hit = self._flush_cache.get(key)
-        if hit is not None:
-            return hit
-        out = {}
-        sa, ax, ay = float(art.get("scale", 1.0)), float(art.get("x", 0.0)), float(art.get("y", 0.0))
-        for L in layers:
-            g = geos.get(L["id"])
-            if g is None or presets_eff.get(L["id"]) != "liquid_glass":
-                continue
-            tr = L.get("transform") or {}
-            sl, tx, ty = float(tr.get("scale", 1.0)), float(tr.get("x", 0.0)), float(tr.get("y", 0.0))
-            spl = g.get("silhouette") or [s for r in g.get("regions") or [] for s in r.get("splines") or []]
-            rings = [(np.asarray(geometry._flatten_ring(s.get("points") or [], True, 6), np.float64) * sa
-                      + np.array([ax, ay])) * sl + np.array([tx, ty]) for s in spl if len(s.get("points") or []) >= 2]
-            bevel = min(float(L["depth"].get("bevel", 0.045)), 0.9 * float(g.get("safeRadius", 1.0)) * sa * sl)
-            try:
-                fs = overlay.flush_spec(rings, shape, float(canvas.get("cornerRadius", 0.225)), bevel)
-            except Exception as ex:  # a heuristic never breaks a render
-                log("flush test failed:", ex)
-                fs = None
-            if fs:
-                out[L["id"]] = fs
-        if len(self._flush_cache) > 32:
-            self._flush_cache.clear()
-        self._flush_cache[key] = out
-        return out
-
-    @staticmethod
-    def _canvas_bbox(bbox, art: dict, tr: dict):
-        sa, ax, ay = float(art.get("scale", 1)), float(art.get("x", 0)), float(art.get("y", 0))
-        sl, tx, ty = float(tr.get("scale", 1)), float(tr.get("x", 0)), float(tr.get("y", 0))
-        f = lambda x, y: ((x * sa + ax) * sl + tx, (y * sa + ay) * sl + ty)  # noqa: E731
-        x0, y0 = f(bbox[0], bbox[1])
-        x1, y1 = f(bbox[2], bbox[3])
-        return (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
-
-    def _layer(self, col, art_ob, Lr: dict, g: dict, sa: float, explode: float, role: str, preset: str,
-               L, env: dict, stats: dict, dz: float):
+    def _layer(self, col, art_ob, Lr: dict, g: dict, sa: float, env: dict, stats: dict, dz: float):
         lid = Lr["id"]
         tr = Lr["transform"]
         dp = Lr["depth"]
@@ -806,20 +646,18 @@ class SceneBuilder:
         ta = Vector((art_ob.location.x, art_ob.location.y))
         Tl = Vector((float(tr.get("x", 0.0)), float(tr.get("y", 0.0))))
         Tp = (sl * ta + Tl - ta) / sa
-        z_world = float(dp.get("z", 0.0)) * explode + LAYER_EPS + dz
+        z_world = float(dp.get("z", 0.0)) + LAYER_EPS + dz          # REAL distances (no explode)
         lay = _empty(f"BIS Layer {lid}", col, art_ob)
         lay.location = (Tp.x, Tp.y, z_world / sa)
         lay.scale = (sl, sl, sl)
         names = {lay.name}
+        # height-field bodies (heightfield.py): round edge radius b ≤ thickness/2 everywhere, thin parts taper
         thickness = max(0.0, float(dp.get("thickness", 0.1)))
         th_local = thickness / S
-        bevel_local_req = float(dp.get("bevel", 0.045)) / S
-        bevel_local, route = geometry.effective_bevel(bevel_local_req, th_local, float(g.get("safeRadius", 1.0)))
-        if route == "gn":
-            stats["gnFallback"] += 1
-        if bevel_local < bevel_local_req - 1e-9:
-            stats["clampedBevel"] += 1
+        bevel_local = min(max(0.0, float(dp.get("bevel", 0.045))), thickness / 2.0) / S
+        inflate = max(0.0, min(1.0, float(dp.get("inflate", 0.0) or 0.0)))
         segments = int(dp.get("bevelSegments", 6))
+        placed = []        # (object, z offset) — positioned once every body's half height is known
         layer_opacity = float(Lr.get("opacity", 1.0))
 
         # ---- pieces ----------------------------------------------------------------------------------
@@ -832,7 +670,10 @@ class SceneBuilder:
             else:       # a missing PNG would render Cycles' magenta "missing texture" colour
                 self.warnings.append(f"layer {lid}: raster image not found: {im['path']}")
         pieces = []        # (piece id, splines, z offset, opacity, rgb, raster image | None)
-        combined_body = Lr.get("mode") == "combined" or touching_opaque(g, images)
+        # a shape with its own material (Layer.elementMaterials) needs its own body: no automatic merge then
+        own = (Lr.get("elementMaterials") or {}) if Lr.get("glass", True) else {}
+        combined_body = Lr.get("mode") == "combined" or (
+            touching_opaque(g, images) and not any(r.get("elementId") in own for r in g["regions"]))
         if combined_body:
             # touching opaque pieces of one layer (Gmail's M + its shading wedges, DJI's facets, CRD's chevron)
             # are one body painted by the layer texture: bevelled one by one, every shared edge became a
@@ -848,42 +689,15 @@ class SceneBuilder:
                                paint_rgb(r.get("paint") or {}), images.get(r["elementId"])))
         region_ids = {r["elementId"] for r in g["regions"]}
         cards = [im for eid, im in images.items() if eid not in region_ids]
-        # raster regions are extruded along their alpha-traced contour, which cuts off soft alpha (a neon
-        # tube's glow halo, a soft shadow disc): such images also get a flat halo card under the piece. A
-        # region that is mostly soft (Vanced Neon's glow layer: 55 % of its pixels) is a glow, not an object:
-        # extruded, its traced band became a second glass ring around the tube (QA round 3 #4) - card only.
-        soft = {eid: soft_alpha_fraction(im["path"]) for eid, im in images.items()
-                if eid in region_ids and not im.get("opaque")}
-        cards += [images[eid] for eid, f in soft.items() if f > HALO_SOFT_MIN]
-        glow_ids = {eid for eid, f in soft.items() if f > GLOW_SOFT_MIN}
-        if glow_ids and Lr.get("mode") != "combined":
-            pieces = [p for p, r in zip(pieces, g["regions"]) if r["elementId"] not in glow_ids]
-            stats["glowCards"] = stats.get("glowCards", 0) + len(glow_ids)
 
-        # ---- material ----------------------------------------------------------------------------------
+        # ---- materials: one single-Principled material per shape (PLAN §11) ----------------------------------
         bbox = tuple(g.get("bbox") or (-1, -1, 1, 1))
-        paint = paint_spec(Lr.get("fill") or {"type": "auto"}, g.get("texturePath"), bbox)
-        alpha = any(p[3] < 0.999 for p in pieces) or bool(paint.get("has_alpha"))
-        blend = str(Lr.get("blendMode", "normal"))
-        boost = float(env.get("emission", 0.0)) + (0.6 if blend in ("plus-lighter", "screen", "lighten") else 0.0)
-        mpar = dict(Lr["material"].get("params") or {})
-        spec = materials.make_spec(
-            preset, mpar if preset == Lr["material"]["preset"] else {}, paint,
-            mono=(env.get("monoCombined") or env.get("mono")) if combined_body else env.get("mono"),
-            clear=bool(env.get("clear")), alpha=alpha,
-            edge_dark=float(env.get("edgeDark", 0.0) or 0.0),
-            shadow=dict(Lr.get("shadow") or {}), role=role, thickness=th_local, light=L, bbox=bbox,
-            inflate=float(dp.get("inflate", 0.0)), emission=boost, lit=getattr(self, "_lit", 1.0),
-            preview_color=pieces[0][4] if pieces else (0.8, 0.8, 0.8), cm=getattr(self, "_cm", "neutral"),
-            film=any(k[0] == lid for k in self._film), flush=self._flush.get(lid),
-            solid_edge=THIN_SOLID if bevel_local >= THIN_RATIO * float(g.get("safeRadius", 1.0)) else 0.0,
-        )
-        if preset == "tinted_glass" and spec["shadow"].get("kind") == "neutral":
-            spec["shadow"]["kind"] = "chromatic"
-        mat_name = f"BIS Mat {lid}"
-        mat = materials.ensure(mat_name, spec)
-        self._specs.append(spec)
-        mats = {mat_name}
+        fill = Lr.get("fill") or {"type": "auto"}
+        layer_mat = Lr["material"] if Lr.get("glass", True) else {"preset": "flat", "params": {}}
+        eids = {f"r{i}": str(r.get("elementId") or f"r{i}") for i, r in enumerate(g["regions"])}
+        rpaints = {f"r{i}": r.get("paint") for i, r in enumerate(g["regions"])}
+        cast = (Lr.get("shadow") or {}).get("kind", "physical") != "none"      # real shadows only: on / off
+        mats: set = set()
 
         key_base = {"h": geo_key(g, lid), "lid": lid}
         n_open = sum(geometry.count_open(p[1] or []) for p in pieces)
@@ -895,46 +709,22 @@ class SceneBuilder:
         for pid, splines, zoff, op, rgb, raster in pieces:
             if not splines:
                 continue
-            pmat = mat
-            if raster is not None and (Lr.get("fill") or {}).get("type", "auto") == "auto":
+            kp = {**key_base, "p": pid, "n": len(splines)}
+            data, _hinfo = heightfield.piece_mesh(kp, splines, th_local, bevel_local, inflate, segments, S)
+            if data is None:
+                self.warnings.append(f"layer {lid} {pid}: degenerate outline skipped")
+                continue
+            if raster is not None and fill.get("type", "auto") == "auto":
                 # raster element extruded along its alpha contour: project its own PNG with its exact
                 # placement (its alpha is honoured: traced contours may include soft, partly transparent pixels)
-                rpaint = {"kind": "texture", "image": raster["path"], "uv": image_uv(raster, bbox),
-                          "has_alpha": True}
-                # alpha-traced contours wobble: a full-strength rim drew a jagged white fringe (iMessage's tail)
-                rparams = dict(spec["params"])
-                rparams["rim"] = float(rparams.get("rim", 1.0) or 0.0) * RASTER_RIM
-                rspec = dict(spec, paint=rpaint, params=rparams, alpha=True, film=False)
-                rname = f"BIS Mat {lid} {pid}"
-                pmat = materials.ensure(rname, rspec)
-                self._specs.append(rspec)
-                mats.add(rname)
-            # GN route from the start: the Bevel modifier gets the requested width (use_clamp_overlap does the
-            # clamping); a route switched by cusps / failed caps keeps the clamped bevel. Raster pieces (alpha-
-            # traced, slightly wobbly contours) always take the GN route: a round curve bevel lenses every
-            # wobble of the trace into crinkled highlights, the angle-limited Bevel modifier keeps them clean.
-            want = "gn" if raster is not None else route
-            kp = {**key_base, "p": pid, "n": len(splines)}
-            gbev = bevel_local_req if route == "gn" else bevel_local
-            data, proute = geometry.solid_mesh(kp, splines, th_local, bevel_local, want, segments, gn_bevel=gbev)
-            if proute != route:
-                stats["gnFallback"] += 1
-            if self.editable:
-                cu, proute = geometry.curve_data(kp, splines, th_local, bevel_local, want, segments, gbev)
-                ob = _curve_object(f"BIS {lid} {pid}", cu, col, lay)
+                ppaint = {"kind": "texture", "image": raster["path"], "uv": image_uv(raster, bbox), "has_alpha": True}
             else:
-                ob = _mesh_object(f"BIS {lid} {pid}", data, col, lay)
-            ob.location = (0.0, 0.0, (thickness / 2.0 + zoff) / S)
+                ppaint = paint_spec(fill, g.get("texturePath"), bbox, rpaints.get(pid))
+            pmat = self._shape_material(Lr, layer_mat, eids.get(pid, "body"), ppaint, op, th_local, env, rgb, mats)
+            ob = _mesh_object(f"BIS {lid} {pid}", data, col, lay)
+            placed.append((ob, zoff))
             ob.scale = (1.0, 1.0, 1.0)
             ob.color = (*rgb, max(0.0, min(1.0, op)))
-            fp = self._film.get((lid, int(pid[1:]))) if pid.startswith("r") else None
-            if fp is not None:     # display-space blend film (materials._film): per-piece transmission / emission
-                ob["bis_blend_t"] = [float(v) for v in fp["t"]]
-                ob["bis_blend_e"] = [float(v) for v in fp["e"]]
-            else:                  # objects are reused by name: no stale coefficients from an earlier build
-                for k in ("bis_blend_t", "bis_blend_e"):
-                    if k in ob:
-                        del ob[k]
             covered = pid.startswith("r") and (lid, int(pid[1:])) in self._hidden
             if ob.visible_transmission == covered:
                 ob.visible_transmission = not covered
@@ -942,37 +732,36 @@ class SceneBuilder:
             if covered:
                 stats["hiddenPieces"] = stats.get("hiddenPieces", 0) + 1
             _set_material(ob, pmat)
-            if self.editable:
-                geometry.apply_route(ob, proute, th_local, float(cu.get("bis_gb", 0.0) or 0.0), segments, pmat)
+            if ob.visible_shadow != cast:
+                ob.visible_shadow = cast
             names.add(ob.name)
             stats["pieces"] += 1
+        # every body of the layer shares one mid-plane at z + thickness/2; an inflated layer is lifted so that its
+        # lowest point stays on z (the dome is mirrored below the mid-plane)
+        half = max([float(ob.data.get("bis_half", 0.0)) for ob, _ in placed] + [0.0])
+        lift = max(0.0, half - th_local / 2.0)
+        for ob, zoff in placed:
+            ob.location = (0.0, 0.0, (thickness / 2.0 + zoff) / S + lift)
 
         for k, im in enumerate(cards):
             bb = im.get("bbox") or bbox
             quad = image_quad(im, bbox)
             ckp = {"card": im.get("path"), "quad": [list(p) for p in quad]}
             cspl = [geometry.poly_spline(quad)]
-            data, _ = geometry.solid_mesh(ckp, cspl, CARD_THICKNESS / S, 0.0, "gn", 1)
-            if self.editable:
-                ccu, _r = geometry.curve_data(ckp, cspl, CARD_THICKNESS / S, 0.0, "gn", 1)
-                ob = _curve_object(f"BIS {lid} img{k}", ccu, col, lay)
-            else:
-                ob = _mesh_object(f"BIS {lid} img{k}", data, col, lay)
+            data, _ = heightfield.piece_mesh(ckp, cspl, CARD_THICKNESS / S, 0.0, 0.0, 1, S)
+            if data is None:
+                continue
+            ob = _mesh_object(f"BIS {lid} img{k}", data, col, lay)
             ob.location = (0.0, 0.0, (CARD_THICKNESS / 2.0 + 0.0005) / S)
             ob.color = (1.0, 1.0, 1.0, max(0.0, min(1.0, float(im.get("opacity", 1.0)) * layer_opacity)))
             cpaint = {"kind": "texture", "image": im["path"], "uv": image_uv(im, bbox), "has_alpha": True}
-            cspec = materials.make_spec("flat", {}, cpaint, mono=env.get("mono"), alpha=True,
-                                        shadow=dict(Lr.get("shadow") or {}), role="opaque",
-                                        thickness=CARD_THICKNESS / S, light=L, bbox=tuple(bb),
-                                        cm=getattr(self, "_cm", "neutral"))
-            cname = f"BIS Mat {lid} img{k}"
-            cmat = materials.ensure(cname, cspec)
+            # an unextruded <image> is flat art: the 'flat' preset (emission-painted) unless the shape has its own
+            cmat = self._shape_material(Lr, {"preset": "flat", "params": {}}, str(im.get("elementId") or f"img{k}"),
+                                        cpaint, ob.color[3], CARD_THICKNESS / S, env, (1.0, 1.0, 1.0), mats)
             _set_material(ob, cmat)
-            if self.editable:
-                geometry.apply_route(ob, _r, CARD_THICKNESS / S, 0.0, 1, cmat)
+            if ob.visible_shadow != cast:
+                ob.visible_shadow = cast
             names.add(ob.name)
-            mats.add(cname)
-            self._specs.append(cspec)
         return names, mats
 
     # -------------------------------------------------------------------------- wallpaper
@@ -992,9 +781,9 @@ class SceneBuilder:
         ob.visible_glossy = True
         ob.visible_transmission = True
         w = appearance_mod.wallpaper(kind)
-        mat = bpy.data.materials.get("BIS Mat Wallpaper") or bpy.data.materials.new("BIS Mat Wallpaper")
-        from .nodes import Graph, TopologyMismatch, auto_layout
-        key = "wp1"
+        mat = bpy.data.materials.get(WALLPAPER_MATERIAL) or bpy.data.materials.new(WALLPAPER_MATERIAL)
+        from .nodes import Graph, TopologyMismatch, layout
+        key = "wp2"
 
         def build(gr: Graph):
             tc = gr.node("ShaderNodeTexCoord")
@@ -1007,11 +796,11 @@ class SceneBuilder:
                 d = gr.vmath("DISTANCE", pos, (b["x"] * A.WP_POS, b["y"] * A.WP_POS, 0.0))
                 f = gr.map_range(d, 0.0, b["r"] * A.WP_R, 1.0, 0.0, interp="SMOOTHSTEP")
                 base = gr.mix_rgb(gr.math("MULTIPLY", f, A.WP_MIX), base, (*hex_to_linear(b["color"]), 1))
-            em = gr.node("ShaderNodeEmission")
-            gr.set(em.inputs["Color"], base)
-            gr.set(em.inputs["Strength"], 1.0)
-            out = gr.node("ShaderNodeOutputMaterial")
-            gr.link(em.outputs[0], out.inputs["Surface"])
+            p = gr.node("ShaderNodeBsdfPrincipled", "Principled BSDF")
+            gr.inputs(p, {"Base Color": (0.0, 0.0, 0.0, 1.0), "Roughness": 1.0, "Specular IOR Level": 0.0,
+                          "Emission Color": base, "Emission Strength": 1.0})
+            out = gr.node("ShaderNodeOutputMaterial", "Material Output", target="ALL")
+            gr.link(p.outputs[0], out.inputs["Surface"])
 
         if mat.get("bis_key") == key:
             try:
@@ -1022,7 +811,7 @@ class SceneBuilder:
             mat.node_tree.nodes.clear()
             build(Graph(mat.node_tree))
             mat["bis_key"] = key
-            auto_layout(mat.node_tree)
+            layout(mat.node_tree)
         if len(ob.data.materials) == 0:
             ob.data.materials.append(mat)
         else:

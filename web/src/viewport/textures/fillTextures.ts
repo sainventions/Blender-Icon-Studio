@@ -70,19 +70,14 @@ function addStops(g: CanvasGradient, stops: GradientStop[]): void {
 }
 
 function statsFromColors(colors: string[]): PaintStats {
-  let lo = Infinity
-  let hi = -Infinity
   const avg: [number, number, number] = [0, 0, 0]
   for (const hex of colors) {
     const c = new THREE.Color().setStyle(hex) // → linear working space
-    const l = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b
-    lo = Math.min(lo, l)
-    hi = Math.max(hi, l)
     avg[0] += c.r / colors.length
     avg[1] += c.g / colors.length
     avg[2] += c.b / colors.length
   }
-  return { lumMin: lo, lumMax: hi, avg, alphaMax: 1 }
+  return { avg }
 }
 
 function drawGradient(fill: GradientFill): GradientAsset {
@@ -168,8 +163,4 @@ export function fillPreviewColor(fill: Fill, fallback = '#ffffff'): string {
     default:
       return fallback
   }
-}
-
-export function colorStats(hex: string): PaintStats {
-  return statsFromColors([hex])
 }

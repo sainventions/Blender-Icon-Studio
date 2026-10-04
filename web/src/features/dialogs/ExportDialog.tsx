@@ -61,7 +61,12 @@ export function ExportDialog() {
 
   const est = useMemo(() => {
     const per = prefs.quality === 'ultra' ? 40 : prefs.quality === 'final' ? 8 : prefs.quality === 'preview' ? 1.5 : 0.4
-    const renders = Math.max(1, prefs.appearances.length) + (prefs.targets.includes('android') ? 2 : 0) + (prefs.targets.includes('watchos') ? 1 : 0) + (prefs.targets.includes('marketing') ? 1 : 0)
+    // marketing (server export.plan_export): hero (3/4 CAD view) + isometric hero of the primary appearance, plus a
+    // dark hero when Dark is exported alongside another primary
+    const apps = prefs.appearances
+    const primary = apps.includes('light') ? 'light' : apps[0]
+    const marketing = prefs.targets.includes('marketing') ? 2 + (apps.includes('dark') && primary !== 'dark' ? 1 : 0) : 0
+    const renders = Math.max(1, prefs.appearances.length) + (prefs.targets.includes('android') ? 2 : 0) + (prefs.targets.includes('watchos') ? 1 : 0) + marketing
     return per * renders
   }, [prefs])
 

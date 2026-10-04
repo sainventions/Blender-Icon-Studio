@@ -14,7 +14,7 @@ from typing import Callable, Optional
 
 import bpy
 
-from . import VERSION, geometry, gpu, materials
+from . import VERSION, gpu, heightfield, materials
 from . import presets as P
 from . import render as R
 from . import swatches as SW
@@ -149,8 +149,8 @@ def _render_one(ctx: Context, project: dict, bundle: dict, args: dict, out: str,
     cm = _color_mode(project)
     settings = R.configure(scene, quality, args.get("size") or project["render"].get("size"),
                            transparent=transparent, color_mode=cm,
-                           max_frost=info["maxFrost"], volume=info["volume"], samples=args.get("samples"))
-    R.configure_compositor(scene, info["neonBloom"], transparent, P.soft_clip_knee(cm))
+                           max_glass_roughness=info["maxGlassRoughness"], samples=args.get("samples"))
+    R.configure_compositor(scene, info["bloom"], transparent, P.soft_clip_knee(cm))
     build_s = time.perf_counter() - t0
     if progress:
         progress(lo + (hi - lo) * 0.05, "scene built")
@@ -242,8 +242,7 @@ def cmd_save_blend(ctx: Context, args: dict, progress) -> dict:
     appearance = _appearance(args, project)
     quality = _quality(args, project, "final")
     backdrop = _backdrop(project, args)
-    # editable pieces: live curves (round bevel) / GN modifier stacks instead of the baked render meshes,
-    # so bevels, extrusion and modifiers can be tweaked in Blender
+    # pieces are the same height-field body meshes the renders use (plain meshes, editable in Blender)
     # lights calibrated for the engine the .blend is saved with (a draft-quality .blend opens in EEVEE)
     info = ctx.builder.build(project, bundle, appearance, camera=args.get("camera"),
                              full_bleed=bool(args.get("fullBleed", False)), backdrop=backdrop, editable=True,
@@ -251,10 +250,9 @@ def cmd_save_blend(ctx: Context, args: dict, progress) -> dict:
     scene = bpy.context.scene
     cm = _color_mode(project)
     R.configure(scene, quality, args.get("size"), transparent=info["backdrop"] == "transparent",
-                color_mode=cm, max_frost=info["maxFrost"], volume=info["volume"])
-    R.configure_compositor(scene, info["neonBloom"], info["backdrop"] == "transparent", P.soft_clip_knee(cm))
+                color_mode=cm, max_glass_roughness=info["maxGlassRoughness"])
+    R.configure_compositor(scene, info["bloom"], info["backdrop"] == "transparent", P.soft_clip_knee(cm))
     scene.render.filepath = "//render.png"
-    materials.layout_all()
     os.makedirs(os.path.dirname(os.path.abspath(out)) or ".", exist_ok=True)
     packed = []
     if args.get("pack", True):
@@ -276,9 +274,8 @@ def cmd_save_blend(ctx: Context, args: dict, progress) -> dict:
     return {"path": os.path.abspath(out), "packed": len(packed), "appearance": info["appearance"],
             "quality": quality,
             "editable": {"curves": sum(ob.type == "CURVE" for ob in pieces),
-                         "bevelCurves": sum(ob.type == "CURVE" and ob.data.bevel_depth > 0 for ob in pieces),
-                         "modifierStacks": sum(ob.type == "CURVE" and len(ob.modifiers) > 0 for ob in pieces),
-                         "meshes": sum(ob.type == "MESH" for ob in pieces)}}
+                         "meshes": sum(ob.type == "MESH" for ob in pieces),
+                         "bodies": sum(ob.type == "MESH" and ob.data.get("bis_route") == "heightfield" for ob in pieces)}}
 
 
 def cmd_swatches(ctx: Context, args: dict, progress) -> dict:
@@ -290,13 +287,23 @@ def cmd_swatches(ctx: Context, args: dict, progress) -> dict:
 
 
 def cmd_scene_info(ctx: Context, args: dict, progress) -> dict:
-    """Introspection (debug UI / tests): BIS objects, materials (topology key + node identity), curves."""
+    """Introspection (debug UI / tests): BIS objects, shape materials (topology key, node identity, node types,
+    Principled input values), curves."""
     mats = {}
     for m in bpy.data.materials:
-        if m.name.startswith("BIS Mat") and m.node_tree is not None:
+        if m.get(materials.SHAPE_PROP) and m.node_tree is not None:
             nodes = m.node_tree.nodes
-            mats[m.name] = {"key": m.get("bis_key", ""), "preset": m.get("bis_preset", ""), "role": m.get("bis_role", ""),
+            bsdf = [n for n in nodes if n.bl_idname == "ShaderNodeBsdfPrincipled"]
+            values = {}
+            if bsdf:
+                for s in bsdf[0].inputs:
+                    if s.enabled and not s.is_linked and s.type == "VALUE":
+                        values[s.name] = round(float(s.default_value), 5)
+            mats[m.name] = {"key": m.get("bis_key", ""), "preset": m.get("bis_preset", ""),
+                            "shape": m.get(materials.SHAPE_PROP, ""),
                             "nodes": len(nodes), "nodeIds": sum(n.as_pointer() % 1000003 for n in nodes),
+                            "types": sorted(n.bl_idname for n in nodes), "principled": values,
+                            "linked": sorted(s.name for s in (bsdf[0].inputs if bsdf else []) if s.is_linked),
                             "raytraceRefraction": bool(m.use_raytrace_refraction), "users": m.users,
                             "renderMethod": m.surface_render_method}
     objs = []
@@ -307,25 +314,18 @@ def cmd_scene_info(ctx: Context, args: dict, progress) -> dict:
                          "material": ob.material_slots[0].material.name if ob.material_slots and
                          ob.material_slots[0].material else None,
                          "location": [round(v, 5) for v in ob.matrix_world.translation],
-                         "reason": (bpy.data.curves.get(ob.data.get("bis_curve", "")) or {}).get("bis_reason", "")
-                         if ob.type == "MESH" and ob.data else "",
-                         "visibleTransmission": bool(ob.visible_transmission)})
-            if args.get("check") and ob.type == "MESH" and ob.data and ob.data.get("bis_curve"):
-                cu = bpy.data.curves.get(ob.data["bis_curve"])
-                if cu is not None and cu.get("bis_outline"):
-                    # the baked piece vs its true outline: missing / inverted caps, geometry outside it
-                    objs[-1]["check"] = geometry.check_piece(ob.data, geometry.curve_splines(cu),
-                                                             float(cu.get("bis_bevel", 0.0) or 0.0),
-                                                             json.loads(cu["bis_outline"]))
+                         "visibleTransmission": bool(ob.visible_transmission),
+                         "visibleShadow": bool(ob.visible_shadow)})
+            if args.get("check") and ob.type == "MESH" and ob.data and ob.data.get("bis_route") == "heightfield":
+                # the body mesh: non-manifold edges, self-intersections, normals facing away from their faces
+                objs[-1]["check"] = heightfield.check_mesh(ob.data)
     lights = {ob.name: round(float(ob.data.energy), 4) for ob in bpy.data.objects
               if ob.name.startswith("BIS") and ob.type == "LIGHT" and ob.data is not None}
     sc = bpy.context.scene
     comp = {"useCompositing": bool(sc.render.use_compositing), "viewTransform": sc.view_settings.view_transform,
             "group": sc.compositing_node_group.name if sc.compositing_node_group else None}
-    props = {ob.name: {k: [round(float(v), 5) for v in ob[k]] for k in ("bis_blend_t", "bis_blend_e") if k in ob}
-             for ob in bpy.data.objects if ob.name.startswith("BIS") and "bis_blend_t" in ob}
     return {"materials": mats, "objects": objs, "curves": len(bpy.data.curves), "images": len(bpy.data.images),
-            "lights": lights, "compositor": comp, "film": props,
+            "lights": lights, "compositor": comp,
             "engine": bpy.context.scene.render.engine, "info": {k: v for k, v in ctx.builder.info.items()
                                                                 if k in ("appearance", "backdrop", "stats")}}
 
@@ -354,16 +354,10 @@ def warmup(ctx: Context, full: bool = True, cycles: bool = True) -> dict:
                         tmp, None)
             timings[q] = round(time.perf_counter() - t, 3)
         if full:
-            # projects saved before the 'brand' default carry render.colorMode 'neutral': its paint variants too
-            t = time.perf_counter()
-            neutral = dict(project, render=dict(project["render"], colorMode="neutral"))
-            _render_one(ctx, neutral, bundle, {"quality": "draft", "size": 64, "samples": 4}, tmp, None)
-            timings["neutral"] = round(time.perf_counter() - t, 3)
-            # the clear / tinted renditions turn every layer into Liquid Glass with its own (mono) node variants —
-            # the appearance strip renders all four: a reduced scene holds every Liquid Glass role / paint kind
+            # the tinted renditions add the mono (luminance x tint) paint variant; clear ones the frosted plate
             t = time.perf_counter()
             mproj, mbundle = SW.warmup_scene(full, mono=True)
-            for ap in ("clear-dark", "tinted-dark", "clear-light", "tinted-light"):
+            for ap in ("clear-dark", "tinted-dark"):
                 _render_one(ctx, mproj, mbundle, {"quality": "draft", "size": 64, "samples": 4, "appearance": ap},
                             tmp, None)
             timings["mono"] = round(time.perf_counter() - t, 3)

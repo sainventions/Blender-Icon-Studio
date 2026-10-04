@@ -96,15 +96,15 @@ class Graph:
         n.outputs[0].default_value = (c + (1.0,))[:4] if len(c) == 3 else c[:4]
         return n.outputs[0]
 
-    def math(self, op: str, a: Value, b: Value = None, c: Value = None, clamp: bool = False) -> Socket:
-        n = self.node("ShaderNodeMath", operation=op, use_clamp=clamp)
+    def math(self, op: str, a: Value, b: Value = None, c: Value = None, clamp: bool = False, label: str = "") -> Socket:
+        n = self.node("ShaderNodeMath", label, operation=op, use_clamp=clamp)
         for i, v in enumerate((a, b, c)):
             if v is not None:
                 self.set(n.inputs[i], v)
         return n.outputs[0]
 
-    def vmath(self, op: str, a: Value, b: Value = None, scale: Optional[float] = None) -> Socket:
-        n = self.node("ShaderNodeVectorMath", operation=op)
+    def vmath(self, op: str, a: Value, b: Value = None, scale: Optional[float] = None, label: str = "") -> Socket:
+        n = self.node("ShaderNodeVectorMath", label, operation=op)
         if a is not None:
             self.set(n.inputs[0], a)
         if b is not None:
@@ -126,23 +126,16 @@ class Graph:
         self.set(n.inputs[0], v)
         return n
 
-    def mix_rgb(self, fac: Value, a: Value, b: Value, blend: str = "MIX", clamp: bool = False) -> Socket:
-        n = self.node("ShaderNodeMix", data_type="RGBA", blend_type=blend, clamp_result=clamp)
+    def mix_rgb(self, fac: Value, a: Value, b: Value, blend: str = "MIX", clamp: bool = False, label: str = "") -> Socket:
+        n = self.node("ShaderNodeMix", label, data_type="RGBA", blend_type=blend, clamp_result=clamp)
         self.set(n.inputs[0], fac)
         self.set(n.inputs[6], a)
         self.set(n.inputs[7], b)
         return n.outputs[2]
 
-    def mix_float(self, fac: Value, a: Value, b: Value) -> Socket:
-        n = self.node("ShaderNodeMix", data_type="FLOAT")
-        self.set(n.inputs[0], fac)
-        self.set(n.inputs[2], a)
-        self.set(n.inputs[3], b)
-        return n.outputs[0]
-
     def map_range(self, v: Value, fmin: Value, fmax: Value, tmin: Value, tmax: Value,
-                  interp: str = "LINEAR", clamp: bool = True) -> Socket:
-        n = self.node("ShaderNodeMapRange", interpolation_type=interp, clamp=clamp)
+                  interp: str = "LINEAR", clamp: bool = True, label: str = "") -> Socket:
+        n = self.node("ShaderNodeMapRange", label, interpolation_type=interp, clamp=clamp)
         self.set(n.inputs["Value"], v)
         self.set(n.inputs["From Min"], fmin)
         self.set(n.inputs["From Max"], fmax)
@@ -151,22 +144,17 @@ class Graph:
         return n.outputs["Result"]
 
     def mix_shader(self, fac: Value, a: Socket, b: Socket) -> Socket:
+        """World only (camera-ray backdrop). Shape materials never mix shaders (PLAN §11: one Principled BSDF)."""
         n = self.node("ShaderNodeMixShader")
         self.set(n.inputs[0], fac)
         self.link(a, n.inputs[1])
         self.link(b, n.inputs[2])
         return n.outputs[0]
 
-    def add_shader(self, a: Socket, b: Socket) -> Socket:
-        n = self.node("ShaderNodeAddShader")
-        self.link(a, n.inputs[0])
-        self.link(b, n.inputs[1])
-        return n.outputs[0]
-
     def ramp(self, fac: Value, samples: Iterable[tuple[float, Sequence[float], float]],
-             interpolation: str = "LINEAR") -> bpy.types.Node:
+             interpolation: str = "LINEAR", label: str = "") -> bpy.types.Node:
         """Colour ramp; ``samples`` = (position, linear rgb, alpha). Elements are (re)assigned in both modes."""
-        n = self.node("ShaderNodeValToRGB")
+        n = self.node("ShaderNodeValToRGB", label)
         self.set(n.inputs["Fac"], fac)
         set_ramp(n, samples, interpolation)
         return n
@@ -191,27 +179,42 @@ def set_ramp(node: bpy.types.Node, samples, interpolation: str = "LINEAR") -> No
         els[1].color = els[0].color
 
 
-def auto_layout(nt: bpy.types.NodeTree, dx: float = 260.0, dy: float = 200.0) -> None:
-    """Cosmetic: place nodes in columns by distance to the output (nicer .blend files)."""
-    level: dict[str, int] = {}
+# rough node heights (background mode has no UI to measure them): readable columns without overlaps
+_HEIGHT = {"ShaderNodeBsdfPrincipled": 720, "ShaderNodeTexImage": 270, "ShaderNodeMapping": 400,
+           "ShaderNodeTexNoise": 300, "ShaderNodeMapRange": 290, "ShaderNodeTexCoord": 250, "ShaderNodeValToRGB": 260,
+           "ShaderNodeMix": 220, "ShaderNodeBump": 190, "ShaderNodeOutputMaterial": 160, "ShaderNodeOutputWorld": 120,
+           "ShaderNodeRGB": 210, "ShaderNodeBackground": 120}
+
+
+def layout(nt: bpy.types.NodeTree, dx: float = 300.0, gap: float = 40.0) -> None:
+    """Cosmetic: columns by the longest path to the output, each column ordered by the input socket it feeds, so a
+    Blender user sees  pre-processing → Principled BSDF → Material Output  from left to right."""
     outs = [n for n in nt.nodes if not n.outputs or n.bl_idname in ("ShaderNodeOutputMaterial",
-                                                                     "ShaderNodeOutputWorld", "NodeGroupOutput")]
-    incoming: dict[str, list] = {}
+                                                                    "ShaderNodeOutputWorld", "NodeGroupOutput")]
+    feeds: dict[str, list] = {}
     for lk in nt.links:
-        incoming.setdefault(lk.to_node.name, []).append(lk.from_node)
-    stack = [(n, 0) for n in outs]
-    guard = 0
-    while stack and guard < 20000:
-        guard += 1
-        n, d = stack.pop()
-        if level.get(n.name, -1) >= d:
-            continue
-        level[n.name] = d
-        for src in incoming.get(n.name, []):
-            stack.append((src, d + 1))
-    rows: dict[int, int] = {}
+        feeds.setdefault(lk.from_node.name, []).append(lk)
+    level: dict[str, int] = {n.name: 0 for n in outs}
+    for _ in range(len(nt.nodes)):
+        changed = False
+        for lk in nt.links:
+            d = level.get(lk.to_node.name)
+            if d is not None and level.get(lk.from_node.name, -1) < d + 1:
+                level[lk.from_node.name] = d + 1
+                changed = True
+        if not changed:
+            break
+    y_of: dict[str, float] = {}
+    cols: dict[int, list] = {}
     for n in nt.nodes:
-        d = level.get(n.name, 0)
-        r = rows.get(d, 0)
-        rows[d] = r + 1
-        n.location = (-d * dx, -r * dy)
+        cols.setdefault(level.get(n.name, 0), []).append(n)
+    for d in sorted(cols):
+        def order(n):
+            ks = [(y_of.get(lk.to_node.name, 0.0), -list(lk.to_node.inputs).index(lk.to_socket))
+                  for lk in feeds.get(n.name, []) if lk.to_node.name in y_of]
+            return max(ks) if ks else (0.0, 0)
+        y = 0.0
+        for n in sorted(cols[d], key=order, reverse=True):
+            n.location = (-d * dx, y)
+            y_of[n.name] = y
+            y -= _HEIGHT.get(n.bl_idname, 180) + gap

@@ -28,6 +28,7 @@ from .blender.base import Bridge, use_oneshot
 from .blender.bridge import blender_env
 from .config import Settings
 from .jobs import PRIORITY_BACKGROUND, JobContext, JobManager
+from .materials import normalize_camera
 from .models import AnimateRequest, CameraSpec, ExportRequest, Job, Project, RenderRequest
 from .presets import ALL_APPEARANCES, PresetStore
 from .projects import ProjectStore
@@ -39,6 +40,9 @@ log = logging.getLogger("bis.rendering")
 LIVE_RENDERS_KEPT = 60
 MIN_SIZE, MAX_SIZE = 16, 4096
 RENDITION_SIZE = 256
+#: animation kinds renamed by PLAN §11 (the worker only knows the new names)
+LEGACY_ANIMATION_KINDS = {"explode": "iso"}
+HEAD_ON_ISO = 1e-3            # camera.iso at or below this is the head-on front view
 
 
 @dataclass
@@ -317,11 +321,20 @@ class RenderService:
             ctx.check()
             size = self.resolve_size(quality, req.size, p)
             out = self.store.renders_dir(pid) / f"{ctx.job.id}.png"
-            camera: CameraSpec | dict | None = req.camera
+            pov: CameraSpec | None = None
+            if req.camera is not None:  # an explicit POV follows the project camera's §11 rules (iso 0..1, explode 1)
+                pov = req.camera.model_copy(deep=True)
+                normalize_camera(pov)
+            camera: CameraSpec | dict | None = pov
+            if rendition and pov is None:
+                # the appearance renditions (+ size waterfall) preview the exported icon: head-on like every
+                # platform master, whatever the project's CAD-style POV (camera.iso) is
+                camera = {**p.camera.model_dump(mode="json"), "iso": 0.0}
             if req.fullBleed:
                 # PLAN §3: full bleed = square plate filling the frame exactly (ortho_scale 2.0). The worker
-                # divides the ortho scale by camera.zoom, so pin the zoom instead of inheriting the project's.
-                camera = {**(req.camera or p.camera).model_dump(mode="json"), "view": "front", "zoom": 1.0}
+                # divides the ortho scale by camera.zoom, so pin the zoom instead of inheriting the project's;
+                # it is the head-on App Store master, so never the project's CAD-style POV (iso).
+                camera = {**(pov or p.camera).model_dump(mode="json"), "view": "front", "zoom": 1.0, "iso": 0.0}
             ctx.progress(0.06, f"{label} · {appearance} · {size}px" + (" (one-shot)" if oneshot else ""))
             result = await self.render_image(
                 ctx, p, gpath,
@@ -331,7 +344,9 @@ class RenderService:
             )
             if req.live or rendition:
                 await asyncio.to_thread(self._record_live_render, pid, out)
-            front = req.camera is None or req.camera.view == "front"
+            # the library thumbnail is the head-on icon: never a CAD-style POV, whether it was asked for explicitly
+            # or is the project's own camera (the live render follows the project's iso slider)
+            front = (pov is None or pov.view == "front") and (pov or p.camera).iso <= HEAD_ON_ISO
             if (quality in ("draft", "preview") and not rendition and front and not req.fullBleed
                     and appearance == p.appearance):
                 await asyncio.to_thread(self.store.set_thumbnail_from_image, pid, out)
@@ -400,6 +415,9 @@ class RenderService:
     # ------------------------------------------------------------------------------------------ animate
     async def submit_animate(self, pid: str, req: AnimateRequest) -> Job:
         await self._require(pid)
+        kind = LEGACY_ANIMATION_KINDS.get(req.kind, req.kind)   # 'explode' → 'iso' (head-on → iso → head-on)
+        if kind != req.kind:
+            req = req.model_copy(update={"kind": kind})
 
         async def run(ctx: JobContext) -> dict[str, Any]:
             p = await asyncio.to_thread(self.store.load, pid)

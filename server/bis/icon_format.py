@@ -11,6 +11,11 @@ image is the layer's standalone SVG; groups are ordered **front → back** (reve
 
 Every layer SVG is re-framed so that the canvas square (plate −1..1, after ``canvas.art``) maps exactly onto a
 1024×1024 pt artboard; per-layer ``transform`` becomes the group ``position``.
+
+Materials (PLAN §11: one Principled BSDF per shape) → IC's glass knobs, approximately: a layer is glass when its
+``glass`` toggle is on and its Transmission weight ≥ 0.5; ``blur-material`` = roughness / 0.5 (frosted 0.267 ≈ IC's
+default 50 %); ``translucency`` = transmission × (1 − tint / 2); ``specular`` = glass with a non-zero Specular IOR
+level. Shadows: IC ``neutral`` for Cycles' physical shadow, ``none`` for none.
 """
 from __future__ import annotations
 
@@ -28,8 +33,8 @@ log = logging.getLogger("bis.icon_format")
 CANVAS_PT = 1024.0
 ICON_NAME_MAX = 40        # bundle name (Windows MAX_PATH budget, see export.EXPORT_PATH_BUDGET)
 ICON_ASSET_NAME_MAX = 32  # per-layer SVG asset names
-SHADOW_KIND = {"neutral": "neutral", "chromatic": "layer-color", "none": "none"}
-GLASS_PRESETS = {"liquid_glass", "clear_glass", "frosted_glass", "dispersive_crystal", "tinted_glass", "jelly"}
+GLASS_TRANSMISSION = 0.5   # Transmission weight from which a layer counts as glass for Icon Composer
+FROST_FULL = 0.5           # roughness that maps to IC blur 100 %
 
 
 # ---------------------------------------------------------------------------------------------- colours / fills
@@ -142,8 +147,14 @@ def _layer_override(project: Project, which: str, lid: str) -> LayerOverride | N
     return ov
 
 
+def _num(layer: Layer, name: str, presets: dict | None, default: float) -> float:
+    v = _param(layer, name, presets, default)
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else default
+
+
 def group_json(project: Project, layer: Layer, image_name: str, presets: dict | None, art_to_canvas) -> dict:
-    is_glass = layer.glass and layer.material.preset in GLASS_PRESETS
+    transmission = _num(layer, "transmission", presets, 0.0)
+    is_glass = layer.glass and transmission >= GLASS_TRANSMISSION
     dark = _layer_override(project, "dark", layer.id)
     mono = _layer_override(project, "mono", layer.id)
 
@@ -167,17 +178,18 @@ def group_json(project: Project, layer: Layer, image_name: str, presets: dict | 
     if not layer.visible or hidden_dark is not None or hidden_mono is not None:
         _specialize(group, "hidden", not layer.visible, hidden_dark, hidden_mono)
     group["lighting"] = "combined" if layer.mode == "combined" else "individual"
-    specular = _param(layer, "specular", presets, "auto")
-    group["specular"] = bool(is_glass and specular != "off")
-    frost = float(_param(layer, "frost", presets, 0.0) or 0.0)
-    if is_glass and frost > 0:
-        group["blur-material"] = round(min(1.0, frost / 0.24), 4)  # our default frost 0.12 ≈ IC default 50 %
-    translucency = _param(layer, "translucency", presets, None)
+    group["specular"] = bool(is_glass and _num(layer, "specularIorLevel", presets, 0.5) > 0)
+    roughness = _num(layer, "roughness", presets, 0.0)
+    if is_glass and roughness > 0.01:
+        group["blur-material"] = round(min(1.0, roughness / FROST_FULL), 4)
     if is_glass:
-        group["translucency"] = {"enabled": True, "value": round(float(translucency if translucency is not None else 0.5), 4)}
+        tint = min(max(_num(layer, "tint", presets, 0.5), 0.0), 1.0)
+        value = min(max(transmission, 0.0), 1.0) * (1.0 - tint / 2)
+        group["translucency"] = {"enabled": True, "value": round(value, 4)}
     else:
         group["translucency"] = {"enabled": False, "value": 0.5}
-    group["shadow"] = {"kind": SHADOW_KIND.get(layer.shadow.kind, "neutral"), "opacity": round(layer.shadow.opacity, 4)}
+    group["shadow"] = {"kind": "none" if layer.shadow.kind == "none" else "neutral",
+                       "opacity": round(layer.shadow.opacity, 4)}
     t = layer.transform
     if t.scale != 1.0 or t.x or t.y:
         group["position"] = {

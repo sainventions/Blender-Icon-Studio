@@ -14,7 +14,7 @@ import bpy
 from mathutils import Matrix, Vector
 
 from . import presets as P
-from .nodes import Graph, TopologyMismatch, auto_layout
+from .nodes import Graph, TopologyMismatch, layout
 from .util import clamp, hex_to_linear, lerp, light_dir
 
 K_BASE = 350.0            # W, key energy at distance 6 (tuned for a ±1 icon)
@@ -27,9 +27,9 @@ DIFFUSE_CAL = 0.85
 WORLD_CAL = 0.65
 # Per-engine calibration (round 4): the same rig lit a face-on satin plate at 1.04 x its albedo in Cycles but
 # 0.95 x in EEVEE (world probe + light falloff differ), so drafts read ~10 % darker than previews. The lights
-# are scaled per engine so a face-on diffuse surface reads ~1.0 x albedo (+ a small coat reflection) in both;
-# materials.py pre-compensates paint colours against that response (DIFFUSE_A/B). The world is left alone
-# (changing it makes EEVEE re-bake its probes on every draft <-> preview switch).
+# are scaled per engine so a face-on diffuse surface reads ~1.0 x albedo (+ a small coat reflection) in both, i.e.
+# drafts and previews agree (materials feed the art colour straight into Base Color: no paint pre-compensation).
+# The world is left alone (changing it makes EEVEE re-bake its probes on every draft <-> preview switch).
 ENGINE_CAL = {"CYCLES": 0.95, "BLENDER_EEVEE": 1.075}
 # Key distance (round 5): at 6 BU the key's irradiance fell from 1.46x (top-left corner) to 0.68x (bottom-right)
 # of the centre across a flat plate — with a brand-exact transform every plate showed that spread (Spotify, Syno
@@ -186,5 +186,5 @@ def update_world(scene: bpy.types.Scene, rig: dict, backdrop_rgb: tuple = (0.05,
     nt.nodes.clear()
     _world_graph(Graph(nt), rig, backdrop_rgb)
     world["bis_key"] = "v1"
-    auto_layout(nt)
+    layout(nt)
     return world

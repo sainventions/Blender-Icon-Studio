@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,7 @@ from .config import Settings
 
 ALL_APPEARANCES = ["light", "dark", "clear-light", "clear-dark", "tinted-light", "tinted-dark"]
 _FALLBACK_TIERS = {"draft": 512, "preview": 512, "final": 1024, "ultra": 2048}
+log = logging.getLogger("bis.presets")
 
 
 class PresetStore:
@@ -30,8 +32,16 @@ class PresetStore:
                                   "appearances": {}, "quality": {}, "colorModes": {}, "looks": {}}
         with self._lock:
             if mtime != self._mtime:
-                self._data = json.loads(path.read_text(encoding="utf-8"))
-                self._mtime = mtime
+                try:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, ValueError) as e:
+                    # caught mid-write (it is edited live) or broken: every project load/save cleans material
+                    # params against this file (bis.materials), so keep serving the last good copy - with none
+                    # yet, params stay untouched - and retry on the next call
+                    log.warning("presets.json unreadable (%s); keeping the last good copy", e)
+                    return self._data or {"version": 1, "materials": {}, "lighting": {}, "platforms": {},
+                                          "appearances": {}, "quality": {}, "colorModes": {}, "looks": {}}
+                self._data, self._mtime = data, mtime
             return self._data
 
     def with_swatches(self) -> dict[str, Any]:

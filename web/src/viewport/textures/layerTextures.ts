@@ -3,18 +3,10 @@
 import { useEffect, useReducer } from 'react'
 import * as THREE from 'three'
 import { RefCache, useCached } from '../refCache'
-import { softAlphaFraction } from './softAlpha'
-
-export { HALO_SOFT_MIN } from './softAlpha'
 
 export interface PaintStats {
-  /** Linear-light luminance range over opaque pixels (mono/tint renditions stretch it to MONO_FLOOR..1). */
-  lumMin: number
-  lumMax: number
-  /** Average linear colour over opaque pixels (fallback paint). */
+  /** Average linear colour over opaque pixels (fallback paint; the specular / sheen tint colour of materials3d). */
   avg: [number, number, number]
-  /** Largest alpha (0..1) of the downsampled image: < 0.5 = a translucent overlay (shading / highlight art). */
-  alphaMax: number
 }
 
 export interface TextureAsset {
@@ -22,19 +14,7 @@ export interface TextureAsset {
   ready: boolean
   failed: boolean
   stats: PaintStats | null
-  /** softAlphaFraction of the loaded image (computed on first use, see assetSoftAlpha). */
-  softAlpha?: number
   listeners: Set<() => void>
-}
-
-/** softAlphaFraction of a loaded asset's image, computed once (0 while loading / failed). */
-export function assetSoftAlpha(asset: TextureAsset | null): number {
-  if (!asset?.ready) return 0
-  if (asset.softAlpha === undefined) {
-    const im = asset.texture.image as (CanvasImageSource & { width: number; height: number }) | null
-    asset.softAlpha = im ? softAlphaFraction(im) : 0
-  }
-  return asset.softAlpha
 }
 
 const loader = new THREE.TextureLoader()
@@ -56,8 +36,6 @@ export function imageStats(image: CanvasImageSource, size = 64): PaintStats | nu
     for (let i = 3; i < data.length; i += 4) if (data[i] > alphaMax) alphaMax = data[i]
     // Colour statistics over the opaque pixels — or, for a translucent overlay, over everything visible.
     const cut = alphaMax >= 128 ? 128 : 8
-    let lo = Infinity
-    let hi = -Infinity
     let r = 0
     let g = 0
     let b = 0
@@ -67,16 +45,13 @@ export function imageStats(image: CanvasImageSource, size = 64): PaintStats | nu
       const lr = srgbToLinear(data[i] / 255)
       const lg = srgbToLinear(data[i + 1] / 255)
       const lb = srgbToLinear(data[i + 2] / 255)
-      const l = 0.2126 * lr + 0.7152 * lg + 0.0722 * lb
-      if (l < lo) lo = l
-      if (l > hi) hi = l
       r += lr
       g += lg
       b += lb
       count++
     }
     if (!count) return null
-    return { lumMin: lo, lumMax: hi, avg: [r / count, g / count, b / count], alphaMax: alphaMax / 255 }
+    return { avg: [r / count, g / count, b / count] }
   } catch {
     return null // tainted canvas etc.
   }

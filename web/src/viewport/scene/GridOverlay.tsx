@@ -1,20 +1,17 @@
 // Apple-style icon grid (golden-ratio keyline circles, tangent guides, diagonals, the plate outline) drawn in canvas
-// space on top of everything. It lives in the 3D scene so it follows the camera in orbit / exploded views.
+// space on top of everything. It lives in the 3D scene so it follows the camera in orbit / iso views.
 // Platform extras: Android adaptive safe zone (72/108), macOS body inset, watchOS circle.
 import { useEffect, useMemo } from 'react'
-import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
 import type { Platform, PlateShape } from '../../types'
 import { plateOutline } from '../../lib/shapes'
-import { useViewportStore } from './store'
 
 interface Props {
   shape: PlateShape
   cornerRadius: number
   platform: Platform
-  /** z of the overlay (front of the stack at explode 0). */
+  /** z of the overlay (just above the front of the stack: real distances). */
   z: number
-  stackTop: (explode: number) => number
 }
 
 const PHI = (1 + Math.sqrt(5)) / 2
@@ -62,8 +59,7 @@ function makeLines(positions: number[], color: string, opacity: number): THREE.L
   return l
 }
 
-export function GridOverlay({ shape, cornerRadius, platform, z, stackTop }: Props) {
-  const store = useViewportStore()
+export function GridOverlay({ shape, cornerRadius, platform, z }: Props) {
   const group = useMemo(() => {
     const r1 = 0.86
     const r2 = r1 / PHI
@@ -116,12 +112,5 @@ export function GridOverlay({ shape, cornerRadius, platform, z, stackTop }: Prop
     [group],
   )
 
-  useFrame(() => {
-    // Ride on top of the stack so it stays visually attached when exploding.
-    const e = store.explode.current
-    const nz = e > 0.001 ? stackTop(e) + 0.01 : z
-    if (group.position.z !== nz) group.position.z = nz
-  })
-
-  return <primitive object={group} />
+  return <primitive object={group} position-z={z} />
 }

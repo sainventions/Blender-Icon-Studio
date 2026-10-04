@@ -8,12 +8,10 @@
 // box shows around the live view (Khronos PBR Neutral alone turns a #17171c checker into ~#02020c).
 //
 // The wallpaper is defined in world units (like the worker's wallpaper plane behind the plate), so the background
-// texture is framed to match the front camera (ortho_scale 2.24 / zoom on the shorter viewport side), and glass
-// plates faking their transmission sample it in world (canvas) space.
+// texture is framed to match the front camera (ortho_scale 2.24 / zoom on the shorter viewport side).
 import { useEffect, useLayoutEffect, useMemo } from 'react'
 import { useThree } from '@react-three/fiber'
 import * as THREE from 'three'
-import type { FakeGlassBinding } from '../../lib/materials3d'
 import { checkerOver, STAGE_BACKDROP, type StageBackdropSpec } from '../../lib/stageBackdrop'
 import { createWallpaperTexture, WALLPAPER_EXTENT } from '../textures/procedural'
 import { DISPLAY_INVERSE_GLSL, toScene, type DisplayTransform } from './displayTransform'
@@ -24,9 +22,8 @@ export type BackdropSpec =
 export interface BackdropBinding {
   spec: BackdropSpec
   texture: THREE.Texture | null
+  /** Representative scene-linear colour (what a covered glass plate shows through itself). */
   color: THREE.Color
-  /** What a fake-glass surface shows through itself when nothing but the backdrop is behind it. */
-  behind: FakeGlassBinding
 }
 
 /** Returns the element whose CSS background (lib/stageBackdrop) the transparent backdrop continues, if any. */
@@ -39,16 +36,11 @@ export function backdropKey(spec: BackdropSpec): string {
   return spec.kind === 'color' ? `color:${spec.color}` : spec.kind === 'wallpaper' ? `wall:${spec.tone}` : 'checker'
 }
 
-function wallpaperBehind(texture: THREE.Texture, tone: 'light' | 'dark'): FakeGlassBinding {
-  const color = new THREE.Color(tone === 'light' ? '#e9eafa' : '#0a1024')
-  return { map: texture, color, space: 'canvas', extent: WALLPAPER_EXTENT, tone }
-}
-
 const srgbToLinear = (c: number) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4)
 
 /**
  * Scene-linear colour of the transparent backdrop around the icon (stage base under the checker at its centre
- * opacity, both checker colours averaged) — what fake glass shows through itself over the backdrop.
+ * opacity, both checker colours averaged).
  */
 export function checkerBehindColor(display: DisplayTransform, spec: StageBackdropSpec = STAGE_BACKDROP): THREE.Color {
   const base = spec.base.map((v) => v / 255) as [number, number, number]
@@ -61,15 +53,9 @@ export function checkerBehindColor(display: DisplayTransform, spec: StageBackdro
   return new THREE.Color(s[0], s[1], s[2])
 }
 
-/**
- * The rendition wallpaper a glass plate shows through itself when the backdrop is an explicit colour: the worker keeps
- * its (camera-invisible) wallpaper plane under the plate in the clear / tinted renditions whatever the backdrop, so only
- * the background outside the plate takes the colour. Null when `tone` is null.
- */
-export function useWallpaperBehind(tone: 'light' | 'dark' | null): FakeGlassBinding | null {
-  const binding = useMemo(() => (tone ? wallpaperBehind(createWallpaperTexture(tone), tone) : null), [tone])
-  useEffect(() => () => binding?.map?.dispose(), [binding])
-  return binding
+/** Representative (scene-linear) colour of a rendition wallpaper. */
+export function wallpaperColor(tone: 'light' | 'dark'): THREE.Color {
+  return new THREE.Color(tone === 'light' ? '#e9eafa' : '#0a1024')
 }
 
 /** Creates (and owns) the backdrop texture for `spec`. */
@@ -77,17 +63,9 @@ export function useBackdropBinding(spec: BackdropSpec, display: DisplayTransform
   const key = backdropKey(spec)
   const displayKey = spec.kind === 'checker' ? `${display.mode}:${display.saturation}` : ''
   const binding = useMemo<BackdropBinding>(() => {
-    if (spec.kind === 'checker') {
-      const color = checkerBehindColor(display)
-      return { spec, texture: null, color, behind: { map: null, color, space: 'screen' } }
-    }
-    if (spec.kind === 'wallpaper') {
-      const color = new THREE.Color(spec.tone === 'light' ? '#e9eafa' : '#0a1024')
-      const texture = createWallpaperTexture(spec.tone)
-      return { spec, texture, color, behind: wallpaperBehind(texture, spec.tone) }
-    }
-    const color = new THREE.Color(spec.color)
-    return { spec, texture: null, color, behind: { map: null, color, space: 'screen' } }
+    if (spec.kind === 'checker') return { spec, texture: null, color: checkerBehindColor(display) }
+    if (spec.kind === 'wallpaper') return { spec, texture: createWallpaperTexture(spec.tone), color: wallpaperColor(spec.tone) }
+    return { spec, texture: null, color: new THREE.Color(spec.color) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, displayKey])
   useEffect(() => () => binding.texture?.dispose(), [binding])

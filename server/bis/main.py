@@ -120,14 +120,15 @@ def create_app(
 
     hub = EventHub()
     pipeline = svg if isinstance(svg, SvgPipeline) else SvgPipeline(svg)
+    presets = PresetStore(settings)
     store = ProjectStore(
         settings, pipeline,
         on_event=lambda pid, ev: hub.publish_threadsafe({"type": "project", "projectId": pid, "event": ev}),
+        presets=presets,
     )
     if bridge is None:
         bridge = FakeBridge() if settings.fake_blender else BlenderBridge(settings)
     jobs = JobManager(hub.publish, history=settings.job_history)
-    presets = PresetStore(settings)
     renders = RenderService(settings, store, bridge, jobs, presets, opener=opener)
     samples = SampleLibrary(settings, pipeline)
     batches = BatchService(settings, store, samples, renders, jobs, presets)

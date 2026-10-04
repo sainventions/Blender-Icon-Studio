@@ -1,5 +1,5 @@
 // Composed look thumbnail: lighting backdrop · plate chip (plate material / fill) · the layer material as a
-// rendered ball (cropped from B's Cycles swatch) with its shadow kind · a glint where the key light sits.
+// rendered ball (cropped from B's Cycles swatch) with its shadow (physical or none) · a glint where the key light sits.
 // `className` positions/sizes the thumbnail (e.g. 'absolute inset-0'); default 'relative'.
 import { memo, useState } from 'react'
 import type { Look, Presets } from '../../types'
@@ -12,9 +12,6 @@ import { squirclePath } from '../../components/icons'
 const SQUIRCLE_MASK = `url("data:image/svg+xml,${encodeURIComponent(
   `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><path d='${squirclePath(100, 0)}'/></svg>`,
 )}")`
-
-const CHROMATIC_SHADOW =
-  'radial-gradient(ellipse at 35% 50%, rgba(244,114,182,.55), transparent 60%), radial-gradient(ellipse at 65% 50%, rgba(56,189,248,.55), transparent 60%)'
 
 export const LookThumb = memo(function LookThumb({ look, presets, className }: { look: Look; presets: Presets | null; className?: string }) {
   const [swatchFailed, setSwatchFailed] = useState(false)
@@ -29,7 +26,8 @@ export const LookThumb = memo(function LookThumb({ look, presets, className }: {
   const lp = presets?.lighting[lightId]
   const angle = lp?.lockAngle ?? st.lighting?.angle ?? -45
   const shadow = st.layerDefaults?.shadow
-  const shadowOpacity = shadow && shadow.kind !== 'none' ? Math.min(1, Math.max(0.15, shadow.opacity)) : 0
+  // Shadows are real (Cycles) or off — legacy neutral / chromatic kinds render as physical (PLAN §11).
+  const castsShadow = !shadow || shadow.kind !== 'none'
   const plateBg = plateFill
     ? [PLATE_SHEEN_CSS[plateId], fillToCss(plateFill)].filter(Boolean).join(', ')
     : (PLATE_FINISH_CSS[plateId] ?? PLATE_FINISH_CSS.satin)
@@ -62,12 +60,12 @@ export const LookThumb = memo(function LookThumb({ look, presets, className }: {
           }}
         />
         {/* layer shadow */}
-        {shadowOpacity > 0 && (
+        {castsShadow && (
           <span
             className="absolute left-[31%] top-[46%] h-[28%] w-[38%] rounded-[50%] blur-[4px]"
             style={{
-              background: shadow?.kind === 'chromatic' ? CHROMATIC_SHADOW : 'rgba(0,0,0,.75)',
-              opacity: Math.min(1, shadowOpacity * 1.3),
+              background: 'rgba(0,0,0,.75)',
+              opacity: 0.6,
               // Cast away from the key light (0° = light from the top, clockwise).
               transform: `translate(${-Math.sin(rad) * 12}%, ${10 + Math.cos(rad) * 12}%)`,
             }}

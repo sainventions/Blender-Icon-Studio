@@ -58,12 +58,14 @@ export function Row({
   className,
   labelWidth = 84,
   align = 'center',
+  resetTip = 'Reset to default',
 }: {
   label: ReactNode
   children: ReactNode
   hint?: string
   modified?: boolean
   onReset?: () => void
+  resetTip?: string
   className?: string
   labelWidth?: number
   align?: 'center' | 'start'
@@ -76,8 +78,9 @@ export function Row({
           <button
             type="button"
             onClick={onReset}
-            data-tip="Reset to default"
-            className="opacity-0 transition-opacity group-hover/row:opacity-100"
+            data-tip={resetTip}
+            aria-label={resetTip}
+            className="opacity-0 transition-opacity focus-visible:opacity-100 group-hover/row:opacity-100"
           >
             <RotateCcw className="h-2.5 w-2.5 text-fg-4 hover:text-fg-2" />
           </button>
@@ -107,6 +110,10 @@ export interface SliderRowProps {
   onChange: (v: number, phase: ChangePhase) => void
   trackBackground?: string
   modified?: boolean
+  /** Shown as a hover reset button next to the label while modified (e.g. back to the preset's value). Double-click
+   *  on the label / slider still resets to `defaultValue`. */
+  onReset?: () => void
+  resetTip?: string
 }
 
 /** Label (scrubbable) + slider + numeric field — the workhorse inspector row. */
@@ -128,6 +135,8 @@ export function SliderRow({
   onChange,
   trackBackground,
   modified,
+  onReset,
+  resetTip = 'Reset to default',
 }: SliderRowProps) {
   const isModified = modified ?? (defaultValue !== undefined && Math.abs(value - defaultValue) > 1e-9)
   return (
@@ -145,6 +154,11 @@ export function SliderRow({
         >
           {label}
         </ScrubLabel>
+        {isModified && onReset && !disabled && (
+          <button type="button" onClick={onReset} data-tip={resetTip} aria-label={resetTip} className="opacity-0 transition-opacity focus-visible:opacity-100 group-hover/row:opacity-100">
+            <RotateCcw className="h-2.5 w-2.5 text-fg-4 hover:text-fg-2" />
+          </button>
+        )}
         {isModified && <span className="h-1 w-1 shrink-0 rounded-full bg-accent/80" />}
       </div>
       <Slider

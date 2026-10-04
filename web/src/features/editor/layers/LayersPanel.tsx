@@ -18,6 +18,7 @@ import {
   Combine,
   Eye,
   EyeOff,
+  Gem,
   Image as ImageIcon,
   Layers,
   Lock,
@@ -29,9 +30,10 @@ import {
   Split,
   SquareDashedMousePointer,
   Trash2,
+  Undo2,
   WandSparkles,
 } from 'lucide-react'
-import type { GeometryBundle, Layer, Presets, Project, SvgElement } from '../../../types'
+import type { GeometryBundle, Layer, MaterialPreset, MaterialSpec, Presets, Project, SvgElement } from '../../../types'
 import { useEvent } from '../../../lib/hooks'
 import { projectsApi } from '../../../api'
 import { cn, hashString } from '../../../lib/format'
@@ -44,6 +46,7 @@ import { useUi } from '../../../store/ui'
 import { ShapeIcon } from '../../../components/icons'
 import { Badge, EmptyState, IconButton, Menu, useAnchor, type MenuItem } from '../../../components/ui'
 import { moveSelectedLayer } from '../shortcuts'
+import { updateElementMaterials } from '../inspector/principled'
 
 const verticalOnly: Modifier = ({ transform }) => ({ ...transform, x: 0 })
 
@@ -130,6 +133,32 @@ export function LayersPanel() {
     ]
   }
 
+  /** Per-shape material (Layer.elementMaterials) of the right-clicked shapes of one layer. */
+  const shapeMaterialItems = (elementIds: string[]): MenuItem[] => {
+    const layer = project.layers.find((l) => l.elementIds.includes(elementIds[0]))
+    if (!layer || layer.locked) return []
+    const ids = elementIds.filter((id) => layer.elementIds.includes(id))
+    const own = ids.filter((id) => layer.elementMaterials?.[id])
+    const n = ids.length === 1 ? 'this shape' : `${ids.length} shapes`
+    const write = (fn: (cur: MaterialSpec | undefined) => MaterialSpec | undefined) =>
+      ed().commit((p) => ({ ...p, layers: p.layers.map((l) => (l.id === layer.id ? updateElementMaterials(l, ids, fn) : l)) }))
+    const items: MenuItem[] = [{ type: 'label', label: 'Material' }]
+    if (own.length < ids.length)
+      items.push({
+        label: `Own material for ${n}`,
+        icon: <Gem />,
+        description: 'A copy of the layer material to adjust per shape.',
+        onSelect: () => {
+          write((cur) => cur ?? { preset: layer.material.preset, params: {} })
+          useUi.getState().set({ inspectorTab: 'layer' })
+        },
+      })
+    if (own.length)
+      items.push({ label: own.length === ids.length ? `Use the layer material` : `Reset ${own.length} to the layer material`, icon: <Undo2 />, onSelect: () => write(() => undefined) })
+    items.push({ type: 'separator' })
+    return items
+  }
+
   const ctxItems: MenuItem[] = (() => {
     if (!ctxTarget) return []
     if (ctxTarget.kind === 'layer') {
@@ -137,7 +166,7 @@ export function LayersPanel() {
       return l ? layerMenu(l) : []
     }
     const ids = selection.elementIds.includes(ctxTarget.id) ? selection.elementIds : [ctxTarget.id]
-    return moveItems(ids)
+    return [...shapeMaterialItems(ids), ...moveItems(ids)]
   })()
 
   // Stable row callbacks: LayerRow is memoised, so a slider drag on one layer re-renders only that row.
@@ -337,8 +366,7 @@ const LayerRow = memo(function LayerRow({
   const version = geometry?.layers[layer.id]?.hash ?? hashString(layer.elementIds.join(','))
   const thumb = projectsApi.layerThumbnailUrl(projectId, layer.id, version)
   const material = presets.materials[layer.material.preset]
-  const geo = geometry?.layers[layer.id]
-  const clamped = geo && layer.depth.bevel > 0.9 * geo.safeRadius
+  const ownCount = layer.elementIds.filter((id) => layer.elementMaterials?.[id]).length
 
   const toggle = (field: 'visible' | 'locked') =>
     ed().commit((p) => ({ ...p, layers: p.layers.map((l) => (l.id === layer.id ? { ...l, [field]: !l[field] } : l)) }), { render: field === 'visible' })
@@ -418,7 +446,11 @@ const LayerRow = memo(function LayerRow({
             <span>·</span>
             <span className="shrink-0">{layer.elementIds.length} el</span>
             {!layer.glass && <span className="shrink-0 text-fg-3">· flat</span>}
-            {clamped && <span className="shrink-0 text-warn" data-tip="Bevel clamped by thin features">· bevel↓</span>}
+            {ownCount > 0 && (
+              <span className="shrink-0 text-fg-3" data-tip={`${ownCount} shape${ownCount === 1 ? ' has its' : 's have their'} own material`}>
+                · {ownCount} own
+              </span>
+            )}
           </div>
         </div>
         <div className={cn('flex shrink-0 items-center', !layer.locked && layer.visible && 'opacity-0 transition-opacity group-hover:opacity-100', selected && 'opacity-100')}>
@@ -460,10 +492,13 @@ const LayerRow = memo(function LayerRow({
               <ElementRow
                 key={id}
                 element={el}
+                own={layer.elementMaterials?.[id] ? presets.materials[layer.elementMaterials[id].preset] ?? null : null}
+                ownId={layer.elementMaterials?.[id]?.preset ?? null}
                 selected={selectedElements.includes(id)}
                 onSelect={(e) => {
                   e.stopPropagation()
                   ed().selectElement(id, modeFrom(e))
+                  useUi.getState().set({ inspectorTab: 'layer' })
                 }}
                 onContext={(e) => onContext(e, 'element', id)}
               />
@@ -477,11 +512,16 @@ const LayerRow = memo(function LayerRow({
 
 function ElementRow({
   element,
+  own,
+  ownId,
   selected,
   onSelect,
   onContext,
 }: {
   element: SvgElement
+  /** The shape's own material (Layer.elementMaterials), if any. */
+  own: MaterialPreset | null
+  ownId: string | null
   selected: boolean
   onSelect: (e: React.MouseEvent) => void
   onContext: (e: React.MouseEvent) => void
@@ -502,6 +542,13 @@ function ElementRow({
         <span className="absolute inset-0" style={{ background: chip, opacity: element.opacity }} />
       </span>
       <span className="min-w-0 flex-1 truncate">{element.name || element.id}</span>
+      {ownId && (
+        <span
+          className="h-2.5 w-2.5 shrink-0 rounded-full border border-white/25"
+          data-tip={`Own material: ${own?.label ?? ownId}`}
+          style={{ background: own?.swatch ? `center/cover url(${own.swatch})` : (MATERIAL_CSS[ownId] ?? '#888') }}
+        />
+      )}
       {element.kind === 'image' && <ImageIcon className="h-3 w-3 shrink-0 text-fg-4" />}
       {element.role === 'stroke' && <span className="shrink-0 text-3xs text-fg-4">stroke</span>}
       {element.shadow && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-fg-4" data-tip="Has a drop shadow in the source" />}

@@ -158,7 +158,12 @@ function elementRemapper(before: Project, after: Project): ((p: Project) => Proj
       if (!l.elementIds.some((id) => replacement.has(id))) return l
       touched = true
       const ids = l.elementIds.flatMap((id) => replacement.get(id) ?? [id])
-      return { ...l, elementIds: [...new Set(ids)] }
+      // a shape's own material follows it onto its pieces (as the server's carry_element_materials does)
+      const own = l.elementMaterials
+      const elementMaterials = own
+        ? Object.fromEntries(Object.entries(own).flatMap(([id, m]) => (replacement.get(id) ?? [id]).map((r) => [r, m] as const)))
+        : own
+      return { ...l, elementIds: [...new Set(ids)], ...(own ? { elementMaterials } : null) }
     })
     return { ...p, elements: after.elements, layers: touched ? layers : p.layers }
   }

@@ -1,9 +1,10 @@
-// Instant three.js preview of the icon — a lighting/layout draft that mirrors the Blender scene (PLAN §3/§4 D2, D7).
+// Instant three.js preview of the icon — a draft of the Blender scene (PLAN §3/§4 D2, §11): the same height-field
+// bodies, ONE Principled material per shape mapped onto MeshPhysicalMaterial, real layer distances in the CAD iso view.
 import { useCallback, useMemo, useRef, type CSSProperties, type JSX } from 'react'
 import { Canvas, type RootState } from '@react-three/fiber'
 import * as THREE from 'three'
 import type { AppearanceId, GeometryBundle, LayerTransform, Presets, Project } from '../types'
-import { resolveAppearance } from '../lib/appearance'
+import { appearanceMono, resolveAppearance } from '../lib/appearance'
 import { SceneRoot } from './scene/SceneRoot'
 import { StoreContext, ViewportStore } from './scene/store'
 
@@ -16,8 +17,11 @@ export interface ViewportProps {
   onSelectLayer: (id: string | null) => void
   /** Drag to move in the front view (optional). Called once per drag, on release. */
   onLayerTransform?: (id: string, t: LayerTransform) => void
-  /** 0..1 UI explode amount (spreads z gaps, swings the camera into a three-quarter view). */
-  explode: number
+  /**
+   * CAD-style point of view, 0..1: head-on (0) → isometric (1), orthographic, showing the REAL distances between the
+   * layers, auto-framed (bind it to project.camera.iso so Blender renders match).
+   */
+  iso: number
   view: 'front' | 'orbit'
   /** Apple-style icon grid overlay. */
   showGrid?: boolean
@@ -73,7 +77,7 @@ function onCreated(state: RootState, store: ViewportStore): void {
       store,
       /**
        * Render `frames` frames synchronously (works while the page is hidden / rAF is throttled). Each frame is
-       * stepped as 1/60 s of simulated time so damped animations (explode, camera framing) progress.
+       * stepped as 1/60 s of simulated time so damped animations (iso view, camera framing) progress.
        */
       advance(frames = 60) {
         const t0 = performance.now()
@@ -97,6 +101,8 @@ export function Viewport(p: ViewportProps): JSX.Element {
   const store = useMemo(() => new ViewportStore(), [])
   const handleCreated = useCallback((state: RootState) => onCreated(state, store), [store])
   const effective = useMemo(() => resolveAppearance(p.project, p.appearance), [p.project, p.appearance])
+  const geoLayers = p.geometry?.layers
+  const mono = useMemo(() => appearanceMono(p.project, p.appearance, geoLayers), [p.project, p.appearance, geoLayers])
   // watchOS ignores appearances (always light) — keep the backdrop consistent with resolveAppearance.
   const appearance = p.project.canvas.platform === 'watchos' ? 'light' : p.appearance
   const selectRef = useRef(p.onSelectLayer)
@@ -126,9 +132,10 @@ export function Viewport(p: ViewportProps): JSX.Element {
               selectedLayerId={p.selectedLayerId}
               onSelectLayer={p.onSelectLayer}
               onLayerTransform={p.onLayerTransform}
-              explode={p.explode}
+              iso={p.iso}
               view={p.view}
               showGrid={!!p.showGrid}
+              mono={mono}
               stage={p.stageElement}
             />
           </StoreContext.Provider>

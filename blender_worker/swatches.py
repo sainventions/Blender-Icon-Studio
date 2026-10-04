@@ -31,7 +31,8 @@ def _layer(lid: str, z: float, preset: str, fill: dict, thickness: float = 0.16,
     return {"id": lid, "name": lid, "elementIds": [lid], "visible": True, "mode": "individual", "fill": fill,
             "opacity": 1.0, "glass": True,
             "depth": {"z": z, "thickness": thickness, "bevel": bevel, "bevelSegments": 6, "inflate": 0.0},
-            "material": {"preset": preset, "params": params or {}}, "shadow": {"kind": "neutral", "opacity": shadow}}
+            "material": {"preset": preset, "params": params or {}},
+            "shadow": {"kind": "physical" if shadow > 0 else "none", "opacity": shadow}}
 
 
 def _geo(lid: str, splines: list, paint: dict, safe: float = 0.2, texture: str = "") -> dict:
@@ -91,10 +92,10 @@ def warmup_texture() -> str:
 
 
 def warmup_scene(full: bool = True, mono: bool = False) -> tuple[dict, dict]:
-    """Every shader variant the app generates in one scene: top raytraced glass, fake glass under it,
-    opaque presets, texture paint, gradient paint, object-colour paint and an alpha (opacity) variant.
-    ``mono``: the reduced scene for the clear / tinted renditions (every layer becomes Liquid Glass there): one
-    Liquid Glass layer per paint kind (texture / gradient / solid) plus the Liquid Glass roles below."""
+    """The shader variants the app generates, in one scene (EEVEE compiles one shader per graph shape): every preset
+    (grain / film / anisotropy / tint / emission variants) on texture, gradient and solid paints, a translucent piece,
+    a raster region (UV affine + alpha), a flat raster card and a combined body. ``mono``: the reduced scene for the
+    clear / tinted renditions (every layer becomes Liquid Glass there)."""
     tex = warmup_texture()
     glass_presets = ["liquid_glass"] + (["clear_glass", "frosted_glass", "dispersive_crystal", "tinted_glass"]
                                         if full else [])
@@ -116,10 +117,8 @@ def warmup_scene(full: bool = True, mono: bool = False) -> tuple[dict, dict]:
         layers.append(L)
         geos[lid] = _geo(lid, [circle_spline(x, y, 0.15)], SWATCH_PAINT, 0.1, tex)
         n += 1
-    # Liquid Glass (the default material) in every role a corpus icon produces under the top glass (round 5: the
-    # first draft of Find Device / Calculator compiled these for ~6 s): texture-painted fake glass, a translucent
-    # piece (display-space blend film), a raster region (UV affine + alpha) and a combined body (mono LUT variant
-    # in the clear renditions)
+    # Liquid Glass (the default material) in the piece kinds a corpus icon produces: a raster card, a translucent
+    # piece, a raster region (UV affine + alpha) and a combined body
     lg = [("lgfake", -0.45, 0.05, {"type": "solid", "color": "#3366ff", "opacity": 1.0}, 1.0, "card"),
           ("lgfilm", 0.0, 0.05, {"type": "solid", "color": "#000000", "opacity": 1.0}, 0.4, None),
           ("lgraster", 0.45, 0.05, {"type": "solid", "color": "#ff8800", "opacity": 1.0}, 1.0, "img"),
@@ -139,7 +138,7 @@ def warmup_scene(full: bool = True, mono: bool = False) -> tuple[dict, dict]:
             L["mode"] = "combined"
         layers.append(L)
         geos[lid] = g
-    # a combined body that is the top-most glass where it sits (raytraced refraction + its mono LUT variant)
+    # a combined body on top
     L = _layer("lgcombtop", 0.7, "liquid_glass", {"type": "auto"}, 0.08, 0.03)
     L["mode"] = "combined"
     layers.append(L)
@@ -170,9 +169,8 @@ def render_swatches(builder, out_dir: str, size: int = 192, quality: str = "prev
         project, bundle = swatch_scene(preset)
         info = builder.build(project, bundle, "light", engine=R.tier(quality)["engine"])
         cm = P.color_mode_id(project["render"]["colorMode"])
-        R.configure(scene, quality, size, transparent=True, color_mode=cm,
-                    max_frost=info["maxFrost"], volume=info["volume"])
-        R.configure_compositor(scene, info["neonBloom"], True, P.soft_clip_knee(cm))
+        R.configure(scene, quality, size, transparent=True, color_mode=cm, max_glass_roughness=info["maxGlassRoughness"])
+        R.configure_compositor(scene, info["bloom"], True, P.soft_clip_knee(cm))
         out = os.path.join(out_dir, f"{preset}.png")
         R.render_still(scene, out)
         files.append(out)

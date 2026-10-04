@@ -173,7 +173,7 @@ def _defaults_layer(lid: str, name: str, element_ids: list, z: float, bevel: flo
         "transform": {"x": 0.0, "y": 0.0, "scale": 1.0},
         "depth": {"z": z, "thickness": LAYER_THICKNESS, "bevel": bevel, "bevelSegments": 6, "inflate": 0.0},
         "material": {"preset": "liquid_glass", "params": {}},
-        "shadow": {"kind": "neutral", "opacity": shadow_opacity},
+        "shadow": {"kind": "physical", "opacity": shadow_opacity},
     }
 
 

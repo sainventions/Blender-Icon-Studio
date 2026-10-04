@@ -18,12 +18,23 @@ from PIL import Image  # noqa: E402
 
 from bis import export as ex  # noqa: E402
 from bis.blender import FakeBridge  # noqa: E402
-from bis.icon_format import canvas_viewbox, fill_json  # noqa: E402
+from bis.icon_format import canvas_viewbox, fill_json, group_json  # noqa: E402
 from bis.main import create_app  # noqa: E402
 from bis.models import ExportRequest, FillLinear, FillSolid, GradientStop, Project, SourceInfo  # noqa: E402
 from bis.testing import TEST_SVG, FakeSvg, make_test_settings  # noqa: E402
 
 ALL_TARGETS = ["ios", "macos", "watchos", "android", "windows", "web", "marketing", "icon", "blend"]
+PRESETS = json.loads((ROOT / "shared" / "presets.json").read_text(encoding="utf-8"))
+
+
+def preset_default(preset: str, param: str) -> float:
+    """A preset's starting value (presets.json is tuned by hand - tests must not pin its numbers)."""
+    return PRESETS["materials"][preset]["params"][param]["default"]
+
+
+def ic_translucency(preset: str) -> float:
+    """The .icon translucency of an untouched glass preset: transmission × (1 − tint / 2)."""
+    return round(preset_default(preset, "transmission") * (1 - preset_default(preset, "tint") / 2), 4)
 
 
 def wait_job(client, job_id: str, timeout: float = 60.0) -> dict:
@@ -53,13 +64,30 @@ def test_plan_masters_per_target():
     plan = ex.plan_export(p, ExportRequest(targets=ALL_TARGETS, appearances=["light", "dark"]))
     assert plan.targets == ALL_TARGETS
     assert set(plan.masters) == {"full-light", "full-dark", "macos", "circle", "android-fg", "android-bg",
-                                 "android-mono", "rounded", "maskable", "hero-light", "hero-exploded-light",
+                                 "android-mono", "rounded", "maskable", "hero-light", "hero-iso-light",
                                  "hero-dark"}
     mac = plan.masters["macos"]
     assert mac.shape == "squircle" and abs(mac.zoom - 0.9014) < 1e-3  # Tahoe 824/1024
     assert abs(plan.masters["android-fg"].zoom - 1.12 * 72 / 108) < 1e-9 and not plan.masters["android-fg"].plate
     assert plan.masters["android-mono"].appearance == "clear-light"
-    assert plan.masters["hero-light"].camera["view"] == "perspective"
+
+
+def test_marketing_heroes_use_the_cad_pov_with_real_distances():
+    """PLAN 11: heroes are the CAD-style orthographic POV (camera.iso) - between head-on and isometric, then full
+    isometric - never a perspective tilt or a spread ('exploded') stack. Platform masters are always head-on."""
+    p = _project()
+    p.camera.iso, p.camera.explode, p.camera.zoom = 0.7, 3.0, 1.3       # the project's own POV / a legacy value
+    plan = ex.plan_export(p, ExportRequest(targets=ALL_TARGETS, appearances=["light", "dark"]))
+    heroes = {k: m for k, m in plan.masters.items() if m.hero}
+    assert set(heroes) == {"hero-light", "hero-iso-light", "hero-dark"}
+    for key, iso in (("hero-light", ex.HERO_ISO), ("hero-iso-light", 1.0), ("hero-dark", ex.HERO_ISO)):
+        cam = ex.master_camera(p, heroes[key])
+        assert cam["view"] == "front" and cam["iso"] == iso and cam["explode"] == 1.0, key
+    assert 0.0 < ex.HERO_ISO < 1.0
+    for key, m in plan.masters.items():
+        if not m.hero:
+            cam = ex.master_camera(p, m)
+            assert cam["view"] == "front" and cam["iso"] == 0.0 and cam["explode"] == 1.0, key
 
 
 def test_master_sizes_obey_gpu_rules():
@@ -98,6 +126,30 @@ def test_icon_viewbox_and_fills():
                                start=(0, 1), end=(0, -1)))
     assert lin["orientation"] == {"start": {"x": 0.5, "y": 0.0}, "stop": {"x": 0.5, "y": 1.0}}
     assert fill_json(None) == "automatic" and fill_json(FillSolid.model_validate({"type": "solid"})) != "none"
+
+
+def test_icon_groups_from_principled_params():
+    """The .icon bundle reads IC's glass knobs off the Principled params (transmission / roughness / tint)."""
+    from bis.models import Layer, LayerShadow, MaterialSpec
+
+    p = _project()
+
+    def group(material: MaterialSpec, **kw) -> dict:
+        return group_json(p, Layer(id="l", name="L", elementIds=["e"], material=material, **kw), "l.svg", PRESETS, None)
+
+    frosted = group(MaterialSpec(preset="frosted_glass"))             # rough transmissive glass
+    assert frosted["translucency"] == {"enabled": True, "value": ic_translucency("frosted_glass")}
+    assert frosted["specular"] is True
+    assert frosted["blur-material"] == pytest.approx(min(1.0, preset_default("frosted_glass", "roughness") / 0.5))
+    clear = group(MaterialSpec(preset="clear_glass", params={"roughness": 0.0}))   # polished -> no blur
+    assert "blur-material" not in clear and clear["translucency"]["value"] == pytest.approx(ic_translucency("clear_glass"))
+    tuned = group(MaterialSpec(preset="satin", params={"transmission": 1.0, "roughness": 0.1, "tint": 0.0}))
+    assert tuned["translucency"] == {"enabled": True, "value": 1.0} and tuned["blur-material"] == pytest.approx(0.2)
+    satin = group(MaterialSpec(preset="satin"), shadow=LayerShadow(kind="none", opacity=0.3))
+    assert satin["translucency"]["enabled"] is False and satin["specular"] is False and "blur-material" not in satin
+    assert satin["shadow"] == {"kind": "none", "opacity": 0.3}
+    assert group(MaterialSpec(preset="liquid_glass"), glass=False)["translucency"]["enabled"] is False
+    assert group(MaterialSpec(preset="liquid_glass"))["shadow"]["kind"] == "neutral"   # physical -> IC neutral
 
 
 def test_monochrome_and_grayscale_helpers():
@@ -144,6 +196,9 @@ def test_full_export_package(client):
     renders = [(m, a) for m, cmd, a in client.bridge.calls if cmd == "render"]
     assert len(renders) == 13 and all(m == "oneshot" and a["size"] <= 512 for m, a in renders)
     assert all(a["quality"] == "draft" for _, a in renders)
+    # heroes: the CAD-style POV (iso 0.55 + full isometric), every other master head-on; never a spread stack
+    assert sorted(a["camera"]["iso"] for _, a in renders if a["camera"]["iso"] > 0) == [ex.HERO_ISO, ex.HERO_ISO, 1.0]
+    assert all(a["camera"]["explode"] == 1.0 and a["camera"]["view"] == "front" for _, a in renders)
     bg = next(a for _, a in renders if not any(l["visible"] for l in a["project"]["layers"]))
     assert bg["fullBleed"] is True
     fg = [a for _, a in renders if not a["project"]["canvas"]["plate"]["visible"]]
@@ -165,7 +220,7 @@ def test_full_export_package(client):
         "windows/app.ico", "windows/png/icon-256.png",
         "web/favicon.ico", "web/apple-touch-icon.png", "web/icon-192.png", "web/icon-512.png",
         "web/maskable-512.png", "web/manifest.webmanifest", "web/head-snippet.html", "web/favicon.svg",
-        "marketing/hero.png", "marketing/hero-exploded.png", "marketing/hero-dark.png",
+        "marketing/hero.png", "marketing/hero-iso.png", "marketing/hero-dark.png",
         "icon/Test Icon.icon/icon.json", "blend/Test Icon.blend",
     ]
     missing = [e for e in expect if root + e not in names]
@@ -231,7 +286,8 @@ def test_full_export_package(client):
         asset = root + "icon/Test Icon.icon/Assets/" + g["layers"][0]["image-name"]
         svg = z.read(asset).decode()
         assert 'width="1024"' in svg and 'viewBox="2 2 96 96"' in svg  # plate (2..98) fills the artboard
-        assert g["shadow"]["kind"] == "neutral" and g["translucency"]["enabled"] is True
+        assert g["shadow"]["kind"] == "neutral"
+        assert g["translucency"] == {"enabled": True, "value": ic_translucency("liquid_glass")}
 
     # result lists every file with a working URL + previews for the UI
     files = {f["name"]: f["url"] for f in res["files"]}

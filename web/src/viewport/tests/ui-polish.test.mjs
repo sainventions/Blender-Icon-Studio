@@ -219,12 +219,13 @@ test('Matrix view hides the stage controls that do nothing there', () => {
   const toolbar = src.slice(src.indexOf('function StageToolbar'), src.indexOf('function LightControl'))
   const gate = toolbar.indexOf("{mode !== 'matrix' && (")
   assert.ok(gate > 0)
-  for (const ctl of ['label="Explode"', 'label="Icon grid"', 'label="Zoom out"', '<LightControl']) {
+  // the CAD view angle (PLAN §11, replaced Explode) is a head-on <-> isometric camera: the matrix renders are head-on
+  for (const ctl of ['<ViewAngleControl', 'label="Icon grid"', 'label="Zoom out"', '<LightControl']) {
     assert.ok(toolbar.indexOf(ctl) > gate, `${ctl} is not behind the matrix gate`)
   }
   const keys = read('src/features/editor/shortcuts.ts')
   assert.match(keys, /case 'g':\s*\n\s*if \(ui\.stageMode === 'matrix'\) return/)
-  assert.match(keys, /case 'x':\s*\n\s*if \(ui\.stageMode === 'matrix'\) return/)
+  assert.match(keys, /case 'i':\s*\n\s*if \(ui\.stageMode === 'matrix'\) return/)
 })
 
 // ------------------------------------------------------------------------------------------------ 5 · element counts

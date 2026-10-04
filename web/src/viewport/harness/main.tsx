@@ -171,7 +171,7 @@ function Select(p: { label: string; value: string; options: string[]; onChange: 
 }
 
 // ---------------------------------------------------------------------------------------------- app
-// URL params (handy for screenshots): ?source=A|B|backend &appearance=… &explode=0.6 &view=orbit &grid=1
+// URL params (handy for screenshots): ?source=A|B|backend &appearance=… &iso=0.6 &view=orbit &grid=1
 // &select=<layerId> &bare=1 (hide the panel)
 const Q = new URLSearchParams(location.search)
 const qSource = (Q.get('source') as Source | null) ?? 'backend'
@@ -214,7 +214,7 @@ function Harness() {
   const [geometry, setGeometry] = useState<GeometryBundle | null>(null)
   const [appearance, setAppearance] = useState<AppearanceId>((Q.get('appearance') as AppearanceId | null) ?? 'light')
   const [selected, setSelected] = useState<string | null>(Q.get('select'))
-  const [explode, setExplode] = useState(Number(Q.get('explode') ?? 0) || 0)
+  const [iso, setIso] = useState(Number(Q.get('iso') ?? 0) || 0)
   const [view, setView] = useState<'front' | 'orbit'>(Q.get('view') === 'orbit' ? 'orbit' : 'front')
   const [grid, setGrid] = useState(Q.get('grid') === '1')
   const [diag, setDiag] = useState('')
@@ -269,15 +269,15 @@ function Harness() {
   )
 
   // Dev automation (screenshots / framing checks): window.__bisHarness.{load, set, state}.
-  const stateRef = useRef({ project, explode, view, appearance })
-  stateRef.current = { project, explode, view, appearance }
+  const stateRef = useRef({ project, iso, view, appearance })
+  stateRef.current = { project, iso, view, appearance }
   useEffect(() => {
     if (!import.meta.env.DEV) return
     const w = window as unknown as { __bisHarness?: unknown }
     w.__bisHarness = {
       load: (id: string) => load('backend', id),
-      set: (o: { explode?: number; view?: 'front' | 'orbit'; appearance?: AppearanceId; grid?: boolean }) => {
-        if (o.explode !== undefined) setExplode(o.explode)
+      set: (o: { iso?: number; view?: 'front' | 'orbit'; appearance?: AppearanceId; grid?: boolean }) => {
+        if (o.iso !== undefined) setIso(o.iso)
         if (o.view) setView(o.view)
         if (o.appearance) setAppearance(o.appearance)
         if (o.grid !== undefined) setGrid(o.grid)
@@ -378,7 +378,7 @@ function Harness() {
             Grid
           </button>
         </div>
-        <Slider label="Explode" value={explode} min={0} max={1} onChange={setExplode} />
+        <Slider label="View angle (iso)" value={iso} min={0} max={1} onChange={setIso} />
 
         {project && (
           <>
@@ -635,7 +635,7 @@ function Harness() {
             selectedLayerId={selected}
             onSelectLayer={setSelected}
             onLayerTransform={onLayerTransform}
-            explode={explode}
+            iso={iso}
             view={view}
             showGrid={grid}
           />

@@ -26,7 +26,7 @@ export const ANIMATION_KINDS: { id: AnimateRequest['kind']; label: string; descr
   { id: 'turntable', label: 'Turntable', description: 'Full 360° rotation of the layer stack.' },
   { id: 'float', label: 'Float', description: 'Layers bob softly in depth.' },
   { id: 'light-sweep', label: 'Light sweep', description: 'The key light orbits — highlights race around rims.' },
-  { id: 'explode', label: 'Explode', description: 'Layers separate in depth and come back together.' },
+  { id: 'iso', label: 'Iso sweep', description: 'The camera swings from head-on to isometric and back — the real layer distances, like a CAD view.' },
 ]
 
 /** Visual of each appearance for chips (background + foreground hint). */

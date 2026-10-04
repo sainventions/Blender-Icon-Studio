@@ -139,7 +139,7 @@ def test_drop_shadow_filter_parsed_into_art_units(import_icon):
     sh = fg[0].shadow
     assert sh.blur == pytest.approx(23 * K500, abs=1e-6)
     assert sh.opacity == pytest.approx(0.3) and sh.dx == 0 and sh.dy == 0 and sh.color == "#000000"
-    assert all(L.shadow.kind == "neutral" and L.shadow.opacity == pytest.approx(0.5) for L in res.layers)
+    assert all(L.shadow.kind == "physical" and L.shadow.opacity == pytest.approx(0.5) for L in res.layers)
     # iMessage: offset shadow dx=7 dy=15 (y down) σ=11 @ .36 on an <image transform="scale(.977)">
     res, _p, _d = import_icon(corpus("iMessage"))
     sh = next(e.shadow for e in res.elements if e.shadow)

@@ -14,8 +14,11 @@ android-bg      every layer hidden, fullBleed plate, 432 px
 android-mono    like android-fg with the clear-light (mono) appearance → white + alpha
 rounded         rounded plate at 0.875 of the frame (Windows / web), 512 px
 maskable        fullBleed with the art scaled to 80 % (PWA maskable safe zone), 512 px
-hero*           perspective tilt (and an exploded variant) for marketing, 1024 px (2048 at ultra)
+hero*           CAD-style POV (``camera.iso``, PLAN §11): orthographic, REAL layer distances, auto-framed;
+                hero = iso 0.55 (between head-on and isometric), hero-iso = full isometric, 1024 px (2048 ultra)
 ==============  ==========================================================================================
+
+Every platform master is head-on (``iso`` 0) whatever the project's own POV is.
 
 Output: ``workspace/projects/<id>/exports/<jobId>/`` (unpacked) + ``exports/<jobId>.zip``;
 job result ``{zip, url, files:[{name,url}], previews:[{name,url}], targets, appearances, quality, seconds}``.
@@ -49,6 +52,7 @@ ANDROID_VIEWPORT = 72 / 108       # adaptive icon: 72 dp visible of the 108 dp l
 WINDOWS_PLATE = 0.875
 MASKABLE_ART = 0.8                # PWA maskable safe zone (radius 40 %)
 LEGACY_ANDROID = 44 / 48          # legacy launcher icon body inside its 48 dp canvas
+HERO_ISO = 0.55                   # marketing hero POV: between head-on (0) and isometric (1), real distances
 ANDROID_DENSITIES = {"mdpi": 1.0, "hdpi": 1.5, "xhdpi": 2.0, "xxhdpi": 3.0, "xxxhdpi": 4.0}
 MACOS_ICONSET = [(16, 1), (16, 2), (32, 1), (32, 2), (128, 1), (128, 2), (256, 1), (256, 2), (512, 1), (512, 2)]
 ICO_SIZES = [16, 20, 24, 32, 40, 48, 64, 96, 128, 256]
@@ -112,7 +116,6 @@ def plan_export(project: Project, req: ExportRequest) -> ExportPlan:
     apps = [a for a in dict.fromkeys(req.appearances) if a in ALL_APPEARANCES] or ["light"]
     primary = "light" if "light" in apps else apps[0]
     plan = ExportPlan(targets, apps, primary)
-    explode = max(project.camera.explode, 1.0)
     for t in targets:
         if t == "ios":
             plan.need(_full(primary))
@@ -143,14 +146,12 @@ def plan_export(project: Project, req: ExportRequest) -> ExportPlan:
             plan.need(Master("maskable", "Maskable", "light", 512, full_bleed=True, art_scale=MASKABLE_ART,
                              transparent=False))
         elif t == "marketing":
-            hero = CameraSpec(view="perspective", tiltX=18, tiltY=-26, fov=30, zoom=0.92, explode=explode)
-            exploded = CameraSpec(view="perspective", tiltX=26, tiltY=-38, fov=30, zoom=0.78,
-                                  explode=max(3.0, explode * 2.5))
-            plan.need(Master(f"hero-{primary}", "Hero", primary, 1024, camera=hero.model_dump(), hero=True))
-            plan.need(Master(f"hero-exploded-{primary}", "Exploded hero", primary, 1024,
-                             camera=exploded.model_dump(), hero=True))
+            hero = CameraSpec(view="front", iso=HERO_ISO).model_dump()
+            iso = CameraSpec(view="front", iso=1.0).model_dump()
+            plan.need(Master(f"hero-{primary}", "Hero", primary, 1024, camera=hero, hero=True))
+            plan.need(Master(f"hero-iso-{primary}", "Isometric hero", primary, 1024, camera=iso, hero=True))
             if "dark" in apps and primary != "dark":
-                plan.need(Master("hero-dark", "Hero (dark)", "dark", 1024, camera=hero.model_dump(), hero=True))
+                plan.need(Master("hero-dark", "Hero (dark)", "dark", 1024, camera=hero, hero=True))
     return plan
 
 
@@ -192,10 +193,11 @@ def make_variant(project: Project, m: Master) -> Project:
 
 
 def master_camera(project: Project, m: Master) -> dict:
+    """Explicit camera (marketing heroes), else the head-on front ortho camera at the master's zoom."""
     if m.camera is not None:
         return m.camera
     return CameraSpec(view="front", zoom=m.zoom if not m.full_bleed else 1.0, fov=project.camera.fov,
-                      explode=project.camera.explode).model_dump()
+                      iso=0.0).model_dump()
 
 
 # ---------------------------------------------------------------------------------------------- image helpers
@@ -504,7 +506,7 @@ def package_marketing(out: Path, plan: ExportPlan, masters: dict[str, Path]) -> 
             continue
         name = {"hero-dark": "hero-dark.png"}.get(key)
         if name is None:
-            name = "hero-exploded.png" if key.startswith("hero-exploded") else "hero.png"
+            name = "hero-iso.png" if key.startswith("hero-iso") else "hero.png"
         dst = d / name
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(path, dst)
@@ -524,7 +526,7 @@ PREVIEW_CANDIDATES = [
     "web/icon-512.png",
     "web/maskable-512.png",
     "marketing/hero.png",
-    "marketing/hero-exploded.png",
+    "marketing/hero-iso.png",
     "marketing/hero-dark.png",
 ]
 
@@ -543,7 +545,8 @@ def write_readme(out: Path, project: Project, plan: ExportPlan, quality: str) ->
         "android": "android/res — adaptive icon (foreground/background/monochrome) + legacy mipmaps; see android/README.txt.",
         "windows": "windows/app.ico — 16…256 px multi-size ICO, plus PNGs.",
         "web": "web/ — favicon.ico (16/32/48), apple-touch-icon (180), PWA icons (192/512 + maskable) and manifest/head snippets.",
-        "marketing": "marketing/ — perspective hero renders (transparent PNG).",
+        "marketing": "marketing/ — hero renders from a CAD-style 3/4 view with the real layer depths (hero.png, "
+                     "isometric hero-iso.png, hero-dark.png; transparent PNG).",
         "icon": "icon/*.icon — Apple Icon Composer bundle (BETA: community-documented schema, verify in Icon Composer).",
         "blend": "blend/*.blend — the Blender scene with packed textures (open with Blender 5.0).",
     }

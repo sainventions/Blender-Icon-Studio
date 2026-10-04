@@ -1,13 +1,11 @@
-// Material gallery (grouped by category, rendered swatches with CSS fallback, engine badges) + preset params.
+// Material preset gallery (grouped by category, rendered swatches with CSS fallback, engine badges). A preset is only
+// a set of starting values for the one Principled BSDF every shape renders with — PrincipledEditor edits the inputs.
 import { useMemo, useState } from 'react'
-import { ChevronDown, Info, RotateCcw } from 'lucide-react'
-import type { MaterialPreset, MaterialSpec, Presets } from '../../../types'
+import { ChevronDown, Info } from 'lucide-react'
+import type { MaterialPreset, Presets } from '../../../types'
 import { cn } from '../../../lib/format'
 import { CATEGORY_ORDER, MATERIAL_CSS } from '../../../lib/meta'
-import { isParamModified, paramValue, withParam } from '../../../lib/projectOps'
-import { isReservedParam } from '../../../lib/looks'
 import { useUi } from '../../../store/ui'
-import { ColorField, Row, Segmented, Select, SliderRow, Switch, type ChangePhase } from '../../../components/ui'
 
 /** Rendered swatch (B's Cycles PNG) over a CSS fallback. `className` must position/size it (relative or absolute). */
 export function MaterialSwatch({ id, preset, className }: { id: string; preset?: MaterialPreset; className?: string }) {
@@ -33,8 +31,8 @@ export function MaterialGallery({
   value,
   onChange,
   presets,
-  galleryId = 'gallery',
-  defaultOpen = true,
+  galleryId = 'gallery.preset',
+  defaultOpen = false,
 }: {
   value: string
   onChange: (id: string) => void
@@ -63,11 +61,14 @@ export function MaterialGallery({
       <button
         type="button"
         onClick={() => toggle(galleryId)}
+        aria-expanded={open}
+        data-tip={open ? undefined : 'Pick a preset — its values are only a starting point for the Principled BSDF below'}
         className="flex w-full items-center gap-2.5 rounded-lg border border-line bg-surface-0/60 p-1.5 pr-2 text-left transition-colors hover:border-line-2"
       >
         <MaterialSwatch id={value} preset={current} className="relative h-10 w-10 shrink-0 rounded-md" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
+            <span className="shrink-0 text-3xs font-semibold uppercase tracking-[0.08em] text-fg-4">Preset</span>
             <span className="truncate text-xs font-semibold text-fg">{current?.label ?? value}</span>
             {badge && <span className={cn('rounded-[3px] px-1 text-[8.5px] font-bold tracking-wide', badge.tone)}>{badge.text}</span>}
           </div>
@@ -120,90 +121,6 @@ export function MaterialGallery({
             <b className="font-semibold">Draft note:</b> {current.eeveeNote}
           </span>
         </div>
-      )}
-    </div>
-  )
-}
-
-export function MaterialParams({
-  preset,
-  spec,
-  onChange,
-  disabled,
-}: {
-  preset: MaterialPreset | undefined
-  spec: MaterialSpec
-  onChange: (spec: MaterialSpec, phase: ChangePhase, key: string) => void
-  disabled?: boolean
-}) {
-  if (!preset) return null
-  // Reserved `__*` keys are render-time intent flags (lib/appearance.ts) — never user-facing.
-  const entries = Object.entries(preset.params).filter(([k]) => !isReservedParam(k))
-  if (!entries.length) return <p className="text-3xs text-fg-4">This material has no adjustable parameters.</p>
-  const anyModified = entries.some(([k]) => isParamModified(preset, spec, k))
-  return (
-    <div className={cn('space-y-[7px]', disabled && 'pointer-events-none opacity-45')}>
-      {entries.map(([key, schema]) => {
-        const v = paramValue(preset, spec, key)
-        const modified = isParamModified(preset, spec, key)
-        const reset = () => onChange(withParam(spec, key, undefined), 'commit', key)
-        switch (schema.type) {
-          case 'number':
-            return (
-              <SliderRow
-                key={key}
-                label={schema.label}
-                hint={schema.help}
-                value={Number(v)}
-                min={schema.min ?? 0}
-                max={schema.max ?? 1}
-                step={schema.step ?? 0.01}
-                unit={schema.unit && schema.unit !== 'IOR' ? schema.unit : undefined}
-                defaultValue={Number(schema.default)}
-                modified={modified}
-                onChange={(nv, phase) => onChange(withParam(spec, key, nv), phase, key)}
-              />
-            )
-          case 'enum': {
-            const opts = schema.options ?? []
-            return (
-              <Row key={key} label={schema.label} hint={schema.help} modified={modified} onReset={reset}>
-                {opts.length <= 4 ? (
-                  <Segmented
-                    size="xs"
-                    fill
-                    value={String(v)}
-                    options={opts.map((o) => ({ value: o, label: o }))}
-                    onChange={(nv) => onChange(withParam(spec, key, nv), 'commit', key)}
-                  />
-                ) : (
-                  <Select value={String(v)} options={opts.map((o) => ({ value: o, label: o }))} onChange={(nv) => onChange(withParam(spec, key, nv), 'commit', key)} className="flex-1" />
-                )}
-              </Row>
-            )
-          }
-          case 'bool':
-            return (
-              <Row key={key} label={schema.label} hint={schema.help} modified={modified} onReset={reset}>
-                <Switch checked={Boolean(v)} onChange={(nv) => onChange(withParam(spec, key, nv), 'commit', key)} label={schema.label} />
-              </Row>
-            )
-          case 'color':
-            return (
-              <Row key={key} label={schema.label} hint={schema.help} modified={modified} onReset={reset}>
-                <ColorField value={String(v)} onChange={(c, phase) => onChange(withParam(spec, key, c), phase, key)} className="flex-1" />
-              </Row>
-            )
-        }
-      })}
-      {anyModified && (
-        <button
-          type="button"
-          onClick={() => onChange({ ...spec, params: {} }, 'commit', '*')}
-          className="ml-[92px] flex items-center gap-1 text-3xs text-fg-4 transition-colors hover:text-fg-2"
-        >
-          <RotateCcw className="h-2.5 w-2.5" /> Reset all to preset defaults
-        </button>
       )}
     </div>
   )

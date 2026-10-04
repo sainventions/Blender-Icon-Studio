@@ -452,7 +452,7 @@ function OverflowMenu() {
           },
           { type: 'separator' },
           { label: 'Icon Pack…', icon: <LayoutGrid />, description: 'Apply one look to a whole icon set and render them all.', onSelect: goPack },
-          { label: 'Animate…', icon: <Clapperboard />, description: 'Turntable, tilt, light sweep, explode.', onSelect: () => useUi.getState().openDialog('animate') },
+          { label: 'Animate…', icon: <Clapperboard />, description: 'Turntable, tilt, light sweep, iso sweep.', onSelect: () => useUi.getState().openDialog('animate') },
           { label: 'Duplicate project', icon: <Copy />, shortcut: 'Mod+D', onSelect: () => void duplicateProject() },
           { label: 'Open in Blender', icon: <Box />, onSelect: () => void openInBlender() },
           { type: 'separator' },

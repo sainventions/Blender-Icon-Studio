@@ -12,7 +12,8 @@ import { SourcePlateBadge } from '../../../components/SourcePlateBadge'
 import { LightDial, normalizeAngle } from '../viewportBridge'
 import { PLATFORM_IDS, setPlatform } from '../actions'
 import { FillEditor } from './FillEditor'
-import { MaterialGallery, MaterialParams } from './MaterialGallery'
+import { MaterialGallery } from './MaterialGallery'
+import { PrincipledEditor } from './PrincipledEditor'
 import { PlateFillOverrideRows, ScopePicker, useScope } from './scope'
 import { LooksSection } from '../../looks/LooksPanels'
 
@@ -103,7 +104,7 @@ export function DocumentInspector() {
               onChange={(id) => id !== plate.material.preset && setPlate('material', { material: { preset: id, params: {} } })}
             />
           </div>
-          <MaterialParams preset={presets.materials[plate.material.preset]} spec={plate.material} onChange={(spec) => setPlate('material', { material: spec })} />
+          <PrincipledEditor presets={presets} spec={plate.material} stateKey="plate" onChange={(spec) => setPlate('material', { material: spec })} />
         </div>
       </Section>
 
@@ -173,20 +174,54 @@ export function DocumentInspector() {
         <SliderRow label="Softness" hint="Light size: 0 = hard shadows, 1 = very soft." value={lighting.shadowSoftness} min={0} max={1} step={0.01} defaultValue={0.5} onChange={(v) => setLighting('shadowSoftness', { shadowSoftness: v })} />
       </Section>
 
-      <Section id="doc.camera" title="Render camera" icon={<Camera />}>
-        <Row label="View">
+      <Section id="doc.camera" title="Camera" icon={<Camera />}>
+        <Row label="Projection">
           <Segmented
             size="xs"
             fill
             value={camera.view}
             onChange={(v) => setCamera('view', { view: v })}
             options={[
-              { value: 'front', label: 'Front (ortho)', tip: 'Orthographic, exactly like the OS draws icons' },
-              { value: 'perspective', label: 'Perspective', tip: 'Tilted hero shot' },
+              { value: 'front', label: 'Orthographic', tip: 'Orthographic, like the OS draws icons — head-on or a CAD-style angled view' },
+              { value: 'perspective', label: 'Perspective', tip: 'Tilted perspective hero shot' },
             ]}
           />
         </Row>
-        {camera.view === 'perspective' && (
+        {camera.view === 'front' ? (
+          <>
+            <SliderRow
+              label="View angle"
+              hint="CAD-style POV: 0 = head-on, 100 % = isometric. Layers keep their real distances; renders and the live view use the same camera."
+              value={camera.iso ?? 0}
+              min={0}
+              max={1}
+              step={0.01}
+              scale={100}
+              decimals={0}
+              unit="%"
+              defaultValue={0}
+              onChange={(v) => setCamera('iso', { iso: v })}
+            />
+            <div className="flex gap-1 pl-[92px]">
+              {(
+                [
+                  [0, 'Front'],
+                  [0.5, 'Three-quarter'],
+                  [1, 'Isometric'],
+                ] as const
+              ).map(([v, l]) => (
+                <button
+                  key={l}
+                  type="button"
+                  onClick={() => setCamera('iso', { iso: v })}
+                  className={cn('h-5 rounded px-1.5 text-3xs transition-colors', Math.abs((camera.iso ?? 0) - v) < 1e-3 ? 'bg-accent/20 text-fg' : 'bg-white/[0.04] text-fg-3 hover:bg-white/[0.08]')}
+                >
+                  {l}
+                </button>
+              ))}
+            </div>
+          </>
+        ) : (
           <>
             <SliderRow label="Tilt X" value={camera.tiltX} min={-60} max={60} step={0.5} decimals={1} unit="°" origin={0} defaultValue={0} onChange={(v) => setCamera('tiltX', { tiltX: v })} />
             <SliderRow label="Tilt Y" value={camera.tiltY} min={-60} max={60} step={0.5} decimals={1} unit="°" origin={0} defaultValue={0} onChange={(v) => setCamera('tiltY', { tiltY: v })} />
@@ -194,7 +229,6 @@ export function DocumentInspector() {
           </>
         )}
         <SliderRow label="Zoom" value={camera.zoom} min={0.5} max={2.5} step={0.01} scale={100} decimals={0} unit="%" defaultValue={1} onChange={(v) => setCamera('zoom', { zoom: v })} />
-        <SliderRow label="Explode" hint="Multiplies the z gaps between layers in renders (hero shots)." value={camera.explode} min={0} max={4} step={0.05} defaultValue={1} onChange={(v) => setCamera('explode', { explode: v })} />
       </Section>
 
       <Section id="doc.source" title="Source SVG" icon={<FileCode2 />} defaultCollapsed>

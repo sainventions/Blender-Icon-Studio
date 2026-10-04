@@ -6,7 +6,7 @@
    loads an existing one (``{projectId}``);
 2. applies the style (``look`` | ``style`` | ``fromProject``; none = keep the project's own) and saves it;
 3. renders it (``quality``/``size``/``appearance``; draft/preview are clamped to ≤ 512 px) and refreshes the
-   project's library thumbnail;
+   project's library thumbnail (head-on projects only: a CAD-style POV, ``camera.iso`` > 0, is not the icon);
 4. with ``export``: runs the normal export for the project (one-shot Blender masters, D8).
 
 Per-item failures are recorded on the item and never abort the batch. Cancel stops after the current item
@@ -35,6 +35,7 @@ from urllib.parse import quote
 from .blender.base import JobCancelled, use_oneshot
 from .jobs import PRIORITY_BACKGROUND, JobContext
 from .models import BatchRequest, BatchSource, Job, StyleSpec
+from .rendering import HEAD_ON_ISO
 from .schemas import BatchItemResult
 from .style import project_style, resolve_look, resolve_style_request, restyle_project
 from .util import safe_filename
@@ -337,7 +338,8 @@ class BatchService:
                 )
                 item.renderUrl = res["url"]
                 tile.image = Path(res["path"])
-                if req.appearance == project.appearance:
+                # the library thumbnail is the head-on icon (PLAN §11): never a render from the CAD-style POV
+                if req.appearance == project.appearance and project.camera.iso <= HEAD_ON_ISO:
                     await asyncio.to_thread(self.store.set_thumbnail_from_image, pid, tile.image)
                 if req.export is not None:
                     from .export import run_export

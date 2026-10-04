@@ -1,57 +1,49 @@
-// Cameras. Front view mirrors the Blender camera exactly at explode 0 (orthographic, ortho_scale = 2.24 / zoom,
-// looking −Z); as the UI explode grows it swings into a gentle three-quarter view and fits the projected hull of the
-// plate + spread layers into the viewport, centred, with margin. Orbit view is a perspective camera with damped,
-// angle-limited OrbitControls pivoting about the centre of plate + exploded layers, at the distance that fits them
-// into the frustum for the current view direction; the user's orbit / zoom / pan ride on that fit as offsets, so
-// neither exploding nor orbiting crops the stack (double-click empty space to return home). Framing changes are
-// damped, so they animate smoothly.
+// Cameras. The front view is the CAD-style iso view (PLAN §11, scene/iso.ts): an orthographic camera turned from
+// head-on (iso 0 — exactly the Blender camera: ortho_scale 2.24 / zoom, centred, looking −Z) toward the isometric view
+// (iso 1) by a quaternion slerp, showing the layers at their REAL z distances and auto-framed like the worker's
+// framing.ortho_plan. The iso amount and the framing are damped, so a slider drag animates smoothly. Orbit view is a
+// perspective camera with damped, angle-limited OrbitControls pivoting about the centre of plate + layers, at the
+// distance that fits them into the frustum for the current view direction; the user's orbit / zoom / pan ride on that
+// fit as offsets (double-click empty space to return home).
 import { useEffect, useRef } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import { OrbitControls, OrthographicCamera, PerspectiveCamera } from '@react-three/drei'
 import * as THREE from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
+import { FRONT_ORTHO_SCALE, isoBasis, isoQuaternion, orthoFrame } from './iso'
 import { damp, useViewportStore } from './store'
 
-/** Front framing: the plate (2 units) plus a 12 % margin for shadows and glow. */
-export const FRONT_ORTHO_SCALE = 2.24
+export { FRONT_ORTHO_SCALE }
 
-const EXPLODE_YAW = THREE.MathUtils.degToRad(-42)
-const EXPLODE_PITCH = THREE.MathUtils.degToRad(24)
-/** Explode amounts below this count as 0: the front camera is exactly the Blender camera. */
-const EXPLODE_EPS = 1e-4
-/** Damping rate (1/s) of framing changes (stack edits, explode, resize). */
+/** Damping rate (1/s) of framing changes (stack edits, iso, resize). */
 const FRAME_LAMBDA = 11
-/**
- * Exploded front framing: margin around the projected hull (12 % = the e = 0 frame around the ±1 plate, growing to
- * 18 % at full explode). Over FRONT_BLEND the e = 0 frame (2.24 / zoom about the origin) fades out of the fit so the
- * framing is continuous at e → 0 even when the art is smaller than the plate or there is no plate.
- */
-const frontMargin = (e: number) => 1.12 + 0.06 * Math.min(1, e)
-const FRONT_BLEND = 0.3
-/** While the framing lags behind a growing stack, keep at least the hull + this margin in view. */
-const MIN_MARGIN = 1.04
+/** Damping rate (1/s) of the iso amount (head-on ↔ isometric). */
+const ISO_LAMBDA = 7
+/** Iso amounts below this count as 0: the front camera is exactly the Blender camera. */
+const ISO_EPS = 1e-4
 /** Orbit view: frustum-fit margin, home direction and the user's dolly range relative to the fit distance. */
 const ORBIT_MARGIN = 1.12
 const HOME_YAW = THREE.MathUtils.degToRad(-26)
 const HOME_PITCH = THREE.MathUtils.degToRad(15)
 const MIN_DOLLY = 0.35
 const MAX_DOLLY = 2.6
+/** While the framing lags behind a growing stack, keep at least the hull + this margin in view. */
+const MIN_MARGIN = 1.04
 
-/**
- * Writes world-space xyz triplets of the framing hull (plate outline + layer boxes) at `explode` into `out`;
- * returns the number of points.
- */
-export type FramePointsFn = (explode: number, out: number[]) => number
+/** Writes world-space xyz triplets of the framing hull (plate outline + layer hulls) into `out`; returns the count. */
+export type FramePointsFn = (out: number[]) => number
 
 interface Props {
   view: 'front' | 'orbit'
   zoom: number
   fov: number
+  /** Target CAD iso amount (0..1). */
+  iso: number
   points: FramePointsFn
 }
 
 export function CameraRig(p: Props) {
-  return p.view === 'orbit' ? <OrbitRig {...p} /> : <FrontRig {...p} />
+  return p.view === 'orbit' ? <OrbitRig {...p} /> : <IsoRig {...p} />
 }
 
 /** Damps `current` toward `target` and snaps once within a relative 1e-6 (exact convergence). */
@@ -60,119 +52,67 @@ function approach(current: number, target: number, dt: number, lambda = FRAME_LA
   return Math.abs(next - target) <= 1e-6 * Math.max(1, Math.abs(target)) ? target : next
 }
 
-interface Frame {
-  cx: number
-  cy: number
-  hw: number
-  hh: number
-}
-
-function FrontRig({ zoom, points }: Props) {
+function IsoRig({ zoom, iso, points }: Props) {
   const ref = useRef<THREE.OrthographicCamera>(null)
   const store = useViewportStore()
+  const invalidate = useThree((s) => s.invalidate)
   const k = useRef({
-    dir: new THREE.Vector3(),
-    right: new THREE.Vector3(),
-    up: new THREE.Vector3(),
-    target: new THREE.Vector3(),
     pts: [] as number[],
-    goal: { cx: 0, cy: 0, hw: 1, hh: 1 } as Frame,
-    frame: null as Frame | null,
+    q: new THREE.Quaternion(),
+    target: new THREE.Vector3(),
+    frame: null as { tx: number; ty: number; tz: number; cx: number; cy: number; scale: number } | null,
   }).current
+
+  useEffect(() => {
+    store.iso.target = Math.max(0, Math.min(1, Number.isFinite(iso) ? iso : 0))
+    invalidate()
+  }, [store, iso, invalidate])
 
   useFrame((state, dt) => {
     const cam = ref.current
     if (!cam) return
-    const e = store.explode.current
-    const exploded = e > EXPLODE_EPS
-    const { width, height } = state.size
-    const yaw = EXPLODE_YAW * e
-    const pitch = EXPLODE_PITCH * e
-    k.dir.set(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch))
-    k.right.set(0, 1, 0).cross(k.dir).normalize()
-    k.up.copy(k.dir).cross(k.right).normalize()
-
-    // Projected hull (view plane) and depth range (along the view axis) of plate + layers.
-    const n = points(e, k.pts)
-    const P = k.pts
-    let minX = Infinity
-    let maxX = -Infinity
-    let minY = Infinity
-    let maxY = -Infinity
-    let minD = Infinity
-    let maxD = -Infinity
-    const { right: r, up: u, dir: d } = k
-    for (let i = 0; i < n; i++) {
-      const x = P[i * 3]
-      const y = P[i * 3 + 1]
-      const z = P[i * 3 + 2]
-      const px = x * r.x + y * r.y + z * r.z
-      const py = x * u.x + y * u.y + z * u.z
-      const pd = x * d.x + y * d.y + z * d.z
-      if (px < minX) minX = px
-      if (px > maxX) maxX = px
-      if (py < minY) minY = py
-      if (py > maxY) maxY = py
-      if (pd < minD) minD = pd
-      if (pd > maxD) maxD = pd
+    const s = store.iso
+    if (s.current !== s.target) {
+      const next = damp(s.current, s.target, ISO_LAMBDA, dt)
+      s.current = Math.abs(next - s.target) < 5e-4 ? s.target : next
     }
-
-    // e = 0 is exactly the Blender camera (ortho_scale 2.24 / zoom, centred). Exploded: fit the hull, centred.
+    const t = s.current
+    const n = points(k.pts)
     const zf = Math.max(0.05, zoom)
-    const h0 = FRONT_ORTHO_SCALE / 2 / zf
-    const goal = k.goal
-    goal.cx = 0
-    goal.cy = 0
-    goal.hw = h0
-    goal.hh = h0
-    if (exploded && n > 0) {
-      const m = frontMargin(e) / zf
-      const cx = (minX + maxX) / 2
-      const cy = (minY + maxY) / 2
-      const hw = ((maxX - minX) / 2) * m
-      const hh = ((maxY - minY) / 2) * m
-      let x0 = cx - hw
-      let x1 = cx + hw
-      let y0 = cy - hh
-      let y1 = cy + hh
-      const fade = h0 * Math.max(0, 1 - e / FRONT_BLEND)
-      if (fade > 0) {
-        x0 = Math.min(x0, -fade)
-        x1 = Math.max(x1, fade)
-        y0 = Math.min(y0, -fade)
-        y1 = Math.max(y1, fade)
-      }
-      goal.cx = (x0 + x1) / 2
-      goal.cy = (y0 + y1) / 2
-      goal.hw = Math.max(1e-3, (x1 - x0) / 2)
-      goal.hh = Math.max(1e-3, (y1 - y0) / 2)
-    }
-
+    // iso 0 is exactly the Blender front camera; otherwise framing.ortho_plan (real distances)
+    const goal =
+      t > ISO_EPS ? orthoFrame(k.pts, n, t, zf) : { target: new THREE.Vector3(), cx: 0, cy: 0, scale: FRONT_ORTHO_SCALE / zf, reach: 1 }
     let f = k.frame
-    if (!f) f = k.frame = { ...goal }
+    if (!f) f = k.frame = { tx: goal.target.x, ty: goal.target.y, tz: goal.target.z, cx: goal.cx, cy: goal.cy, scale: goal.scale }
     else {
+      f.tx = approach(f.tx, goal.target.x, dt)
+      f.ty = approach(f.ty, goal.target.y, dt)
+      f.tz = approach(f.tz, goal.target.z, dt)
       f.cx = approach(f.cx, goal.cx, dt)
       f.cy = approach(f.cy, goal.cy, dt)
-      f.hw = approach(f.hw, goal.hw, dt)
-      f.hh = approach(f.hh, goal.hh, dt)
-      if (exploded) {
-        // Never let the lag crop a growing stack: the hull (with a small margin) always stays in view.
-        f.hw = Math.max(f.hw, Math.abs(goal.cx - f.cx) + (goal.hw * MIN_MARGIN) / frontMargin(e))
-        f.hh = Math.max(f.hh, Math.abs(goal.cy - f.cy) + (goal.hh * MIN_MARGIN) / frontMargin(e))
-      }
+      f.scale = approach(f.scale, goal.scale, dt)
     }
-    const moving = f.cx !== goal.cx || f.cy !== goal.cy || f.hw !== goal.hw || f.hh !== goal.hh
-
-    k.target.copy(k.right).multiplyScalar(f.cx).addScaledVector(k.up, f.cy)
-    // The target lies in the view plane through the origin, so the camera's depth there is `dist`.
-    const dist = Math.max(20, (Number.isFinite(maxD) ? maxD : 0) + 5)
-    const far = Math.max(60, dist - (Number.isFinite(minD) ? minD : 0) + 5)
-    cam.position.copy(k.target).addScaledVector(k.dir, dist)
-    cam.up.set(0, 1, 0)
-    cam.lookAt(k.target)
-    const z = Math.min(width / (2 * f.hw), height / (2 * f.hh))
-    if (Math.abs(cam.zoom - z) > 1e-6 || cam.far !== far) {
-      cam.zoom = z
+    const moving =
+      s.current !== s.target ||
+      f.tx !== goal.target.x ||
+      f.ty !== goal.target.y ||
+      f.tz !== goal.target.z ||
+      f.cx !== goal.cx ||
+      f.cy !== goal.cy ||
+      f.scale !== goal.scale
+    isoQuaternion(t, k.q)
+    const { x: ax, y: ay, z: az } = isoBasis(t)
+    // camera on the view axis through the frame centre (lens shift = moving the ortho camera sideways)
+    k.target.set(f.tx, f.ty, f.tz).addScaledVector(ax, f.cx).addScaledVector(ay, f.cy)
+    const dist = Math.max(20, goal.reach + 5)
+    cam.position.copy(k.target).addScaledVector(az, dist)
+    cam.quaternion.copy(k.q)
+    const { width, height } = state.size
+    // the square Blender frame (side `scale`) on the viewport's shorter side
+    const zz = Math.min(width, height) / Math.max(1e-6, f.scale)
+    const far = dist + goal.reach + 10
+    if (Math.abs(cam.zoom - zz) > 1e-6 || cam.far !== far) {
+      cam.zoom = zz
       cam.far = far
       cam.updateProjectionMatrix()
     }
@@ -193,7 +133,6 @@ function homeOffset(dist: number, out: THREE.Vector3): THREE.Vector3 {
 function OrbitRig({ zoom, fov, points }: Props) {
   const camRef = useRef<THREE.PerspectiveCamera>(null)
   const controlsRef = useRef<OrbitControlsImpl>(null)
-  const store = useViewportStore()
   const gl = useThree((s) => s.gl)
   const invalidate = useThree((s) => s.invalidate)
   const k = useRef({
@@ -230,10 +169,8 @@ function OrbitRig({ zoom, fov, points }: Props) {
     const ctl = controlsRef.current
     const cam = camRef.current
     if (!ctl || !cam) return
-    const e = store.explode.current
-
     // Pivot = centre of the hull's bounding box (view-independent, so orbiting turns about a fixed point).
-    const n = points(e, k.pts)
+    const n = points(k.pts)
     const P = k.pts
     let x0 = Infinity
     let y0 = Infinity

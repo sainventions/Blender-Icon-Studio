@@ -78,6 +78,24 @@ def test_presets_and_swatches(ctx, tmp_path):
     assert p["colorModes"] == repo["colorModes"]
 
 
+def test_presets_serve_the_principled_schema(ctx):
+    """PLAN §11: every material is ONE Principled BSDF - all presets share one grouped param schema (presets are
+    only starting values), served as-is; the server validates stored params against the same schema."""
+    from bis.materials import param_schema
+
+    p = ctx.client.get("/api/presets").json()
+    groups = p["principledSchema"]["groups"]
+    assert groups[:2] == ["Paint", "Base"] and "Transmission" in groups and "Thin Film" in groups
+    keys = {k: set(m["params"]) for k, m in p["materials"].items()}
+    first = next(iter(keys.values()))
+    assert len(first) == 28 and all(v == first for v in keys.values())
+    assert all(spec["group"] in groups for m in p["materials"].values() for spec in m["params"].values())
+    assert {"roughness", "ior", "transmission", "coatWeight", "sheenWeight", "emissionStrength",
+            "thinFilmThickness", "paintMode", "tint", "grain", "filmVariation"} <= first
+    assert not {"frost", "glow", "rim", "translucency", "dispersion", "absorption", "bloom"} & first   # no fakes
+    assert set(param_schema(ctx.app.state.presets)) == first
+
+
 def test_presets_serve_new_color_modes_live(tmp_path):
     """The server hard-codes no colour-mode list: a mode added to presets.json (e.g. round 5's brand-exact
     mode with its extra fields) reaches /api/presets without a restart."""
@@ -96,6 +114,31 @@ def test_presets_serve_new_color_modes_live(tmp_path):
         os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000_000))
         modes = c.get("/api/presets").json()["colorModes"]
         assert modes["brand-test"] == data["colorModes"]["brand-test"] and set(modes) == set(data["colorModes"])
+
+
+def test_half_written_presets_never_break_projects(tmp_path):
+    """presets.json is edited live and every project load/save cleans params against its schema (PLAN §11): a
+    read that catches the file mid-write must keep the last good copy (never a 500, never wiped params)."""
+    root = tmp_path / "root"
+    (root / "shared").mkdir(parents=True)
+    path = root / "shared" / "presets.json"
+    text = (ROOT / "shared" / "presets.json").read_text(encoding="utf-8")
+    path.write_text(text, encoding="utf-8")
+    app = create_app(make_test_settings(tmp_path, root=root), bridge=FakeBridge())
+    with TestClient(app) as c:
+        p = upload(c)
+        p["layers"][0]["material"] = {"preset": "frosted_glass", "params": {"roughness": 0.3, "glow": 1.0}}
+        assert c.put(f"/api/projects/{p['id']}", json=p).status_code == 200
+        path.write_text(text[: len(text) // 2], encoding="utf-8")                    # caught mid-write
+        st = path.stat()
+        os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000_000))
+        r = c.get(f"/api/projects/{p['id']}")
+        assert r.status_code == 200 and r.json()["layers"][0]["material"]["params"] == {"roughness": 0.3}
+        assert c.put(f"/api/projects/{p['id']}", json=r.json()).status_code == 200
+        assert c.get("/api/presets").json()["materials"]["frosted_glass"]["params"]["roughness"]["default"] == 0.267
+        path.write_text(text, encoding="utf-8")                                         # the write completes
+        os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 9_000_000_000))
+        assert "frosted_glass" in c.get("/api/presets").json()["materials"]
 
 
 def test_samples_and_thumbnail(ctx):
@@ -366,6 +409,23 @@ def test_renditions(ctx):
     assert [j["request"]["appearance"] for j in c.post(f"/api/projects/{pid}/renditions", json={}).json()] == ["light"]
 
 
+def test_renditions_are_head_on_whatever_the_cad_pov(ctx):
+    """The six appearance renditions (+ size waterfall) preview the exported icon, so - like every platform master -
+    they are head-on even while the project sits in the CAD-style POV (camera.iso); an explicit camera still wins."""
+    c = ctx.client
+    p = upload(c)
+    p["camera"].update(iso=0.6, zoom=1.3)
+    assert c.put(f"/api/projects/{p['id']}", json=p).status_code == 200
+    jobs = c.post(f"/api/projects/{p['id']}/renditions", json={"appearances": ["light", "dark"]}).json()
+    assert all(wait_job(c, j["id"])["state"] == "done" for j in jobs)
+    sent = [a for _m, cmd, a in ctx.bridge.calls if cmd == "render"][-2:]
+    assert all(a["camera"]["iso"] == 0.0 and a["camera"]["zoom"] == 1.3 for a in sent), sent
+    assert all(a["project"]["camera"]["iso"] == 0.6 for a in sent)
+    jobs = c.post(f"/api/projects/{p['id']}/renditions",
+                  json={"appearances": ["light"], "camera": {"iso": 0.5}}).json()
+    assert wait_job(c, jobs[0]["id"])["state"] == "done" and ctx.bridge.calls[-1][2]["camera"]["iso"] == 0.5
+
+
 @pytest.mark.parametrize("fmt", ["gif", "webp", "png", "mp4"])
 def test_animate(ctx, fmt):
     c = ctx.client
@@ -460,19 +520,144 @@ def test_spa_fallback(ctx):
 
 # ---------------------------------------------------------------------------------------------- review fixes
 def test_full_bleed_render_pins_camera_zoom(ctx):
-    """fullBleed = plate exactly fills the frame (ortho 2.0); the project's camera zoom must not shrink it."""
+    """fullBleed = plate exactly fills the frame (ortho 2.0) head-on; neither the project's camera zoom nor its
+    CAD-style POV (camera.iso) may change that."""
     c = ctx.client
     p = upload(c)
     p["camera"]["zoom"] = 2.0
-    p["camera"]["explode"] = 1.5
+    p["camera"]["iso"] = 0.6
+    p["camera"]["fov"] = 40.0
     c.put(f"/api/projects/{p['id']}", json=p)
     job = c.post(f"/api/projects/{p['id']}/render", json={"quality": "final", "size": 32, "fullBleed": True}).json()
     assert wait_job(c, job["id"])["state"] == "done"
     args = ctx.bridge.calls[-1][2]
     assert args["fullBleed"] is True and args["camera"]["zoom"] == 1.0 and args["camera"]["view"] == "front"
-    assert args["camera"]["explode"] == 1.5  # everything else follows the project camera
+    assert args["camera"]["iso"] == 0.0 and args["camera"]["fov"] == 40.0  # the rest follows the project camera
     wait_job(c, c.post(f"/api/projects/{p['id']}/render", json={"size": 32}).json()["id"])
-    assert "camera" not in ctx.bridge.calls[-1][2]  # normal renders use the project camera as is
+    sent = ctx.bridge.calls[-1][2]
+    assert "camera" not in sent and sent["project"]["camera"]["iso"] == 0.6  # the project's own POV as is
+
+
+def test_cad_view_renders_keep_the_head_on_thumbnail(ctx):
+    """A render from an explicit CAD-style POV (iso > 0) is not the icon: it never replaces the library thumbnail."""
+    c = ctx.client
+    pid = upload(c)["id"]
+    thumb = ctx.settings.projects_dir / pid / "thumbnail.png"
+    before = thumb.read_bytes()
+    j = wait_job(c, c.post(f"/api/projects/{pid}/render", json={"size": 48, "camera": {"iso": 0.55}}).json()["id"])
+    assert j["state"] == "done" and ctx.bridge.calls[-1][2]["camera"]["iso"] == 0.55
+    assert thumb.read_bytes() == before
+    j = wait_job(c, c.post(f"/api/projects/{pid}/render", json={"size": 48, "camera": {"iso": 0.0}}).json()["id"])
+    assert j["state"] == "done" and thumb.read_bytes() != before
+    # an explicit camera follows the project camera's rules: iso within 0..1, layers never spread
+    j = wait_job(c, c.post(f"/api/projects/{pid}/render",
+                           json={"size": 32, "camera": {"iso": 7.0, "explode": 3.0}}).json()["id"])
+    assert j["state"] == "done" and ctx.bridge.calls[-1][2]["camera"]["iso"] == 1.0
+    assert ctx.bridge.calls[-1][2]["camera"]["explode"] == 1.0
+    # the project's own POV (the iso slider: live renders send no camera) is not the head-on icon either
+    p = c.get(f"/api/projects/{pid}").json()
+    p["camera"]["iso"] = 0.4
+    assert c.put(f"/api/projects/{pid}", json=p).status_code == 200
+    thumb.unlink()
+    j = wait_job(c, c.post(f"/api/projects/{pid}/render", json={"size": 48, "live": True}).json()["id"])
+    assert j["state"] == "done" and ctx.bridge.calls[-1][2]["project"]["camera"]["iso"] == 0.4
+    assert not thumb.exists()
+    j = wait_job(c, c.post(f"/api/projects/{pid}/render", json={"size": 48, "camera": {"iso": 0.0}}).json()["id"])
+    assert j["state"] == "done" and thumb.exists()           # an explicit head-on camera is the icon again
+
+
+def test_legacy_explode_animation_is_the_iso_pov_move(ctx):
+    """PLAN §11: 'explode' no longer spreads layers - the legacy kind runs the CAD-style head-on -> iso -> head-on
+    move (kind 'iso'), with the real layer distances (camera.explode stays 1)."""
+    c = ctx.client
+    pid = upload(c)["id"]
+    for kind in ("explode", "iso"):
+        job = wait_job(c, c.post(f"/api/projects/{pid}/animate",
+                                 json={"kind": kind, "frames": 4, "size": 32, "format": "png"}).json()["id"])
+        assert job["state"] == "done" and job["result"]["kind"] == "iso" and job["request"]["kind"] == "iso"
+        mode, cmd, args = ctx.bridge.calls[-1]
+        assert (mode, cmd, args["kind"]) == ("oneshot", "animate", "iso")
+        assert args["project"]["camera"]["explode"] == 1.0
+
+
+# ---------------------------------------------------------------------------------------------- PLAN 11 contract
+def _write_raw(ctx, pid: str, raw: dict) -> Path:
+    path = ctx.settings.projects_dir / pid / "project.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    return path
+
+
+def test_legacy_project_loads_on_the_principled_contract(ctx):
+    """A project saved by the round <= 5 server (fake material params, art-directed shadows, explode spreading,
+    stale per-shape overrides) loads cleaned; a PUT of such a document is stored cleaned."""
+    c = ctx.client
+    p = upload(c)
+    pid = p["id"]
+    raw = json.loads(json.dumps(p))
+    l0, l1 = raw["layers"]
+    e0 = l0["elementIds"][0]
+    l0["material"] = {"preset": "frosted_glass", "params": {
+        "frost": 0.2, "glow": 0.5, "rim": 2.0, "translucency": 0.7, "specular": "auto", "tint": 0.4,
+        "ior": 9.0, "paintMode": "bogus", "coatWeight": True, "__intent": "clear"}}
+    l0["shadow"] = {"kind": "neutral", "opacity": 0.4}
+    l0["elementMaterials"] = {e0: {"preset": "chrome", "params": {"anisotropy": 0.8, "brush": "radial"}},
+                              "e99": {"preset": "neon", "params": {}}}
+    l1["material"] = {"preset": "neon", "params": {"strength": 6.0, "bloom": 0.6, "core": 0.3, "roughness": 0.3}}
+    l1["shadow"] = {"kind": "chromatic", "opacity": 0.5}
+    raw["camera"]["explode"] = 2.5
+    raw["camera"]["iso"] = 1.7
+    raw["canvas"]["plate"]["material"] = {"preset": "satin", "params": {"sheen": 0.3, "scatter": 4}}
+    raw["appearances"]["dark"]["layers"] = {"l0": {"material": {"preset": "iridescent",
+                                                                "params": {"film": 400, "filmIor": 1.4, "bands": 3}}}}
+    path = _write_raw(ctx, pid, raw)
+
+    q = c.get(f"/api/projects/{pid}").json()
+    a, b = q["layers"]
+    assert a["material"] == {"preset": "frosted_glass", "params": {"tint": 0.4, "ior": 3.0, "roughness": 0.2}}
+    assert a["elementMaterials"] == {e0: {"preset": "chrome", "params": {"anisotropic": 0.8}}}
+    assert b["material"]["params"] == {"roughness": 0.3, "emissionStrength": 6.0}   # an explicit value wins
+    assert a["shadow"] == {"kind": "physical", "opacity": 0.4} and b["shadow"]["kind"] == "physical"
+    assert q["camera"]["explode"] == 1.0 and q["camera"]["iso"] == 1.0
+    assert q["canvas"]["plate"]["material"]["params"] == {"sheenWeight": 0.3}
+    assert q["appearances"]["dark"]["layers"]["l0"]["material"]["params"] == {"thinFilmThickness": 400,
+                                                                              "thinFilmIor": 1.4}
+    assert q["updatedAt"] == p["updatedAt"]                                          # reading is not an edit
+    assert json.loads(path.read_text(encoding="utf-8"))["layers"][0]["shadow"]["kind"] == "neutral"
+
+    r = c.put(f"/api/projects/{pid}", json=raw)                                      # a stale client's legacy PUT
+    assert r.status_code == 200 and r.json()["layers"] == q["layers"]
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    assert stored["layers"] == q["layers"] and stored["camera"]["explode"] == 1.0
+    # the copied style of the legacy project carries only Principled params
+    style = c.get(f"/api/projects/{pid}/style").json()
+    assert style["layerMaterials"][0]["params"] == {"tint": 0.4, "ior": 3.0, "roughness": 0.2}
+
+
+def test_element_materials_follow_their_elements(ctx):
+    """Per-shape materials (Layer.elementMaterials, element id -> MaterialSpec) stay on their shape through merge,
+    split, move and re-split; overrides of elements a layer no longer holds are dropped."""
+    c = ctx.client
+    p = upload(c, strategy="element")
+    pid = p["id"]
+    assert [l["elementIds"] for l in p["layers"]] == [["e1"], ["e2"], ["e3"]]
+    chrome = {"preset": "chrome", "params": {"roughness": 0.1}}
+    candy = {"preset": "candy", "params": {"subsurfaceWeight": 0.5}}
+    p["layers"][0]["elementMaterials"] = {"e1": chrome}
+    p["layers"][1]["elementMaterials"] = {"e2": candy, "e3": chrome}       # e3 is not in this layer -> dropped
+    q = c.put(f"/api/projects/{pid}", json=p).json()
+    assert [l["elementMaterials"] for l in q["layers"]] == [{"e1": chrome}, {"e2": candy}, {}]
+
+    m = c.post(f"/api/projects/{pid}/layers/merge", json={"layerIds": ["l0", "l1"]}).json()
+    assert [l["elementMaterials"] for l in m["layers"]] == [{"e1": chrome, "e2": candy}, {}]
+    s = c.post(f"/api/projects/{pid}/layers/l0/split", json={"mode": "elements"}).json()
+    assert [l["elementMaterials"] for l in s["layers"]] == [{"e1": chrome}, {"e2": candy}, {}]
+    mv = c.post(f"/api/projects/{pid}/elements/move", json={"elementIds": ["e2"], "toLayerId": None}).json()
+    holder = next(l for l in mv["layers"] if l["elementIds"] == ["e2"])
+    assert holder["elementMaterials"] == {"e2": candy}
+    assert all("e2" not in l["elementMaterials"] for l in mv["layers"] if l is not holder)
+    one = c.post(f"/api/projects/{pid}/split", json={"strategy": "single"}).json()
+    assert one["layers"][0]["elementMaterials"] == {"e1": chrome, "e2": candy}
+    assert c.get(f"/api/projects/{pid}").json()["layers"] == one["layers"]
 
 
 def test_export_requires_a_target(ctx):

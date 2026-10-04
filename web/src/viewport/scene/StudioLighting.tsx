@@ -5,15 +5,18 @@
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { useThree } from '@react-three/fiber'
 import * as THREE from 'three'
-import { COOL, DIFFUSE_CAL, LIVE_CAL, LIVE_LIGHT_CAL, WARM, lightDir, type Rig } from './rig'
+import { COOL, DIFFUSE_CAL, LIVE_CAL, LIVE_LIGHT_CAL, WARM, lightDir, shadowGap, type Rig } from './rig'
 import { StudioEnvironment } from './studioEnvironment'
 
 interface Props {
   rig: Rig
-  /** 0..1 darkness of cast shadows (from the layers' shadow opacity). */
-  shadowStrength: number
-  /** Whether any layer casts a shadow at all. */
-  shadows: boolean
+  /** 0..1 darkness of the key's cast shadows (0 = no layer casts one; glass casts lighter shadows). */
+  shadowIntensity: number
+  /**
+   * World height of the tallest shadow-casting body (thickness, or an inflated dome's full height). Its silhouette's
+   * upper edge casts from about half that height, so the soft key's penumbra grows with it (rig.shadowGap).
+   */
+  casterHeight?: number
 }
 
 /**
@@ -32,22 +35,11 @@ const SHADOW_HALF = 1.75
 const SHADOW_MAP = 512
 const SHADOW_TEXEL = (2 * SHADOW_HALF) / SHADOW_MAP
 const SHADOW_BLUR_MAX = 48
-/**
- * Typical caster → receiver gap (art units) the single VSM blur radius is sized for: a layer's body over the plate or
- * the layer below it (z gap 0.13 − thickness 0.1, or its own 0.1 height) — round 5: was 0.25, which smeared the contact
- * shadows Cycles draws along every glyph's lower edge into a faint wide haze.
- */
-const SHADOW_GAP = 0.05
-/**
- * Only the key casts shadows live, while in Cycles every layer also occludes the studio world (the same shadow-ray
- * transmittance blocks the dome / softbox): next to a glyph Cycles darkens the plate ~1.6× what the key alone takes
- * away (Files' card, Twitter's belly: −24 vs −10 levels). The key's shadow carries that share too.
- */
-const SHADOW_ENV_GAIN = 1.6
-/** Half depth range of the key's shadow camera around the icon (art units; covers the exploded stack). */
+/** Half depth range of the key's shadow camera around the icon (art units; covers the whole stack). */
 const SHADOW_DEPTH = 4
 
-export function StudioLighting({ rig, shadowStrength, shadows }: Props) {
+export function StudioLighting({ rig, shadowIntensity, casterHeight = 0 }: Props) {
+  const shadows = shadowIntensity > 0
   const gl = useThree((s) => s.gl)
   const scene = useThree((s) => s.scene)
   const invalidate = useThree((s) => s.invalidate)
@@ -96,9 +88,9 @@ export function StudioLighting({ rig, shadowStrength, shadows }: Props) {
   const keyColor = useMemo(() => new THREE.Color(1, 1, 1).lerp(WARM, rig.warmth), [rig.warmth])
   const fillColor = useMemo(() => new THREE.Color(1, 1, 1).lerp(COOL, rig.warmth), [rig.warmth])
   // The worker's key is a 4 · KEY_SCALE × (0.3 + 1.4 · softness) m disk at KEY_DISTANCE: penumbra ≈ gap × size /
-  // distance. VSM has one blur radius for every receiver, so use the penumbra of a typical layer gap (SHADOW_GAP).
+  // distance. VSM has one blur radius for every receiver: the penumbra of a typical caster → receiver gap (rig.shadowGap).
   const keySize = 4 * KEY_SCALE * (0.3 + 1.4 * rig.softness)
-  const penumbra = (SHADOW_GAP * keySize) / KEY_DISTANCE
+  const penumbra = (shadowGap(casterHeight) * keySize) / KEY_DISTANCE
   const radius = Math.max(2, Math.min(SHADOW_BLUR_MAX, penumbra / SHADOW_TEXEL))
 
   useLayoutEffect(() => {
@@ -124,9 +116,9 @@ export function StudioLighting({ rig, shadowStrength, shadows }: Props) {
     const key = keyRef.current
     if (!key) return
     key.shadow.radius = radius
-    key.shadow.intensity = Math.max(0, Math.min(1, shadowStrength * SHADOW_ENV_GAIN))
+    key.shadow.intensity = Math.max(0, Math.min(1, shadowIntensity))
     invalidate()
-  }, [radius, shadowStrength, invalidate])
+  }, [radius, shadowIntensity, invalidate])
 
   return (
     <>

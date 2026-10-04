@@ -10,8 +10,16 @@ Apply rules (StyleSpec): every layer gets ``layerDefaults`` (material/depth/shad
 ``layerMaterials[i]`` (by index from the bottom, clamped to the last entry); the requested bevel is clamped to
 ``0.9 × safeRadius`` of each layer; layers are restacked ``z_i = i × zGap`` (``zGap`` None = keep z); plate
 material/thickness/bevel are copied (+ fill/shape when not None); lighting, camera, ``render.colorMode`` and
-``appearances.tint`` are copied when given. Per-layer *material* overrides of the dark/mono appearances are
-dropped so the look shows in every rendition.
+``appearances.tint`` are copied when given. Per-layer *material* overrides of the dark/mono appearances and the
+per-shape overrides (``Layer.elementMaterials``) are dropped so the look shows in every rendition and on every
+shape.
+
+Materials (round 6, PLAN §11): ONE Principled BSDF per shape; a MaterialSpec's ``params`` are overrides keyed by the
+shared Principled schema of presets.json. Every style that enters the server (a look, a pasted StyleSpec, another
+project's style) goes through :func:`clean_style`: params outside the schema are dropped (legacy renames kept,
+see ``bis.materials``), the legacy shadow kinds ``neutral`` / ``chromatic`` become ``physical`` and
+``camera.explode`` is reset to 1 (real distances; the POV is ``camera.iso``). Per-shape overrides are never part
+of a style - element ids belong to one icon.
 
 Layer mode (round 5): ``layerDefaults.mode`` None — every look in presets.json, and every extracted style
 unless its source's user fused its layers into 'combined' on purpose — keeps each layer's own mode. The SVG pipeline derives
@@ -27,6 +35,7 @@ import math
 from collections import Counter
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional
 
+from .materials import clean_material, normalize_camera, normalize_shadow, param_schema
 from .models import Project, StyleLayerDefaults, StylePlate, StyleSpec
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -74,12 +83,23 @@ def deep_merge(base: Mapping[str, Any], over: Mapping[str, Any]) -> dict[str, An
 
 
 def resolve_look(presets: Any, look_id: str) -> StyleSpec:
-    """The StyleSpec of a named look: ``looks[look_id].style`` merged over the StyleSpec defaults."""
+    """The StyleSpec of a named look: ``looks[look_id].style`` merged over the StyleSpec defaults (cleaned)."""
     look = (_raw(presets).get("looks") or {}).get(look_id) if isinstance(look_id, str) else None
     if not isinstance(look, Mapping):
         raise LookNotFound(look_id)
     partial = look.get("style") or {}
-    return StyleSpec.model_validate(deep_merge(StyleSpec().model_dump(mode="json"), partial))
+    return clean_style(StyleSpec.model_validate(deep_merge(StyleSpec().model_dump(mode="json"), partial)), presets)
+
+
+def clean_style(style: StyleSpec, presets: Any) -> StyleSpec:
+    """`style` (in place, returned) on the §11 contract: material params restricted to the Principled schema,
+    legacy shadow kinds → 'physical', legacy ``camera.explode`` → 1."""
+    schema = param_schema(presets)
+    for spec in (style.layerDefaults.material, *(style.layerMaterials or []), style.plate.material):
+        clean_material(spec, schema)
+    normalize_shadow(style.layerDefaults.shadow)
+    normalize_camera(style.camera)
+    return style
 
 
 # ---------------------------------------------------------------------------------------------- extract
@@ -187,6 +207,7 @@ def apply_style(project: Project, style: StyleSpec, safe_radii: Optional[Mapping
     for i, layer in enumerate(p.layers):
         material = mats[min(i, len(mats) - 1)] if mats else ld.material
         layer.material = material.model_copy(deep=True)
+        layer.elementMaterials = {}   # the look replaces per-shape tweaks too (element ids are icon-specific)
         depth = ld.depth.model_copy(deep=True)
         depth.z = round(i * float(style.zGap), 5) if style.zGap is not None else layer.depth.z
         sr = radii.get(layer.id)
@@ -194,6 +215,7 @@ def apply_style(project: Project, style: StyleSpec, safe_radii: Optional[Mapping
             depth.bevel = clamp_bevel(depth.bevel, sr)
         layer.depth = depth
         layer.shadow = ld.shadow.model_copy(deep=True)
+        normalize_shadow(layer.shadow)
         if ld.mode is not None:
             layer.mode = ld.mode
     for ov in (p.appearances.dark, p.appearances.mono):
@@ -213,6 +235,7 @@ def apply_style(project: Project, style: StyleSpec, safe_radii: Optional[Mapping
         p.lighting = style.lighting.model_copy(deep=True)
     if style.camera is not None:
         p.camera = style.camera.model_copy(deep=True)
+        normalize_camera(p.camera)
     if style.colorMode is not None:
         p.render.colorMode = style.colorMode
     if style.tint is not None:
@@ -234,7 +257,8 @@ def resolve_style_request(
     layer modes) — the server passes :func:`project_style`, which knows the pipeline's auto modes.
 
     Raises StyleError (none or several given; none is allowed with `allow_none` → returns None),
-    LookNotFound, or the store's ProjectNotFound for an unknown ``fromProject``."""
+    LookNotFound, or the store's ProjectNotFound for an unknown ``fromProject``. The result is cleaned
+    (:func:`clean_style`)."""
     given = [n for n in ("look", "style", "fromProject") if getattr(req, n, None) is not None]
     if len(given) > 1:
         raise StyleError(f"Give exactly one of look, style or fromProject (got {', '.join(given)})")
@@ -245,10 +269,10 @@ def resolve_style_request(
     if req.look is not None:
         return resolve_look(presets, req.look)
     if req.style is not None:
-        return req.style.model_copy(deep=True)
+        return clean_style(req.style.model_copy(deep=True), presets)
     if extract is not None:
-        return extract(req.fromProject)
-    return extract_style(load_project(req.fromProject))
+        return clean_style(extract(req.fromProject), presets)
+    return clean_style(extract_style(load_project(req.fromProject)), presets)
 
 
 def project_style(store: "ProjectStore", pid: str, *, plate_fill: Optional[bool] = None,

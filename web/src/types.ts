@@ -186,7 +186,7 @@ export interface ParamSchema {
 }
 export interface MaterialPreset {
   label: string; category: string; description: string
-  paint: 'tint' | 'base' | 'emission'
+  paint?: 'tint' | 'base' | 'emission' // legacy (pre-§11): presets.json no longer carries it — params.paintMode does
   engines: { cycles: string; eevee: string }
   eeveeNote?: string
   params: Record<string, ParamSchema>
@@ -207,6 +207,7 @@ export interface Presets {
   quality: Record<Quality, QualitySpec>
   colorModes: Record<string, { label: string; viewTransform: string; look: string; softClip?: number; description?: string }>
   looks: Record<string, Look>
+  principledSchema?: { groups: string[] } // Principled BSDF panel order of ParamSchema.group (PLAN §11)
 }
 
 // ---------------------------------------------------------------- styles / looks / batch ("Icon Pack")

@@ -18,7 +18,9 @@ interface UiState {
   rightCollapsed: boolean
   stageMode: StageMode
   view3d: 'front' | 'orbit'
-  explode: number
+  /** Transient camera.iso while the View control animates (Front / Iso buttons, I key); null = the project's value.
+   *  The final value is committed to project.camera.iso once, at the end. Not persisted. */
+  isoAnim: number | null
   showGrid: boolean
   zoom: number
   compareSplit: number
@@ -52,7 +54,7 @@ export const useUi = create<UiState>()(
       rightCollapsed: false,
       stageMode: 'viewport',
       view3d: 'front',
-      explode: 0,
+      isoAnim: null,
       showGrid: false,
       zoom: 1,
       compareSplit: 0.5,

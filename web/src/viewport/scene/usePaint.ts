@@ -1,20 +1,23 @@
-// Resolve a Fill (+ the layer texture URL) into a PaintBinding for IconMaterial: texture map or flat colour, plus the
-// luminance range the mono/tint renditions stretch.
+// Resolve a Fill (+ the layer texture URL) into a PaintBinding (lib/materials3d): texture map or flat colour, like the
+// worker's scene.paint_spec ('auto' = the layer's rasterised art; overrides = solid / gradient; 'none' = not drawn).
 import { useMemo } from 'react'
 import * as THREE from 'three'
 import type { Fill } from '../../types'
 import type { PaintBinding } from '../../lib/materials3d'
-import { colorStats, fillPreviewColor, paintSource, useGradientAsset } from '../textures/fillTextures'
+import { fillPreviewColor, paintSource, useGradientAsset } from '../textures/fillTextures'
 import { useTextureAsset } from '../textures/layerTextures'
 
 export interface ResolvedPaint {
   binding: PaintBinding
-  /** Solid-fill opacity multiplier. */
-  opacity: number
   /** Fill 'none' (plate: not drawn). */
   none: boolean
   /** Final paint is available (texture loaded or not needed). */
   ready: boolean
+}
+
+/** Gradient fills with translucent stops carry alpha (worker paint_spec has_alpha). */
+function gradientAlpha(fill: Fill): boolean {
+  return (fill.type === 'linear' || fill.type === 'radial') && fill.stops.some((s) => (s.opacity ?? 1) < 0.999)
 }
 
 export function usePaint(fill: Fill, textureUrl: string | null, fallbackHex: string): ResolvedPaint {
@@ -25,55 +28,22 @@ export function usePaint(fill: Fill, textureUrl: string | null, fallbackHex: str
   const texStats = tex?.stats ?? null
 
   return useMemo<ResolvedPaint>(() => {
-    if (spec.kind === 'none') {
-      return {
-        binding: { map: null, color: new THREE.Color(1, 1, 1), lumRange: [1, 1] },
-        opacity: 1,
-        none: true,
-        ready: true,
-      }
-    }
-    if (spec.kind === 'color') {
-      const st = colorStats(spec.color)
-      return {
-        binding: { map: null, color: new THREE.Color().setStyle(spec.color), lumRange: [st.lumMin, st.lumMax] },
-        opacity: spec.opacity,
-        none: false,
-        ready: true,
-      }
-    }
+    if (spec.kind === 'none') return { binding: { map: null, color: new THREE.Color(1, 1, 1) }, none: true, ready: true }
+    if (spec.kind === 'color')
+      return { binding: { map: null, color: new THREE.Color().setStyle(spec.color) }, none: false, ready: true }
     if (spec.kind === 'gradient' && grad) {
-      const st = grad.stats
       return {
-        binding: { map: grad.texture, color: new THREE.Color(...st.avg), lumRange: [st.lumMin, st.lumMax] },
-        opacity: 1,
+        binding: { map: grad.texture, color: new THREE.Color(...grad.stats.avg), alpha: gradientAlpha(spec.fill) },
         none: false,
         ready: true,
       }
     }
     if (spec.kind === 'texture' && tex && texReady) {
-      const st = texStats
-      const color = st ? new THREE.Color(...st.avg) : new THREE.Color().setStyle(fallbackHex)
-      return {
-        binding: {
-          map: tex.texture,
-          color,
-          lumRange: st ? [st.lumMin, st.lumMax] : [0, 1],
-          alphaMax: st ? st.alphaMax : 1,
-        },
-        opacity: 1,
-        none: false,
-        ready: true,
-      }
+      const color = texStats ? new THREE.Color(...texStats.avg) : new THREE.Color().setStyle(fallbackHex)
+      return { binding: { map: tex.texture, color }, none: false, ready: true }
     }
     // Loading (or failed): flat preview colour.
-    const st = colorStats(fallbackHex)
-    return {
-      binding: { map: null, color: new THREE.Color().setStyle(fallbackHex), lumRange: [st.lumMin, st.lumMax] },
-      opacity: 1,
-      none: false,
-      ready: !!tex?.failed,
-    }
+    return { binding: { map: null, color: new THREE.Color().setStyle(fallbackHex) }, none: false, ready: !!tex?.failed }
   }, [spec, grad, tex, texReady, texStats, fallbackHex])
 }
 

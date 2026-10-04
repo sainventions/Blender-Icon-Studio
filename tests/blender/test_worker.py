@@ -172,9 +172,9 @@ def test_six_appearances(worker, fixtures, outdir):
         lum[ap] = float(rgb.mean())
         if ap.startswith(("clear", "tinted")):
             assert r["wallpaper"] is not None
-        if ap.startswith("clear"):    # mono: foreground desaturated
-            sat = (rgb.max(axis=1) - rgb.min(axis=1)).mean()
-            assert sat < 40, sat
+        if ap == "tinted-light":      # glyphs = mono luminance x the default blue tint
+            c = a[..., :3][PX // 2 - 8:PX // 2 + 8, PX // 2 - 8:PX // 2 + 8].reshape(-1, 3).mean(axis=0)
+            assert c[2] > c[0] + 20, c
     assert lum["dark"] < lum["light"] - 40
     assert lum["clear-dark"] < lum["clear-light"]
     assert lum["tinted-dark"] < lum["tinted-light"]
@@ -215,10 +215,10 @@ def test_backdrop_and_color_modes(worker, fixtures, outdir):
     assert alpha.min() == 255 and r["wallpaper"]["kind"] == "light"
 
 
-def test_perspective_camera_and_explode(worker, fixtures, outdir):
+def test_perspective_camera(worker, fixtures, outdir):
     out = outdir / "persp.png"
     r, _ = _render(worker, fixtures["Photos"], out, quality="preview",
-                   camera={"view": "perspective", "tiltX": 18, "tiltY": -24, "fov": 30, "explode": 2.0})
+                   camera={"view": "perspective", "tiltX": 18, "tiltY": -24, "fov": 30})
     _, alpha = _alpha_stats(str(out))
     # whole icon in frame: border rows/cols stay transparent
     assert alpha[0].max() == 0 and alpha[-1].max() == 0 and alpha[:, 0].max() == 0 and alpha[:, -1].max() == 0
@@ -258,7 +258,7 @@ def test_partial_project_gets_model_defaults(worker, outdir):
     proj = {"id": "partial", "layers": [{"id": "A", "fill": {"type": "solid", "color": "#ff3366"}}]}
     r = worker.result("render", {"project": proj, "geometry": bundle, "quality": "preview", "samples": 16,
                                  "size": 96, "out": str(outdir / "partial.png")})
-    assert r["stats"] == {"layers": 1, "pieces": 1, "gnFallback": 0, "clampedBevel": 0}
+    assert r["stats"] == {"layers": 1, "pieces": 1}
 
 
 def test_combined_mode_one_body_per_layer(worker, fixtures, outdir):
@@ -287,30 +287,23 @@ def test_layer_transform_moves_art(worker, fixtures, outdir):
     assert centroid_x(outdir / "tr1.png") - centroid_x(outdir / "tr0.png") > 0.15 * PX
 
 
-def test_value_change_updates_material_in_place(worker, fixtures, outdir):
+def test_one_material_per_shape(worker, fixtures, outdir):
+    """PLAN §11: every shape object has its own single-Principled material 'BIS <layer name> / <element id>', and a
+    value-only change updates it in place (tests/blender/test_materials.py covers the graph in depth)."""
     fx = copy.deepcopy(fixtures["Spotify"])
-    lid = fx["project"]["layers"][0]["id"]
-    _render(worker, fx, outdir / "inplace0.png")
-    before = worker.result("scene_info")["materials"][f"BIS Mat {lid}"]
-    fx["project"]["layers"][0]["material"]["params"] = {"tint": 0.9, "frost": 0.3, "rim": 2.0}
+    L0 = fx["project"]["layers"][0]
+    r, _ = _render(worker, fx, outdir / "inplace0.png")
+    info = worker.result("scene_info")
+    shapes = [o for o in info["objects"] if o["type"] == "MESH" and o["name"] not in ("BIS Plate", "BIS Wallpaper")]
+    assert len({o["material"] for o in shapes}) == len(shapes) == r["stats"]["pieces"]
+    name = next(o["material"] for o in shapes if o["material"].startswith(f"BIS {L0['name']} / "))
+    before = info["materials"][name]
+    L0["material"]["params"] = {"tint": 0.9, "roughness": 0.3, "ior": 1.7}
     fx["project"]["lighting"] = {"angle": 30}
     _render(worker, fx, outdir / "inplace1.png")
-    after = worker.result("scene_info")["materials"][f"BIS Mat {lid}"]
+    after = worker.result("scene_info")["materials"][name]
     assert after["key"] == before["key"] and after["nodeIds"] == before["nodeIds"]   # same nodes, new values
-    fx["project"]["layers"][0]["material"] = {"preset": "chrome", "params": {}}
-    _render(worker, fx, outdir / "inplace2.png")
-    rebuilt = worker.result("scene_info")["materials"][f"BIS Mat {lid}"]
-    assert rebuilt["preset"] == "chrome" and rebuilt["key"] != before["key"]
-
-
-def test_eevee_refraction_roles(worker, fixtures, outdir):
-    """Only glass not covered by other glass uses raytraced refraction in EEVEE (D7)."""
-    fx = fixtures["Maps"]
-    _render(worker, fx, outdir / "roles.png")
-    mats = worker.result("scene_info")["materials"]
-    top = fx["project"]["layers"][-1]["id"]
-    assert mats[f"BIS Mat {top}"]["raytraceRefraction"] is True
-    assert any(m["role"] == "fake" for m in mats.values())
+    assert after["principled"]["IOR"] == pytest.approx(1.7)
 
 
 def test_raster_image_regions(worker, outdir):
@@ -473,7 +466,7 @@ def test_animation_odd_size_mp4_and_bad_args(worker, fixtures, outdir):
     assert ev["event"] == "error" and "appearance" in ev["error"]
 
 
-@pytest.mark.parametrize("kind", ["turntable", "float", "light-sweep", "explode"])
+@pytest.mark.parametrize("kind", ["turntable", "float", "light-sweep", "iso", "explode"])
 def test_animation_kinds_png(worker, fixtures, outdir, kind):
     fx = fixtures["Discord"]
     r = worker.result("animate", {"project": fx["project"], "geometryPath": fx["geometryPath"], "quality": "draft",
@@ -524,13 +517,13 @@ def test_no_vram_growth_over_20_renders(worker, fixtures, outdir):
         r, _ = _render(worker, fixtures[names[i % 4]], outdir / "vram.png", quality=q,
                        appearance=APPEARANCES[i % len(APPEARANCES)])
         if q == "preview":
-            peaks.append((names[i % 4], r["memPeakMB"]))
+            peaks.append(((names[i % 4], APPEARANCES[i % len(APPEARANCES)]), r["memPeakMB"]))
     time.sleep(1.0)
     after = wc.gpu_memory_used_mib()
     by_icon: dict = {}
     for n, mb in peaks:
         by_icon.setdefault(n, []).append(mb)
-    for n, mbs in by_icon.items():           # same scene -> same device memory, render after render
+    for n, mbs in by_icon.items():           # same scene (icon + rendition) -> same device memory, render after render
         assert max(mbs) - min(mbs) < 32, (n, mbs)
     info = worker.result("system_info")
     assert info["datablocks"]["objects"] < 60 and info["datablocks"]["images"] < 30
@@ -554,10 +547,10 @@ def _alpha_box(path: str, thr: int = 8):
 
 @pytest.mark.parametrize("name", ["Photos", "Maps"])
 def test_perspective_views_are_auto_framed(worker, fixtures, outdir, name):
-    """Tilted / exploded perspective views: never cropped, centred, filling ~84 % (8 % margin per side)."""
+    """Tilted perspective views: never cropped, centred, filling ~84 % (8 % margin per side)."""
     cams = {"tilt": {"view": "perspective", "tiltX": 20, "tiltY": -25, "fov": 30},
-            "explode3": {"view": "perspective", "tiltX": 20, "tiltY": -25, "fov": 30, "explode": 3.0},
-            "wide": {"view": "perspective", "tiltX": -12, "tiltY": 40, "fov": 60, "explode": 2.0}}
+            "steep": {"view": "perspective", "tiltX": 35, "tiltY": 30, "fov": 30},
+            "wide": {"view": "perspective", "tiltX": -12, "tiltY": 40, "fov": 60}}
     for key, cam in cams.items():
         out = outdir / f"framing_{name}_{key}.png"
         _render(worker, fixtures[name], out, camera=cam)
@@ -576,7 +569,7 @@ def test_front_framing_unchanged(worker, fixtures, outdir):
     assert abs(b["cx"] - 0.5) < 0.006 and abs(b["cy"] - 0.5) < 0.006, b
 
 
-@pytest.mark.parametrize("kind", ["explode", "turntable", "tilt"])
+@pytest.mark.parametrize("kind", ["iso", "turntable", "tilt"])
 def test_animation_frames_share_one_framing(worker, fixtures, outdir, kind):
     """Animations fit the union of all frames: no frame is cropped and the clip never zooms/jitters."""
     fx = fixtures["Photos"]
@@ -588,23 +581,6 @@ def test_animation_frames_share_one_framing(worker, fixtures, outdir, kind):
     assert max(b["ext"] for b in boxes) > 0.7          # the widest frame fills the frame (no tiny subject)
     cam = worker.result("scene_info")["objects"]
     assert any(o["name"] == "BIS Camera" for o in cam)
-
-
-def test_eevee_clear_plate_matches_cycles(worker, fixtures, outdir):
-    """Clear / tinted renditions: the EEVEE draft shades the frosted plate over the wallpaper like Cycles
-    (it used to render an opaque dark grey pane)."""
-    import numpy as np
-    for ap in ("clear-light", "clear-dark", "tinted-light"):
-        means = {}
-        for q in ("draft", "preview"):
-            out = outdir / f"clearplate_{ap}_{q}.png"
-            _render(worker, fixtures["Photos"], out, appearance=ap, quality=q)
-            a = np.asarray(_png(str(out)).convert("RGB")).astype(float)
-            h, w, _ = a.shape
-            patch = np.vstack([a[int(.40 * h):int(.60 * h), int(.10 * w):int(.16 * w)].reshape(-1, 3),
-                               a[int(.10 * h):int(.16 * h), int(.30 * w):int(.70 * w)].reshape(-1, 3)])
-            means[q] = patch.mean(axis=0)
-        assert np.abs(means["draft"] - means["preview"]).max() < 30, (ap, means)
 
 
 def test_raster_icons_render_fast(worker, outdir):

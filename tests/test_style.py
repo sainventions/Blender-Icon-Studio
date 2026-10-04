@@ -33,11 +33,13 @@ from bis.models import (  # noqa: E402
     StyleSpec,
     Tint,
 )
+from bis.materials import clean_params, param_schema  # noqa: E402
 from bis.style import (  # noqa: E402
     LookNotFound,
     StyleError,
     apply_style,
     clamp_bevel,
+    clean_style,
     deep_merge,
     extract_style,
     resolve_look,
@@ -109,6 +111,7 @@ def test_apply_style_rules():
     p = _project(3)
     p.canvas.plate.fill = FillSolid(color="#123456")
     p.appearances.dark.layers["l1"] = LayerOverride(material=MaterialSpec(preset="chrome"), opacity=0.5)
+    p.layers[0].elementMaterials = {"e0": MaterialSpec(preset="neon")}
     style = StyleSpec.model_validate({
         "layerDefaults": {"material": {"preset": "candy", "params": {"tint": 0.4}},
                           "depth": {"z": 9, "thickness": 0.11, "bevel": 0.05, "bevelSegments": 8, "inflate": 0.2},
@@ -116,7 +119,7 @@ def test_apply_style_rules():
         "zGap": 0.15,
         "plate": {"material": {"preset": "glossy_plastic"}, "thickness": 0.2, "bevel": 0.05},
         "lighting": {"preset": "dramatic", "angle": -30},
-        "camera": {"view": "perspective", "tiltX": 10},
+        "camera": {"view": "front", "iso": 0.4, "zoom": 1.1, "explode": 3.0},
         "colorMode": "agx",
         "tint": {"color": "#ff0000", "strength": 0.5},
     })
@@ -130,14 +133,18 @@ def test_apply_style_rules():
     assert out.layers[2].depth.bevel == 0.05                         # unknown radius → requested
     assert all(l.depth.thickness == 0.11 and l.depth.bevelSegments == 8 and l.depth.inflate == 0.2
                for l in out.layers)
-    assert all(l.shadow.kind == "chromatic" and l.shadow.opacity == 0.6 and l.mode == "combined"
+    # PLAN 11: only real shadows - the legacy art-directed 'chromatic' kind is applied as 'physical'
+    assert all(l.shadow.kind == "physical" and l.shadow.opacity == 0.6 and l.mode == "combined"
                for l in out.layers)
+    assert all(l.elementMaterials == {} for l in out.layers)          # the look shows on every shape too
+    assert p.layers[0].elementMaterials == {"e0": MaterialSpec(preset="neon")}
     assert out.canvas.plate.material.preset == "glossy_plastic"
     assert (out.canvas.plate.thickness, out.canvas.plate.bevel) == (0.2, 0.05)
     assert out.canvas.plate.fill == FillSolid(color="#123456")      # fill None → keep
     assert out.canvas.shape == "squircle"                            # shape None → keep
     assert out.lighting.preset == "dramatic" and out.lighting.angle == -30
-    assert out.camera.view == "perspective" and out.camera.tiltX == 10
+    assert out.camera.iso == 0.4 and out.camera.zoom == 1.1     # the CAD-style POV travels with the style...
+    assert out.camera.explode == 1.0                              # ...but layers are never spread (real distances)
     assert out.render.colorMode == "agx" and out.appearances.tint == Tint(color="#ff0000", strength=0.5)
     ov = out.appearances.dark.layers["l1"]
     assert ov.material is None and ov.opacity == 0.5                 # the look shows in every appearance
@@ -237,6 +244,61 @@ def test_extract_style_roundtrip():
     assert uniform.layerMaterials is None and uniform.zGap is None
 
 
+def test_clean_params_principled_schema():
+    """PLAN 11: params outside the shared Principled schema are dropped; the legacy params that always drove a
+    Principled input are renamed; wrong types are dropped and numbers clamped to the slider range."""
+    schema = param_schema(PRESETS)
+    assert len(schema) == 28 and schema["transmission"]["group"] == "Transmission"
+    legacy = {"frost": 0.12, "glow": 0.35, "rim": 1.0, "translucency": 0.75, "dispersion": 0.06, "absorption": 2.0,
+              "density": 8, "scatter": 4, "bloom": 0.6, "core": 0.25, "bands": 3, "filmMin": 250, "filmMax": 900,
+              "brush": "radial", "specular": "auto", "coat": 1.0, "sheen": 0.15, "subsurface": 1.0,
+              "anisotropy": 0.8, "film": 300, "filmIor": 1.6, "strength": 4.0, "tint": 0.5, "grain": 0.08}
+    assert clean_params(legacy, schema) == {
+        "tint": 0.5, "grain": 0.08, "roughness": 0.12, "coatWeight": 1.0, "sheenWeight": 0.15,
+        "subsurfaceWeight": 1.0, "anisotropic": 0.8, "thinFilmThickness": 300, "thinFilmIor": 1.6,
+        "emissionStrength": 4.0}
+    assert clean_params({"frost": 0.3, "roughness": 0.1}, schema) == {"roughness": 0.1}   # explicit value wins
+    assert clean_params({"ior": 0.5, "emissionStrength": 99, "metallic": True, "roughness": "0.2",
+                         "paintMode": "emission", "alpha": float("nan"), "__intent": "clear"}, schema) == {
+        "ior": 1.0, "emissionStrength": 30, "paintMode": "emission"}
+    assert clean_params({"paintMode": "glow"}, schema) == {}
+    assert clean_params({"frost": 0.2, "whatever": 1}, {}) == {"frost": 0.2, "whatever": 1}   # no schema: untouched
+    for mat in PRESETS["materials"].values():                     # every preset default is valid as an override
+        defaults = {k: v["default"] for k, v in mat["params"].items()}
+        assert clean_params(defaults, schema) == defaults
+
+
+def test_styles_entering_the_server_are_cleaned():
+    loader = {"src": _project(2)}.__getitem__
+    pasted = StyleSpec.model_validate({
+        "layerDefaults": {"material": {"preset": "liquid_glass", "params": {"frost": 0.1, "glow": 1.0, "tint": 0.3}},
+                          "shadow": {"kind": "neutral", "opacity": 0.4}},
+        "layerMaterials": [{"preset": "neon", "params": {"strength": 5, "bloom": 1}}],
+        "plate": {"material": {"preset": "satin", "params": {"sheen": 0.2, "translucency": 1}}},
+        "camera": {"iso": 0.3, "explode": 2.5},
+    })
+    s = resolve_style_request(StyleRequest(style=pasted), PRESETS, loader)
+    assert s.layerDefaults.material.params == {"tint": 0.3, "roughness": 0.1}
+    assert s.layerMaterials[0].params == {"emissionStrength": 5}
+    assert s.plate.material.params == {"sheenWeight": 0.2}
+    assert s.layerDefaults.shadow.kind == "physical" and s.camera.iso == 0.3 and s.camera.explode == 1.0
+    assert pasted.layerDefaults.material.params["glow"] == 1.0                  # the request itself is not mutated
+    for look_id in PRESETS["looks"]:                                             # looks are already clean
+        look = resolve_look(PRESETS, look_id)
+        assert clean_style(look.model_copy(deep=True), PRESETS) == look
+        assert look.layerDefaults.shadow.kind in ("physical", "none")
+
+
+def test_extract_style_ignores_per_shape_materials():
+    """Per-shape overrides belong to one icon's element ids - a copied style carries only layer materials."""
+    src = _project(2)
+    src.layers[1].material = MaterialSpec(preset="frosted_glass", params={"roughness": 0.3})
+    src.layers[1].elementMaterials = {"e1": MaterialSpec(preset="chrome")}
+    s = extract_style(src)
+    assert "elementMaterials" not in json.dumps(s.model_dump(mode="json")) and s.layerMaterials[1].preset == "frosted_glass"
+    assert s.layerDefaults.material in (MaterialSpec(), MaterialSpec(preset="frosted_glass", params={"roughness": 0.3}))
+
+
 def test_resolve_style_request_rules():
     loader = {"src": _project(2)}.__getitem__
     assert resolve_style_request(StyleRequest(look="clay"), PRESETS, loader).layerDefaults.material.preset == "matte_clay"
@@ -302,7 +364,8 @@ def test_style_endpoints_with_real_geometry(client):
     geo = c.get(f"/api/projects/{pid}/geometry").json()
     for l in p["layers"]:
         sr = geo["layers"][l["id"]]["safeRadius"]
-        assert l["depth"]["bevel"] <= 0.9 * sr + 1e-9 and l["depth"]["bevel"] == pytest.approx(min(0.055, 0.9 * sr), abs=1e-5)
+        want = PRESETS["looks"]["crystal"]["style"]["layerDefaults"]["depth"]["bevel"]
+        assert l["depth"]["bevel"] <= 0.9 * sr + 1e-9 and l["depth"]["bevel"] == pytest.approx(min(want, 0.9 * sr), abs=1e-5)
 
     # copy / paste: the style of Maps onto Find Device (by project id and as a pasted StyleSpec)
     r = c.post(f"/api/projects/{oid}/style", json={"fromProject": pid})

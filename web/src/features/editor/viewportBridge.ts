@@ -3,3 +3,5 @@
 export { Viewport, LightDial, DEFAULT_LIGHT_ANGLE, normalizeAngle } from '../../viewport'
 export type { ViewportProps, LightDialProps } from '../../viewport'
 export { resolveAppearance } from '../../lib/appearance'
+// World height of a layer's height-field bodies (the live mirror of blender_worker scene._body_height) — Re-stack.
+export { layerBodyHeight, layerScale } from '../../viewport/geometry/layerGeometry'

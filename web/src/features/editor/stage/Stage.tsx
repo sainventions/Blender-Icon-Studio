@@ -1,6 +1,6 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import {
-  Boxes,
+  Box,
   Columns2,
   Grid3x3,
   Image as ImageIcon,
@@ -10,6 +10,7 @@ import {
   Play,
   Plus,
   Rotate3d,
+  Square,
   TriangleAlert,
   X,
 } from 'lucide-react'
@@ -25,7 +26,7 @@ import { activeEntry, latestFor, useRender, type RenderEntry } from '../../../st
 import { useUi, type StageMode } from '../../../store/ui'
 import { Button, EmptyState, IconButton, Menu, Popover, ProgressRing, Segmented, Slider, SliderRow, useAnchor, type MenuItem } from '../../../components/ui'
 import { LightDial, normalizeAngle, Viewport } from '../viewportBridge'
-import { animateExplode } from '../actions'
+import { animateIso, setIso } from '../actions'
 import { RenderImage } from './RenderImage'
 import { IconGrid } from './IconGrid'
 import { MatrixView } from './MatrixView'
@@ -141,7 +142,7 @@ function LiveViewport({ stageElement }: { stageElement: () => HTMLElement | null
   const geometry = useEditor((s) => s.geometry)
   const selected = useEditor((s) => s.selection.primary)
   const presets = useAppStore((s) => s.presets.data)!
-  const explode = useUi((s) => s.explode)
+  const isoAnim = useUi((s) => s.isoAnim)
   const view = useUi((s) => s.view3d)
   const showGrid = useUi((s) => s.showGrid)
 
@@ -164,7 +165,7 @@ function LiveViewport({ stageElement }: { stageElement: () => HTMLElement | null
       selectedLayerId={selected}
       onSelectLayer={onSelect}
       onLayerTransform={onTransform}
-      explode={explode}
+      iso={isoAnim ?? project.camera.iso ?? 0}
       view={view}
       showGrid={showGrid}
       stageElement={stageElement}
@@ -450,7 +451,6 @@ const ZOOMS = [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4]
 
 function StageToolbar({ fit, dpr, native }: { fit: number; dpr: number; native: number | null }) {
   const mode = useUi((s) => s.stageMode)
-  const explode = useUi((s) => s.explode)
   const showGrid = useUi((s) => s.showGrid)
   const zoom = useUi((s) => s.zoom)
   const set = useUi((s) => s.set)
@@ -493,16 +493,11 @@ function StageToolbar({ fit, dpr, native }: { fit: number; dpr: number; native: 
           { value: 'matrix', icon: <LayoutGrid />, label: 'Matrix', tip: 'All six renditions + size waterfall', kbd: 'V' },
         ]}
       />
-      {/* Matrix shows finished renders: zoom, explode, grid and the light dial do nothing there. */}
+      {/* Matrix shows finished renders (always head-on): view angle, zoom, grid and the light dial do nothing there. */}
       {mode !== 'matrix' && (
         <>
           <Divider />
-          <div className="flex items-center gap-1.5 pl-0.5 pr-1" data-tip="Explode the layer stack" data-tip-kbd="X">
-            <IconButton label="Explode" kbd="X" size="sm" active={explode > 0.01} onClick={() => animateExplode()}>
-              <Boxes />
-            </IconButton>
-            <Slider value={explode} min={0} max={1} step={0.01} onChange={(v) => set({ explode: v })} className="w-20" ariaLabel="Explode" />
-          </div>
+          <ViewAngleControl />
           <Divider />
           <IconButton label="Icon grid" kbd="G" active={showGrid} onClick={() => set({ showGrid: !showGrid })}>
             <Grid3x3 />
@@ -537,6 +532,34 @@ function StageToolbar({ fit, dpr, native }: { fit: number; dpr: number; native: 
         width={176}
         items={zoomItems}
       />
+    </div>
+  )
+}
+
+/**
+ * View angle (PLAN §11 View): a CAD-style POV between head-on and isometric with the REAL layer distances — bound to
+ * project.camera.iso, so the live view and every Blender render use the same camera. Front / Iso swing there.
+ */
+function ViewAngleControl() {
+  const projectIso = useEditor((s) => s.project!.camera.iso ?? 0)
+  const perspective = useEditor((s) => s.project!.camera.view === 'perspective')
+  const isoAnim = useUi((s) => s.isoAnim)
+  const iso = isoAnim ?? projectIso
+  return (
+    <div
+      className={cn('flex items-center gap-1 px-0.5', perspective && 'opacity-60')}
+      data-testid="view-angle"
+      data-tip={perspective ? 'The render camera is in perspective — moving this switches it back to the CAD view' : undefined}
+    >
+      <IconButton label="Front view (head-on)" kbd="I" size="sm" active={iso < 0.005 && !perspective} onClick={() => animateIso(0)}>
+        <Square />
+      </IconButton>
+      <div className="flex items-center" data-tip="View angle: head-on ↔ isometric (real layer distances, like a CAD view)" data-tip-kbd="I">
+        <Slider value={iso} min={0} max={1} step={0.01} defaultValue={0} onChange={(v) => setIso(v)} className="w-20" ariaLabel="View angle" />
+      </div>
+      <IconButton label="Isometric view" kbd="I" size="sm" active={iso > 0.995 && !perspective} onClick={() => animateIso(1)}>
+        <Box />
+      </IconButton>
     </div>
   )
 }

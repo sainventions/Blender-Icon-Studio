@@ -92,19 +92,41 @@ export function setPlatform(platform: Platform) {
   )
 }
 
-let explodeRaf = 0
-/** Animate the UI explode amount toward a target (X toggles 0 ↔ 1). */
-export function animateExplode(target?: number) {
-  const from = useUi.getState().explode
+let isoRaf = 0
+
+/** The CAD-style view angle shown right now: the animation's value while one runs, else project.camera.iso. */
+export function currentIso(): number {
+  const anim = useUi.getState().isoAnim
+  return anim ?? useEditor.getState().project?.camera.iso ?? 0
+}
+
+/** Set project.camera.iso (0 = head-on … 1 = isometric, real layer distances — PLAN §11 View). The CAD view is
+ *  orthographic, so a perspective camera switches back to the front projection. One undo step per gesture. */
+export function setIso(iso: number) {
+  const v = Math.round(Math.min(1, Math.max(0, iso)) * 1000) / 1000
+  cancelAnimationFrame(isoRaf)
+  if (useUi.getState().isoAnim !== null) useUi.setState({ isoAnim: null })
+  useEditor.getState().commit(
+    (p) => (p.camera.iso === v && p.camera.view === 'front' ? p : { ...p, camera: { ...p.camera, iso: v, view: 'front' } }),
+    { coalesce: 'camera.iso' },
+  )
+}
+
+/** Swing the view to `target` (default: toggle head-on ↔ isometric) — animated in the live view, committed once. */
+export function animateIso(target?: number) {
+  const from = currentIso()
   const to = target ?? (from > 0.5 ? 0 : 1)
-  cancelAnimationFrame(explodeRaf)
+  cancelAnimationFrame(isoRaf)
+  if (Math.abs(to - from) < 1e-4) return setIso(to)
   const t0 = performance.now()
-  const dur = 520
+  const dur = 560
   const step = (t: number) => {
     const k = Math.min(1, (t - t0) / dur)
     const e = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2
-    useUi.setState({ explode: from + (to - from) * e })
-    if (k < 1) explodeRaf = requestAnimationFrame(step)
+    if (k < 1) {
+      useUi.setState({ isoAnim: from + (to - from) * e })
+      isoRaf = requestAnimationFrame(step)
+    } else setIso(to)
   }
-  explodeRaf = requestAnimationFrame(step)
+  isoRaf = requestAnimationFrame(step)
 }
