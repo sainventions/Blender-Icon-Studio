@@ -62,3 +62,26 @@ def import_icon(tmp_path):
         return res, make_project(res, project_id=f"p{counter['n']}", name=Path(name).stem), pdir
 
     return _do
+
+
+def assert_rule_stack(project, bundle, gap=None, tol: float = 2e-4, presets=None):
+    """The layers of `project` (Project or its JSON) form the overlap-aware real-height stack (PLAN §11 round 8)
+    for the geometry `bundle` (GeometryBundle or its JSON - footprints, regions and maxRadius measured from the
+    exported splines, independently of the element store the server stacked with): re-stacking with gap `gap`
+    (None = the presets' stackGap) reproduces every z, the stack is recognised as a rule stack, and no two layers
+    whose footprints touch have overlapping z ranges. Returns the shapes."""
+    from bis import stacking
+    from bis.models import Project
+
+    proj = project if isinstance(project, Project) else Project.model_validate(project)
+    art = proj.canvas.art
+    shapes = stacking.shapes_from_bundle(bundle, proj.layers, art.scale)
+    want = stacking.geometry_rules(presets)["stackGap"] if gap is None else gap
+    copy = [L.model_copy(deep=True) for L in proj.layers]
+    zs = stacking.restack(copy, shapes, gap=want, art_scale=art.scale, art_offset=art, presets=presets)
+    got = [L.depth.z for L in proj.layers]
+    assert got == pytest.approx(zs, abs=tol), (proj.name, got, zs)
+    if proj.layers:
+        assert stacking.stack_gap(proj.layers, shapes, art_scale=art.scale, art_offset=art, presets=presets) is not None
+    assert stacking.interpenetrations(proj.layers, shapes, art_scale=art.scale, art_offset=art) == [], proj.name
+    return shapes

@@ -383,9 +383,10 @@ class StyleSpec(_Model):
     """A transferable look. Applying it to a project (see bis.style.apply_style):
     - every layer gets layerDefaults (material/depth/shadow/mode) — or layerMaterials[i] by index from the bottom
       (clamped to the last entry) when given; bevel is clamped to thickness/2;
-    - layers are re-stacked at their REAL heights (shared/presets.json "geometry"): z0 = stackLift,
-      z(i+1) = z(i) + H(i) + gap, H = thickness + 2 x inflate x maxRadius x art/layer scale, gap = zGap
-      (None = the presets' stackGap);
+    - layers are re-stacked at their REAL heights, overlap-aware (shared/presets.json "geometry", PLAN 11 round 8):
+      a layer stacks only above the lower layers it overlaps in XY, z(i) = max(stackLift, max over overlapped
+      lower j of z(j) + H(j) + gap), H = max(thickness + 2 x inflate x maxRadius x art/layer scale, in-layer
+      stacked height), gap = zGap (None = the presets' stackGap); raster image layers stay flat cards;
     - plate material/thickness/bevel (+ fill/shape when not None), lighting, camera (when given),
       render.colorMode (when given) and appearances.tint (when given) are copied."""
     layerDefaults: StyleLayerDefaults = StyleLayerDefaults()

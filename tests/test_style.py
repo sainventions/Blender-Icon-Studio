@@ -95,7 +95,7 @@ def test_resolve_look_merges_over_defaults_and_rejects_unknown():
     style = resolve_look(PRESETS, "crystal")
     assert style.layerDefaults.material.preset == "clear_glass"
     assert style.layerDefaults.material.params == {"tint": 0.35}
-    assert style.zGap == 0.15 and style.lighting.preset == "darkfield"
+    assert style.zGap == 0.05 and style.lighting.preset == "darkfield"   # round 8: a clearance, not a z step
     assert style.plate.fill is None and style.camera is None          # not in the look → keep the icon's own
     neon = resolve_look(PRESETS, "neon")
     assert neon.plate.fill is not None and neon.plate.fill.type == "system-dark"
@@ -245,6 +245,85 @@ def test_real_height_stack_formula():
     assert out.layers[1].depth.z == pytest.approx(0.01 + hb)
     assert stacking.geometry_rules({}) == {"stackLift": 0.0, "stackGap": 0.03}     # defaults without a section
     assert stacking.geometry_rules(PRESETS) == {"stackLift": LIFT, "stackGap": GAP}
+
+
+def test_liquid_glass_look_matches_the_import_defaults():
+    """N6 (PLAN 11 round 8): the Liquid Glass look is the import default body - thickness 0.16, bevel 0.08,
+    inflate 0.25, gap = stackGap - and every look's gap is null (stackGap) or a small clearance <= 0.05."""
+    from bis.svg.layers import DEFAULT_BEVEL, DEFAULT_INFLATE, DEFAULT_SEGMENTS, DEFAULT_THICKNESS
+
+    lg = resolve_look(PRESETS, "liquid-glass")
+    d = lg.layerDefaults.depth
+    assert (d.thickness, d.bevel, d.inflate, d.bevelSegments) == (DEFAULT_THICKNESS, DEFAULT_BEVEL, DEFAULT_INFLATE,
+                                                                  DEFAULT_SEGMENTS)
+    assert lg.zGap is None and lg.layerDefaults.material.preset == "liquid_glass"
+    assert lg.layerDefaults.shadow.kind == "physical"
+    for look in PRESETS["looks"]:
+        st = resolve_look(PRESETS, look)
+        assert st.zGap is None or 0.0 < st.zGap <= 0.05, look
+        assert st.layerDefaults.depth.bevel <= st.layerDefaults.depth.thickness / 2, look
+
+
+def _img_project() -> Project:
+    """Two vector layers and a raster image layer on top."""
+    p = _project(3)
+    p.elements = [Element(id="e0", name="e0", paint=FillSolid(), bbox=(-0.5, -0.5, 0.5, 0.5), area=0.25),
+                  Element(id="e1", name="e1", paint=FillSolid(), bbox=(-0.2, -0.2, 0.2, 0.2), area=0.04),
+                  Element(id="e2", name="e2", kind="image", role="image", paint=FillSolid(),
+                          bbox=(-0.6, -0.6, 0.6, 0.6), area=0.36)]
+    return p
+
+
+def test_looks_keep_raster_layers_flat_cards():
+    """Round 8: raster image layers are flat cards under every look - no dome, at most 0.02 thick, a small round
+    edge - while vector layers take the look's depth; Copy style never takes its depth from a card."""
+    p = _img_project()
+    for look in PRESETS["looks"]:
+        st = resolve_look(PRESETS, look)
+        out = apply_style(p, st, {"l0": 0.5, "l1": 0.2, "l2": 0.5}, presets=PRESETS)
+        card = out.layers[2].depth
+        assert card.inflate == 0.0 and card.thickness <= stacking.IMAGE_CARD["thickness"], look
+        assert card.bevel <= min(stacking.IMAGE_CARD["bevel"], card.thickness / 2), look
+        want = st.layerDefaults.depth
+        assert (out.layers[0].depth.thickness, out.layers[0].depth.inflate) == (want.thickness, want.inflate), look
+        assert out.layers[2].material == out.layers[0].material                  # the look's material still applies
+    q = apply_style(p, resolve_look(PRESETS, "clay"), {"l0": 0.5, "l1": 0.2, "l2": 0.5}, presets=PRESETS)
+    assert extract_style(q).layerDefaults.depth.inflate == 0.3                    # not the card's 0
+
+
+def test_apply_style_stacks_overlap_aware():
+    """Round 8: with footprints (bis.stacking.LayerShape) a look stacks a layer only above the lower layers it
+    overlaps; Copy style's zGap is the clearance of the stacked layers (None when nothing sits on anything)."""
+    from shapely.geometry import box
+
+    p = _project(3)
+    shapes = {"l0": stacking.LayerShape(0.2, box(-0.8, -0.2, -0.4, 0.2)),     # left
+              "l1": stacking.LayerShape(0.2, box(0.4, -0.2, 0.8, 0.2)),       # right: apart from the left
+              "l2": stacking.LayerShape(0.1, box(-0.7, -0.1, -0.5, 0.1))}     # on the left one
+    style = StyleSpec.model_validate({"layerDefaults": {"depth": {"thickness": 0.16, "bevel": 0.08, "inflate": 0.25}},
+                                      "zGap": None})
+    out = apply_style(p, style, shapes, presets=PRESETS)
+    h0 = 0.16 + 2 * 0.25 * 0.2
+    assert [l.depth.z for l in out.layers] == pytest.approx([LIFT, LIFT, LIFT + h0 + GAP])
+    assert stacking.stack_gap(out.layers, shapes, presets=PRESETS) == pytest.approx(GAP)
+    assert extract_style(out, max_radii=shapes).zGap == pytest.approx(GAP)
+    out2 = apply_style(p, style.model_copy(update={"zGap": 0.05}), shapes, presets=PRESETS)
+    assert out2.layers[2].depth.z == pytest.approx(LIFT + h0 + 0.05)
+    assert extract_style(out2, max_radii=shapes).zGap == pytest.approx(0.05)
+    side = {**shapes, "l2": stacking.LayerShape(0.1, box(-0.1, 0.5, 0.1, 0.7))}   # nothing overlaps
+    out3 = apply_style(p, style, side, presets=PRESETS)
+    assert [l.depth.z for l in out3.layers] == [LIFT] * 3
+    assert extract_style(out3, max_radii=side).zGap is None
+    # bare radii (footprint unknown) keep the sequential stack - never lower
+    seq = apply_style(p, style, {"l0": 0.2, "l1": 0.2, "l2": 0.1}, presets=PRESETS)
+    assert [l.depth.z for l in seq.layers] == pytest.approx([LIFT, LIFT + h0 + GAP, LIFT + 2 * (h0 + GAP)])
+    # shapes for only some layers (a bundle without one of them): the others take the bbox bound (footprint
+    # unknown: they stack on every lower layer) - LayerShapes are kept as they are, never float()-ed
+    part = {"l0": shapes["l0"], "l1": shapes["l1"]}
+    out4 = apply_style(p, style, part, presets=PRESETS)
+    assert [l.depth.z for l in out4.layers][:2] == [LIFT, LIFT]
+    assert out4.layers[2].depth.z >= LIFT + h0 + GAP - 1e-9
+    assert extract_style(out4, max_radii=part).zGap is not None
 
 
 # ---------------------------------------------------------------------------------------------- extract
@@ -488,14 +567,12 @@ def test_looks_and_copied_styles_keep_tiling_combined_layers(client):
 
 
 def _assert_real_stack(project: dict, geo: dict, gap, tol: float = 2e-4) -> None:
-    """The layers form the real-height stack (PLAN 11 round 7) for the bundle's max radii: z0 = stackLift and
-    z(i+1) - (z(i) + H(i)) == gap (None = the presets' stackGap) - neighbouring bodies never interpenetrate."""
-    proj = Project.model_validate(project)
-    radii = {lid: lg["maxRadius"] for lid, lg in geo["layers"].items()}
-    assert proj.layers[0].depth.z == pytest.approx(LIFT, abs=tol)
-    want = GAP if gap is None else gap
-    gaps = stacking.stack_gaps(proj.layers, radii, proj.canvas.art.scale)
-    assert gaps == pytest.approx([want] * len(gaps), abs=tol), (proj.name, gaps)
+    """The layers form the overlap-aware real-height stack (PLAN 11 rounds 7 + 8) for the bundle's geometry
+    (footprints + max radii): z = max(stackLift, max over overlapped lower layers of z + H + gap) with gap = `gap`
+    (None = the presets' stackGap), and no two touching layers have overlapping z ranges."""
+    from conftest import assert_rule_stack
+
+    assert_rule_stack(project, geo, gap, tol, presets=PRESETS)
 
 
 @pytest.mark.skipif(not _real_svg(), reason="bis.svg not importable")
@@ -515,8 +592,13 @@ def test_every_look_stacks_without_interpenetration(client, sample):
         geo = c.get(f"/api/projects/{src['id']}/geometry").json()
         _assert_real_stack(p, geo, PRESETS["looks"][look]["style"].get("zGap", StyleSpec().zGap))
         depth = PRESETS["looks"][look]["style"]["layerDefaults"]["depth"]
-        assert all(l["depth"]["bevel"] == pytest.approx(min(depth["bevel"], depth["thickness"] / 2), abs=1e-5)
-                   for l in p["layers"]), look
+        kinds = {e["id"]: e["kind"] for e in p["elements"]}
+        for l in p["layers"]:
+            if all(kinds.get(i) == "image" for i in l["elementIds"]):    # round 8: rasters stay flat cards
+                assert l["depth"]["inflate"] == 0.0 and l["depth"]["thickness"] <= 0.02, look
+            else:
+                assert l["depth"]["bevel"] == pytest.approx(min(depth["bevel"], depth["thickness"] / 2), abs=1e-5)
+                assert l["depth"]["inflate"] == depth["inflate"], look
 
 
 @pytest.mark.skipif(not _real_svg(), reason="bis.svg not importable")

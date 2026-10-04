@@ -19,6 +19,7 @@ import {
 } from './principled.ts'
 import {
   bevelLimit,
+  interpenetrations,
   DEFAULT_STACK_RULES,
   keepStack,
   restack,
@@ -191,9 +192,38 @@ test('Re-stack: z0 = stackLift, z(i+1) = z(i) + H(i) + stackGap; locked layers k
   // the Depth section's Re-stack button uses the shared rule with the bundle's maxRadius (features/editor/stacking.ts)
   const inspector = read('src/features/editor/inspector/LayerInspector.tsx')
   assert.match(inspector, /restackProject\(p, geometry, presets\)/)
-  const stacking = read('src/features/editor/stacking.ts')
-  assert.match(stacking, /ruleHeight\(l, lg\?\.maxRadius, S\)/)
-  assert.match(stacking, /layerScale\(p\.canvas\.art\.scale, l\.transform\.scale\)/)
+  // (round 8: the model lives in stackModel.ts — overlap-aware, footprints from the bundle; stacking.test.mjs runs it
+  // against the server)
+  const model = read('src/features/editor/stackModel.ts')
+  assert.match(model, /ruleHeight\(l, lg\?\.maxRadius, S\)/)
+  assert.match(model, /layerScale\(p\.canvas\.art\.scale, l\.transform\.scale\)/)
+  assert.match(model, /restack\(p\.layers, bodyHeights\(p, geometry\), rules, rules\.stackGap, lowerLists\(p, geometry, rules\.stackGap\)\)/)
+})
+
+test('overlap-aware Re-stack (round 8): layers side by side share the base; a layer stacks above the ones it overlaps', () => {
+  const H = () => 0.2
+  const mk = (n) => Array.from({ length: n }, (_, i) => layer({ id: `L${i}`, depth: { ...layer().depth, z: 0.5 } }))
+  // L1 beside L0 (no overlap), L2 on both, L3 only on L1
+  const lower = [[], [], [0, 1], [1]]
+  const out = restack(mk(4), H, DEFAULT_STACK_RULES, 0.03, lower)
+  assert.deepEqual(out.map((l) => l.depth.z), [0, 0, 0.23, 0.23])
+  assert.equal(stackGapOf(out, H, DEFAULT_STACK_RULES, lower), 0.03, 'recognised as a rule stack')
+  assert.equal(stackGapOf(out, H, DEFAULT_STACK_RULES), null, 'not a sequential stack')
+  // a layer over a LOCKED one clears it where it sits
+  const locked = mk(2).map((l, i) => (i ? l : { ...l, locked: true }))
+  assert.deepEqual(restack(locked, H, DEFAULT_STACK_RULES, 0.03, [[], [0]]).map((l) => l.depth.z), [0.5, 0.73])
+  // keepStack: a thicker L1 lifts only L2 / L3 (which overlap it); L0 stays on the base
+  const thick = out.map((l, i) => (i === 1 ? { ...l, depth: { ...l.depth, thickness: 0.3 } } : l))
+  const Ht = (l) => (l.id === 'L1' ? 0.4 : 0.2)
+  assert.deepEqual(keepStack(out, thick, H, Ht, DEFAULT_STACK_RULES, lower, lower).map((l) => l.depth.z), [0, 0, 0.43, 0.43])
+  // moving a layer in XY can change what it overlaps: an XY move counts as a stack edit
+  const moved = out.map((l, i) => (i === 3 ? { ...l, transform: { ...l.transform, x: 0.4 } } : l))
+  assert.equal(stackAffected(out, moved, 1, 1), true)
+  assert.equal(stackAffected(out, out, { scale: 1, x: 0, y: 0 }, { scale: 1, x: 0.1, y: 0 }), true, 'art offset')
+  // collisions: z ranges overlapping by more than Z_TOL between touching layers
+  const flat = mk(3).map((l) => ({ ...l, depth: { ...l.depth, z: 0 } }))
+  assert.deepEqual(interpenetrations(flat, H, [[], [0], []]).map(([j, i]) => [j, i]), [[0, 1]])
+  assert.deepEqual(interpenetrations(out, H, lower), [])
 })
 
 test('a recognised real-height stack is kept across edits (server stack_gap); custom stacks are left alone', () => {

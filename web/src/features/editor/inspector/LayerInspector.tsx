@@ -7,6 +7,7 @@ import {
   Eye,
   EyeOff,
   Gem,
+  ImageIcon,
   Layers,
   Lock,
   LockOpen,
@@ -16,6 +17,7 @@ import {
   RotateCcw,
   Shapes,
   SunDim,
+  TriangleAlert,
 } from 'lucide-react'
 import type { BlendMode, Fill, Layer, LayerOverride, MaterialSpec, Presets, Project } from '../../../types'
 import { projectsApi } from '../../../api'
@@ -32,7 +34,8 @@ import { MaterialGallery, MaterialSwatch } from './MaterialGallery'
 import { PrincipledEditor, type MaterialEditKeys } from './PrincipledEditor'
 import { overriddenElements, updateElementMaterials } from './principled'
 import { bevelLimit, roundnessOf, withRoundness, withThickness } from './depth'
-import { restackProject } from '../stacking'
+import { collisionText, restackProject, useStackStatus } from '../stacking'
+import { rimBevel } from '../viewportBridge'
 import { OverrideRows, ScopePicker, useScope } from './scope'
 
 const BLEND_MODES: { value: BlendMode; label: string }[] = [
@@ -286,15 +289,26 @@ export function LayerInspector() {
           icon={<Box />}
           right={
             <IconButton
-              label="Re-stack all layers bottom → top at their real heights (thickness + inflated dome), no bodies overlapping"
+              label="Re-stack: every layer at its real height (thickness + inflated dome), one gap above the layers it overlaps; side-by-side layers share the base"
               size="xs"
-              // the shared rule (presets.json "geometry"): z0 = stackLift, z(i+1) = z(i) + H(i) + stackGap
+              disabled={!geometry}
+              // the shared overlap-aware rule (presets.json "geometry", server bis.stacking): z = stackLift, or stackGap
+              // above the highest lower layer whose footprint it overlaps
               onClick={() => commit((p) => restackProject(p, geometry, presets), { coalesce: 'restack' })}
             >
               <AlignVerticalSpaceAround />
             </IconButton>
           }
         >
+          <StackHint />
+          {isImageLayer(project, primary) && (
+            <div className="flex items-start gap-1.5 rounded-md border border-line bg-surface-0/50 px-2 py-1.5 text-3xs leading-snug text-fg-3">
+              <ImageIcon className="mt-px h-3 w-3 shrink-0 text-fg-4" />
+              <span className="min-w-0 flex-1">
+                Raster image: a flat card (imported thin, no dome; looks keep it flat). Inflate still works if you want a pillow.
+              </span>
+            </div>
+          )}
           <SliderRow
             label="Z position"
             hint="Height of the layer's back face above the plate (art units). The camera's View control shows the real distances."
@@ -317,7 +331,7 @@ export function LayerInspector() {
           />
           <SliderRow
             label="Roundness"
-            hint="Round-edge radius as a share of half the thickness. 100 % = a full pill edge; thinner parts and tips taper on their own. Add Inflate for a lens or sphere."
+            hint="Round-edge radius as a share of half the thickness. 100 % = a near-pill edge (a thin wall stays); parts thinner than the edge become round tubes and tips taper on their own. Add Inflate for a lens or sphere."
             value={roundnessOf(primary)}
             min={0}
             max={1}
@@ -348,8 +362,14 @@ export function LayerInspector() {
             defaultValue={6}
             onChange={(v) => editBase('depth.bevelSegments', (l) => ({ ...l, depth: { ...l.depth, bevelSegments: Math.round(v) } }))}
           />
-          <p className="pl-[92px] text-3xs tabular text-fg-4">
-            Edge radius {formatNumber(primary.depth.bevel, 3)} · max {formatNumber(bevelLimit(primary), 3)}
+          <p
+            className="pl-[92px] text-3xs tabular text-fg-4"
+            title="The body keeps a vertical wall of at least 15 % of the half thickness, so the edge renders a little smaller than asked at high Roundness."
+          >
+            Edge radius {formatNumber(primary.depth.bevel, 3)}
+            {rimBevel(primary.depth.thickness, primary.depth.bevel) < primary.depth.bevel - 1e-9 &&
+              ` → ${formatNumber(rimBevel(primary.depth.thickness, primary.depth.bevel), 3)}`}{' '}
+            · max {formatNumber(bevelLimit(primary), 3)}
           </p>
           <Row label="Bodies" hint="Individual: every shape is its own body (and may have its own material). Combined: one body around the union.">
             <Segmented
@@ -402,6 +422,49 @@ export function LayerInspector() {
           <ElementList layer={primary} presets={presets} />
         </Section>
       </div>
+    </div>
+  )
+}
+
+/** Every element of the layer is a raster image (server stacking.is_image_layer): imported as a flat card (PLAN §11 r8). */
+function isImageLayer(project: Project, layer: Layer): boolean {
+  if (!layer.elementIds.length) return false
+  const kinds = new Map(project.elements.map((e) => [e.id, e.kind]))
+  return layer.elementIds.every((id) => kinds.get(id) === 'image')
+}
+
+/** Re-stack hint of a HAND-PLACED stack whose bodies cut into each other (QA N5: a recognised stack re-stacks itself on
+ *  every edit; a hand-placed one is left as placed, so say so and offer the fix). */
+function StackHint() {
+  const status = useStackStatus()
+  const project = useEditor((s) => s.project)
+  const geometry = useEditor((s) => s.geometry)
+  const commit = useEditor((s) => s.commit)
+  const presets = useAppStore((s) => s.presets.data)
+  if (!status || !project || !status.collisions.length) return null
+  return (
+    <div
+      role="alert"
+      data-testid="stack-collision-hint"
+      className="flex items-start gap-2 rounded-md border border-warn/25 bg-warn/[0.07] px-2 py-1.5 text-3xs leading-snug text-warn"
+    >
+      <TriangleAlert className="mt-px h-3 w-3 shrink-0" />
+      <span className="min-w-0 flex-1">
+        {collisionText(
+          status,
+          project.layers.map((l) => l.name),
+        )}
+        . Hand-placed layers don’t move by themselves.
+      </span>
+      <Button
+        size="xs"
+        variant="secondary"
+        icon={<AlignVerticalSpaceAround />}
+        tipLabel="Every layer at its real height, one gap above the layers it overlaps"
+        onClick={() => commit((p) => restackProject(p, geometry, presets), { coalesce: 'restack' })}
+      >
+        Re-stack
+      </Button>
     </div>
   )
 }

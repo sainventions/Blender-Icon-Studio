@@ -9,8 +9,8 @@ every platform.
 
 <img src="docs/img/hero-grid.png" width="860" alt="Twelve real app icons from the sample corpus rendered as layered glass icons by Cycles + OptiX">
 
-<sub>Twelve icons from the 68-icon sample corpus, imported as-is with the import defaults (Liquid Glass, a full
-round edge and a Poisson dome) and rendered by Cycles + OptiX (preview tier, 256 px each).</sub>
+<sub>Twelve icons from the 68-icon sample corpus, imported as-is with the import defaults (Liquid Glass, a round
+edge and a Poisson dome) and rendered by Cycles + OptiX (preview tier, 256 px each).</sub>
 
 [Quick start](#quick-start) · [Tour](#a-tour-of-the-app) · [Materials](#materials-one-principled-bsdf-per-shape) ·
 [3D bodies](#3d-bodies) · [Features](#features) · [GPU notes](#gpu-and-optix-notes) · [Architecture](#architecture) ·
@@ -21,10 +21,11 @@ round edge and a Poisson dome) and rendered by Cycles + OptiX (preview tier, 256
 ---
 
 Blender Icon Studio works like Apple's Icon Composer, with Blender doing the rendering. Drop in an SVG and the
-app splits it into depth layers. Every shape becomes a watertight 3D body with a round edge and a domed top, the
-layers stack at their real heights, and every shape gets its own material: **one Principled BSDF, nothing
-faked**. Cycles does the physics: refraction, reflections, real shadows and light passing through glass. A three.js view updates
-instantly, EEVEE renders a draft in a fraction of a second, and Cycles with OptiX renders the physical result.
+app splits it into depth layers. Every shape becomes a watertight 3D body with a round edge and a domed top,
+layers that overlap stack at their real heights (layers side by side share the base), and every shape gets its
+own material: **one Principled BSDF, nothing faked**. Cycles does the physics: refraction, reflections, real
+shadows and light passing through glass. A three.js view updates instantly, EEVEE renders a draft in a fraction of
+a second, and Cycles with OptiX renders the physical result.
 One click exports a ready-to-ship icon set for iOS, macOS, watchOS, Android, Windows and the web.
 
 The goal is a convincing 3D object, not a pixel-exact copy of the SVG: clear glass shows what lies beneath it,
@@ -73,8 +74,11 @@ version and the OptiX GPU.
 
 - **Layers** on the left: drag to reorder, merge, split, move elements between layers, hide and lock. Expand a
   layer to see its shapes; click a shape to give it its own material. The *Canvas & plate* row holds the plate
-  (the detected source plate becomes a parametric squircle, circle or rounded rectangle).
-- **Stage** in the middle, with four views and a view-angle control (Front · slider · Iso):
+  (the detected source plate becomes a parametric squircle, circle or rounded rectangle). When hand-placed layers
+  cut into each other, an amber **Collide · Re-stack** badge appears in the header; one click re-stacks them.
+- **Stage** in the middle, with four views and a view-angle control (Front · slider · Iso). Navigation is
+  CAD-style: the wheel zooms at the cursor, middle-drag (or <kbd>Space</kbd>+drag) pans, <kbd>X</kbd> swings
+  between top-down and isometric, and <kbd>0</kbd> fits the view again. Live, Render and Compare share one view.
   - **Live** — an instant three.js preview that mirrors the Blender scene: the same height-field bodies, one
     physical material per shape mapped input by input from its Principled values, the same lighting, camera
     and colour mode.
@@ -86,7 +90,8 @@ version and the OptiX GPU.
 - **Inspector** on the right:
   - *Layer* — **Material** (preset picker + the Principled BSDF inputs, see [Materials](#materials-one-principled-bsdf-per-shape)),
     **Colour** (fill overrides with a gradient editor, opacity, blend mode — used by the `.icon` export only),
-    **Depth** (Z position, thickness, roundness, inflate, segments, individual / combined bodies, re-stack),
+    **Depth** (Z position, thickness, roundness, inflate, segments, individual / combined bodies, re-stack, and a
+    warning with a **Re-stack** button when hand-placed layers collide; image layers are marked as flat cards),
     position & scale, **Shadow** (Physical / None), the layer's **Shapes** and per-appearance overrides.
   - *Document* — platform, plate (shape, fill and its own Principled material), lighting, camera (view angle,
     orthographic / perspective), colour mode and render settings.
@@ -94,26 +99,32 @@ version and the OptiX GPU.
 
 The shot above is the *Contacts* sample in Clear Glass (Roughness 0, IOR 1.6, Transmission 1) at view angle 0.45
 with the light at +45°: the head is a glass sphere, the body a domed glass pebble (Inflate 0.5), and the orange
-plate refracts through both. Both rest on the plate: their Z is set by hand, and edits leave a hand-placed Z alone.
+plate refracts through both. Head and body don't overlap, so both rest on the plate.
 
 ### CAD view — head-on to isometric
 
-<img src="docs/img/ui-iso.png" width="100%" alt="Earth's four layers stacked at their real heights in the live view at view angle 0.7, with the Depth inspector">
+<img src="docs/img/ui-iso.png" width="100%" alt="Earth's four layers in the live view at view angle 0.7: Blue 2 and Blue 3 share one level above Blue; the Depth inspector shows Blue 3 at Z 0.338">
 
 Press <kbd>X</kbd> (or click **Front** / **Iso**, or drag the view-angle slider in the stage toolbar) to turn the
-orthographic camera from head-on toward a true isometric view (pitch 35.264°, yaw 45°), like a CAD program.
+orthographic camera from head-on toward a true isometric view (pitch 35.264°, yaw 45°), like a CAD program; the
+swing is one undo step. Roll the wheel to zoom at the cursor and drag with the middle button to pan; neither
+changes the render framing, and <kbd>0</kbd>, <kbd>Home</kbd> or a double middle-click fits the view again.
 Nothing is spread apart: the layers sit at their **real** Z positions, so the depth you see is the depth you
 render. The live view and every Blender render share the same camera (`camera.iso`, 0 – 1) and its auto-framing;
 the Matrix renditions and the export masters stay head-on. **Animate → Iso sweep** renders head-on → isometric →
 head-on. The key, rim and fill lights and the studio environment turn with the camera (`lighting.angle` is
 relative to the view), so an iso, perspective or animated view is lit like the head-on one instead of catching a
 mirror glare on every flat top. The shot shows *Earth* as imported: four Liquid Glass layers stacked by their real
-heights (see *Real-height stacking* under [3D bodies](#3d-bodies)); the Depth inspector shows Blue 2 at Z 0.338.
+heights, overlap-aware (see *Overlap-aware stacking* under [3D bodies](#3d-bodies)). Blue 2 and Blue 3 both lie on
+Blue but not on each other, so they share one level (the Depth inspector shows Blue 3 at Z 0.338, the same as
+Blue 2), and Light Blue & White sits above them. The edge-radius read-out (`0.08 → 0.068`) shows the radius the
+body really gets once the 15 % minimum wall is kept.
 
-<img src="docs/img/hero-iso.png" width="420" alt="Maps at full isometric view, imported as-is: one domed Liquid Glass body on the plate, rendered by Cycles">
+<img src="docs/img/hero-iso.png" width="420" alt="Lens at full isometric view, imported as-is: four glass layers side by side on the plate, rendered by Cycles">
 
-<sub>*Maps* as imported (one combined Liquid Glass body, Inflate 0.25) at full isometric with the default light
-(−45°), Cycles preview, 512 px.</sub>
+<sub>*Lens* as imported at full isometric with the default light (−45°), Cycles preview, 512 px. Its four layers
+don't overlap, so all of them rest on the plate; the thin brackets are round tubes and the small dot is a sphere
+(the local bevel cap).</sub>
 
 ### Six appearances
 
@@ -146,8 +157,8 @@ with a contact sheet and — optionally — every platform export packed into on
 </tr>
 <tr>
 <td><sub><b>Clear Glass</b> — Roughness 0, IOR 1.6, Transmission 1. The head is as thick as it is wide with
-Roundness 100 %, so it is a sphere; the body has a full round edge and Inflate 0.5. View angle 0.45, light at
-+45°.</sub></td>
+Roundness 100 %, so it is a near-sphere (a 15 % straight band at its equator); the body has a full round edge and
+Inflate 0.5. View angle 0.45, light at +45°.</sub></td>
 <td><sub><b>Frosted Glass</b> — Roughness 0.267, IOR 1.6, Transmission 1, Base Color = the SVG gradient. Inflate 0.4:
 the Poisson dome turns the star tips into round, tapering tubes. Head-on.</sub></td>
 </tr>
@@ -180,10 +191,17 @@ the Poisson dome turns the star tips into round, tapering tubes. Head-on.</sub><
 ## 3D bodies
 
 - **Height-field bodies for every shape.** Each piece (individual mode) or silhouette (combined mode) becomes one
-  watertight body over its 2D outline: a flat middle, a round edge of radius *bevel* that follows the inward
-  distance *d* from the outline, and a dome on top —
-  `top z = e + hb(d) + inflate · D · √(u / u_max)`, with `hb(d) = √(b² − (b − min(d, b))²)`,
-  `e = max(thickness/2 − b, 0)` and *D* the body's largest inscribed radius; the bottom mirrors the top.
+  watertight body over its 2D outline: a flat middle, a round edge that follows the inward distance *d* from the
+  outline, and a dome on top —
+  `top z = e + hb(d) + inflate · D · √(u / u_max)`, with `hb(d) = √(β² − (β − min(d, β))²)`,
+  `β = min(b, max(w, d))`, `b = min(bevel, 0.85 · thickness/2)`, `e = thickness/2 − b` and *D* the body's
+  largest inscribed radius; the bottom mirrors the top.
+- **Minimum wall.** The round edge keeps a vertical wall of at least 15 % of the half thickness, so Roundness 100 %
+  is a near-pill edge rather than a knife-thin rim (knife-thin rims refracted the dark side of the studio and left
+  a dark notch at Gemini's tip).
+- **Local bevel cap.** *w* is the part's local half-width (the largest disc that fits there), so the round edge
+  never exceeds the width of the part it sits on: a stroke narrower than twice the bevel becomes a round tube with
+  no roof ridge along its middle, and a small dot becomes a sphere. Wide parts keep the plain edge of radius *b*.
 - **Poisson inflation.** *u* solves ∇²u = −4 inside each connected part of the outline (u = 0 on the outline),
   with a conjugate-gradient solver in plain numpy (Blender) and on typed arrays (live view). At Inflate 1 a disc
   becomes a sphere-like dome; thin parts become round tubes that taper toward their tips, without the creases
@@ -195,19 +213,27 @@ the Poisson dome turns the star tips into round, tapering tubes. Head-on.</sub><
   non-manifold edges.
 - **Pieces inside one layer.** Pieces that only touch pull back 0.003 from each other; a piece that overlaps an
   earlier one is stacked on top of it by its real height, so bodies in one layer never cut through each other.
-- **Real-height stacking.** A layer's body height is `H = thickness + 2 · inflate · maxRadius · scale`, where
-  `maxRadius` (the largest inscribed radius of the outlines the bodies are built from) comes with the geometry
-  bundle. Layers stack bottom to top: `z0 = stackLift`, `z(i+1) = z(i) + H(i) + stackGap` (0 and 0.03, from the
-  `geometry` section of `shared/presets.json`; a look's or pasted style's `zGap` replaces the gap). Imports,
-  looks, pasted styles, the Icon Pack, merge / split / move and **Re-stack** all use this rule. Once the layers
-  form such a stack, changing a thickness, inflate or scale, reordering or deleting a layer keeps them stacked.
-  A Z you set by hand is left alone; a merge, split or move then only lifts layers that would intersect.
+- **Overlap-aware stacking.** A layer's height is `H = max(thickness + 2 · inflate · maxRadius · scale, in-layer
+  stacked height)`, where `maxRadius` (the largest inscribed radius of the outlines the bodies are built from)
+  comes with the geometry bundle; server, Blender worker and live view use the same H. A layer only stacks on the
+  lower layers it overlaps in the plane (their outlines, after the art and layer transforms, come within the gap
+  of each other): `z(i) = max(stackLift, max over those j of z(j) + H(j) + gap)`, with `stackLift` 0 and the gap
+  0.03 (`stackGap` in the `geometry` section of `shared/presets.json`; a look's or pasted style's `zGap` replaces
+  it). Layers side by side share the base, so *Lens*, *Assistant* or *Notion* sit flat on the plate, while
+  *Earth* keeps real levels. Layers that only touch still count as overlapping: *Photos'* petals form a
+  staircase. Imports, looks, pasted styles, the Icon Pack, merge / split / move and **Re-stack** all use this
+  rule. Once the layers form such a stack, changing a thickness, inflate, scale or position, reordering or
+  deleting a layer keeps them stacked. A Z you set by hand is left alone; a merge, split or move then only lifts
+  layers that would intersect, and hand-placed layers that collide get a **Collide · Re-stack** warning.
+- **Image layers are flat cards.** A layer whose shapes are all embedded raster images imports as a thin card
+  (Thickness 0.02, bevel 0.006, Inflate 0). Looks keep it flat, a copied style never takes its depth from a card,
+  and a card merged with vector art takes the vector layer's depth. Inflate still works if you want a pillow.
 - **Import defaults.** New imports start as Liquid Glass with Thickness 0.16, Roundness 100 % (bevel 0.08),
-  Inflate 0.25, 8 segments and physical shadows, stacked by real height.
+  Inflate 0.25, 8 segments and physical shadows (image layers as flat cards), stacked overlap-aware by real height.
 - **Depth controls.** *Z position*, *Thickness*, *Roundness* (the edge radius as a share of half the thickness:
-  100 % is a full pill edge, and a round shape as thick as it is wide becomes a sphere), *Inflate* (the dome),
-  *Segments* and *Bodies* (individual pieces or one combined silhouette). **Re-stack** applies the real-height
-  rule.
+  100 % is a near-pill edge, and a round shape as thick as it is wide becomes a near-sphere; the read-out under
+  the sliders shows the radius the body really gets after the minimum wall), *Inflate* (the dome), *Segments*
+  and *Bodies* (individual pieces or one combined silhouette). **Re-stack** applies the overlap-aware rule.
 - **How it's built.** In Blender with `mathutils.geometry.delaunay_2d_cdt` (dense, graded boundary rings plus
   interior points, hole-aware), the Poisson solve per body and smooth custom normals, cached per layer and depth
   settings; the live view runs a port of the same algorithm with poly2tri.
@@ -220,8 +246,8 @@ the Poisson dome turns the star tips into round, tapering tubes. Head-on.</sub><
 
 **Import and split**
 - Any SVG: drag and drop or the sample library; plain, UTF-16 and gzip-compressed (`.svgz`) files.
-  Gradients, opacity, strokes, clip paths and embedded raster images are handled; baked drop-shadow filters
-  are recognised; off-canvas junk is culled.
+  Gradients, opacity, strokes, clip paths and embedded raster images are handled (a layer of images only becomes
+  a flat card); baked drop-shadow filters are recognised; off-canvas junk is culled.
 - Smart layer split (smart, group, colour, per element or single), then merge / split / move. Z-order
   validation stops overlapping art from being "woven" through other layers.
 - Full-bleed artwork (the art itself is the icon shape) is recognised and labelled *Full-bleed*.
@@ -234,13 +260,16 @@ the Poisson dome turns the star tips into round, tapering tubes. Head-on.</sub><
 **Looks and styles**
 - **Looks** restyle the whole icon in one click — Liquid Glass, Crystal, Frosted, Prism, Candy, Clay, Chrome,
   Neon, Iridescent and Soft 3D. A look sets every layer's material, depth (thickness, roundness, inflate) and
-  shadow, restacks the layers by real height (the look's `zGap` is the clearance between bodies) and sets the
-  plate material plus, when it defines them, lighting, camera, colour mode and tint. Applying a look clears
+  shadow, restacks the layers overlap-aware by real height (Crystal and Prism leave 0.05 between bodies, every
+  other look the default 0.03) and sets the plate material plus, when it defines them, lighting, camera, colour
+  mode and tint. Liquid Glass uses the import defaults (Thickness 0.16, bevel 0.08, Inflate 0.25), and image
+  layers stay flat cards under every look. Applying a look clears
   per-shape materials so it shows on every shape. Bevels are clamped to half the thickness only. The icon's own
   plate colour and shape are kept unless the look sets them (Neon switches the plate to System Dark).
 - **Copy / paste style** between icons (<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>C</kbd> / <kbd>V</kbd>): the dominant
   layer material, depth and shadow, each layer's material by stack position, the median clearance between stacked
-  bodies, the plate material, lighting, camera, colour mode and tint. A plate *fill* only travels when it's a
+  bodies (only layers that sit on another count; side-by-side layers give the default gap), the plate material,
+  lighting, camera, colour mode and tint. A plate *fill* only travels when it's a
   deliberate System Light / System Dark / None fill (`?plateFill=true&shape=true` copies fill and shape
   anyway). Per-shape materials never travel (shape ids belong to one icon).
 
@@ -253,8 +282,10 @@ the Poisson dome turns the star tips into round, tapering tubes. Head-on.</sub><
 | Preview | Cycles + OptiX denoiser, 512 px, 48 spp | ~0.6–1 s | automatic ~1.2 s after edits settle |
 | Final / Ultra | Cycles, 1024 / 2048 px | seconds | exports and hero shots (one-shot process) |
 
-EEVEE is a layout draft: it can't show glass through glass (translucent glass is alpha-blended there, so it reads a
-little darker than in Cycles, without speckle). The Cycles preview is the first physical view.
+EEVEE is a layout draft: it can't show glass through glass. Translucent glass (opacity below 1, or art with soft
+alpha) is alpha-blended there, and a light probe that sees only the plate (the wallpaper under a glass plate) gives
+blended and floating glass something to refract, so drafts don't turn glass near-black. Draft glass still reads
+lighter and less saturated than in Cycles. The Cycles preview is the first physical view.
 
 **Export** (one zip):
 
@@ -422,21 +453,22 @@ Or step by step:
 .venv\Scripts\python.exe -m pytest -q tests --ignore=tests/blender       # SVG pipeline, API (fake bridge), exports, styles, batch
 .venv\Scripts\python.exe -m pytest -q tests/blender                      # real Blender 5.0 worker
 $env:BIS_REAL_BLENDER = '1'; .venv\Scripts\python.exe -m pytest -q tests/test_api_integration.py tests/test_batch.py   # import → draft → export, Icon Pack
-node --test web/src/viewport/tests/*.test.mjs web/src/features/editor/inspector/*.test.mjs web/src/features/editor/stage/*.test.mjs   # live view ⇄ worker parity, inspector, view controls, UI polish
+node --test web/src/viewport/tests/*.test.mjs web/src/features/editor/*.test.mjs web/src/features/editor/inspector/*.test.mjs web/src/features/editor/stage/*.test.mjs   # live view ⇄ worker parity, stacking, inspector, view controls, UI polish
 cd web; npx tsc -b --noEmit; npx vite build                              # type check + production build
 ```
 
 | Suite | What it covers |
 |---|---|
 | `tests/test_svg_*.py` | the SVG pipeline over the 68-icon corpus: import, split, geometry, units, ops, `maxRadius` and stacks kept through edits |
-| `tests/test_stacking.py` | the real-height stacking rule: body height, gaps, telling real-height, old and hand-placed stacks apart |
+| `tests/test_stacking.py` | the overlap-aware real-height stacking rule: footprints and clearance, body and in-layer height (checked against the worker's height field), gaps, telling rule, old and hand-placed stacks apart, image cards |
 | `tests/test_api.py` | REST, WebSocket, the job queue, coalescing, cancel and auto preview, material cleaning of old projects, per-shape materials, with a FakeBridge |
 | `tests/test_api_bridge.py` | the real `BlenderBridge` against a stand-in process: handshake, progress, restart, one-shot kill |
 | `tests/test_export.py`, `test_style.py`, `test_batch.py` | every export target, the marketing heroes and the `.icon` writer · looks and style transfer · Icon Pack |
 | `tests/test_api_integration.py` | the real SVG pipeline, plus opt-in real Blender runs (`BIS_REAL_BLENDER=1`) |
-| `tests/blender/` | the worker inside Blender 5.0 (≤ 256 px): one Principled BSDF per shape (graph rules, parameter mapping, glass / shadow physics), height-field bodies (Poisson dome, watertight, no self-intersections, touching / overlapping pieces, corpus), the iso camera and framing, the camera-relative light rig, the dark renditions, every preset in draft + preview |
-| `web/src/viewport/tests/` | the live view against the worker: Principled → three.js material mapping, the height-field and Poisson port, iso framing, camera-relative lighting, the dark rule, plus the UI polish checks |
-| `web/src/features/editor/inspector/` | the Principled inspector: group order and open groups, the per-shape merge rule, Roundness, re-stack and keeping a stack through edits |
+| `tests/blender/` | the worker inside Blender 5.0 (≤ 256 px): one Principled BSDF per shape (graph rules, parameter mapping, glass / shadow physics), height-field bodies (Poisson dome, minimum wall, local bevel cap, deterministic dome apex, watertight, no self-intersections, touching / overlapping pieces, corpus), the iso camera and framing, the camera-relative light rig, the dark renditions, EEVEE draft glass (plate probe, never near-black), every preset in draft + preview |
+| `web/src/viewport/tests/` | the live view against the worker: Principled → three.js material mapping, the height-field and Poisson port (minimum wall, local bevel cap, dome apex, touching outlines), iso framing, camera-relative lighting, the dark rule, plus the UI polish checks |
+| `web/src/features/editor/stacking.test.mjs` | the overlap-aware stack against the server's own results (`fixtures/stack-corpus.json.gz`): overlap lists, re-stack, recognising stacks, collisions |
+| `web/src/features/editor/inspector/` | the Principled inspector: group order and open groups, the per-shape merge rule, Roundness, re-stack, keeping a stack through edits and the collision hint |
 | `web/src/features/editor/stage/` | the CAD view controls: Fit, wheel zoom at the cursor, middle-drag pan, one shared view for Live / Render / Compare, <kbd>X</kbd> as one undo step |
 
 | Environment variable | Meaning |
@@ -456,7 +488,7 @@ cd web; npx tsc -b --noEmit; npx vite build                              # type 
 | Worker state **error** / renders fail | The status bar shows the last Blender message. Full output: `GET /api/system/logs` or `workspace/logs/blender.log`. Click the worker state → *Restart worker*. |
 | First render is slow | NVIDIA shader-cache compile after a driver update (one time). |
 | Out of VRAM (OptiX error) | Close other GPU-heavy apps, lower the size or tier, or render Ultra only when needed. |
-| Layers float in the iso view | Layers stack by real height in order, even where they don't overlap in the plane. Drag a layer's Z down (a hand-placed Z is kept) or merge the layers. |
+| Layers float in the iso view | A layer stacks above every lower layer it overlaps or touches in the plane (layers side by side share the base), so touching pieces such as *Photos'* petals form a staircase. Drag a layer's Z down (a hand-placed Z is kept; if bodies then collide, the Layers header shows **Collide · Re-stack**) or merge the layers. |
 | Stacked glass looks wrong in the draft | EEVEE drafts are layout previews and can't show glass through glass. The Cycles preview follows about 1.2 s after edits settle (or press <kbd>R</kbd>). |
 | "Web UI not built" page | Run `Blender Icon Studio.cmd -Rebuild`, or `cd web; npm run build`. |
 | Port 8420 is busy | `Blender Icon Studio.cmd -Port 8430` |

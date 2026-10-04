@@ -409,6 +409,11 @@ class ProjectStore:
             log.warning("auto layer modes of %s unavailable: %s", project.id, e)
             return None
 
+    def layer_shapes(self, project: Project, mode: str | None = None) -> dict[str, Any] | None:
+        """{layer id: bis.stacking.LayerShape} of the layers' bodies (built as `mode` when given) from the SVG
+        pipeline's element store - no geometry bundle needed; None when the pipeline has no such op."""
+        return self.svg.layer_shapes(self.dir(project.id), project, mode)
+
     def geometry(self, project: Project) -> tuple[GeometryBundle, Path]:
         d = self.dir(project.id)
         bundle = self.svg.build_geometry(d, project, project_url_prefix(project.id))

@@ -85,6 +85,14 @@ class SvgPipeline:
             return None
         return {str(k): str(v) for k, v in fn(project_dir, project).items()}
 
+    def layer_shapes(self, project_dir: Path, project: Project, mode: str | None = None) -> dict[str, Any] | None:
+        """{layer id: bis.stacking.LayerShape} (maxRadius + XY footprint + pieces, as built in `mode`; None = each
+        layer's own) for the overlap-aware stack; None when the pipeline has no such op (tests' fake pipeline)."""
+        fn = getattr(self.module, "layer_shapes", None)
+        if fn is None:
+            return None
+        return dict(fn(project_dir, project, mode))
+
     def build_geometry(self, project_dir: Path, project: Project, url_prefix: str) -> GeometryBundle:
         bundle = self.module.build_geometry(project_dir, project, url_prefix)
         return bundle if isinstance(bundle, GeometryBundle) else GeometryBundle.model_validate(_plain(bundle))

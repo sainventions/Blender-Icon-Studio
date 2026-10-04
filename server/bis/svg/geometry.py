@@ -497,6 +497,51 @@ def layer_max_radius(store: ElementStore, element_ids: Sequence[str], mode: str 
     return r
 
 
+_SHAPE_CACHE: Dict[tuple, "stacking.LayerShape"] = {}
+
+
+def to_art_geom(store: ElementStore, g):
+    """An SVG-space shapely geometry in ART space (centre origin, y up, longer side 2)."""
+    a = store.art
+    k = a.k
+    return affinity.affine_transform(g, [k, 0.0, 0.0, -k, -a.cx * k, a.cy * k])
+
+
+def layer_shape(store: ElementStore, element_ids: Sequence[str], mode: str = "individual",
+                regions: Optional[Sequence[Tuple[Elem, pathops.Path]]] = None,
+                S: float = 1.0) -> "stacking.LayerShape":
+    """What the overlap-aware stack (:mod:`bis.stacking`, PLAN §11 round 8) needs of a layer holding
+    `element_ids` built as `mode`, without building its geometry: maxRadius (:func:`layer_max_radius`), the
+    footprint (the union of the occlusion-cut, plate-clipped regions = the silhouette, + the bbox of a raster with
+    no region) and the regions as pieces (in-layer stacking of overlapping translucent pieces), in art units.
+    `S` = art.scale × layer scale (the worker's piece-touch tolerance). Cached per (store, members, mode, S)."""
+    from bis import stacking
+
+    members = members_of(store, element_ids)
+    if not members:
+        return stacking.LayerShape(0.0, shapely.Polygon())
+    key = (store.hash, PIPELINE_VERSION, tuple(m.id for m in members), mode, round(float(S), 6))
+    with _MAX_R_GUARD:
+        hit = _SHAPE_CACHE.get(key)
+    if hit is not None:
+        return hit
+    if regions is None:
+        regions = layer_regions(store, members)
+    mr = layer_max_radius(store, element_ids, mode, regions)
+    pieces = [stacking._polygonal(shapely.make_valid(to_art_geom(store, shapely_from_path(p, store.tolerance))))
+              for _m, p in regions]
+    have = {m.id for m, _p in regions}
+    cards = [shapely.box(*store.art.bbox(m.bbox)) for m in members if m.image and m.id not in have]
+    parts = [g for g in pieces + cards if not g.is_empty]
+    fp = stacking._polygonal(shapely.union_all(parts)) if parts else shapely.Polygon()
+    shape = stacking.LayerShape(mr, fp, pieces, S)
+    with _MAX_R_GUARD:
+        _SHAPE_CACHE[key] = shape
+        while len(_SHAPE_CACHE) > 2048:
+            _SHAPE_CACHE.pop(next(iter(_SHAPE_CACHE)))
+    return shape
+
+
 # ----------------------------------------------------------------------------------------------
 # per-layer geometry
 # ----------------------------------------------------------------------------------------------

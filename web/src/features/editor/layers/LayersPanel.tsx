@@ -30,6 +30,7 @@ import {
   Split,
   SquareDashedMousePointer,
   Trash2,
+  TriangleAlert,
   Undo2,
   WandSparkles,
 } from 'lucide-react'
@@ -47,8 +48,34 @@ import { ShapeIcon } from '../../../components/icons'
 import { Badge, EmptyState, IconButton, Menu, useAnchor, type MenuItem } from '../../../components/ui'
 import { moveSelectedLayer } from '../shortcuts'
 import { updateElementMaterials } from '../inspector/principled'
+import { collisionText, restackOpenProject, useStackStatus } from '../stacking'
 
 const verticalOnly: Modifier = ({ transform }) => ({ ...transform, x: 0 })
+
+/** Hand-placed layers whose bodies cut into each other (overlap-aware stack, PLAN §11 round 8): one click re-stacks. */
+function StackWarning() {
+  const status = useStackStatus()
+  const project = useEditor((s) => s.project)
+  const busy = useEditor((s) => s.busy)
+  if (!status?.collisions.length || !project) return null
+  const tip = `${collisionText(
+    status,
+    project.layers.map((l) => l.name),
+  )}. Click to re-stack: every layer at its real height, one gap above the layers it overlaps.`
+  return (
+    <button
+      type="button"
+      data-tip={tip}
+      aria-label={tip}
+      data-testid="stack-collision-badge"
+      disabled={!!busy}
+      onClick={() => restackOpenProject()}
+      className="inline-flex h-4 shrink-0 items-center gap-1 whitespace-nowrap rounded-[4px] border border-warn/25 bg-warn/12 px-1 text-3xs font-semibold text-warn transition-colors hover:bg-warn/20 disabled:opacity-45 [&_svg]:h-2.5 [&_svg]:w-2.5"
+    >
+      <TriangleAlert /> Collide · Re-stack
+    </button>
+  )
+}
 
 function modeFrom(e: React.MouseEvent): SelectMode {
   return e.shiftKey ? 'range' : e.ctrlKey || e.metaKey ? 'toggle' : 'replace'
@@ -201,6 +228,7 @@ export function LayersPanel() {
           {project.layers.length}
           {overLimit ? ' / 4 max' : ''}
         </Badge>
+        <StackWarning />
         <div className="flex-1" />
         <IconButton
           ref={resplitRef}

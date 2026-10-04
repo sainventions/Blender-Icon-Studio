@@ -21,12 +21,12 @@ sys.path.insert(0, str(ROOT / "server"))
 from fastapi.testclient import TestClient  # noqa: E402
 from PIL import Image  # noqa: E402
 
-from bis import stacking  # noqa: E402
 from bis.batch import Tile, make_contact_sheet  # noqa: E402
 from bis.models import Project  # noqa: E402
 from bis.blender import FakeBridge  # noqa: E402
 from bis.main import create_app  # noqa: E402
 from bis.testing import make_test_settings  # noqa: E402
+from conftest import assert_rule_stack  # noqa: E402
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
@@ -133,14 +133,11 @@ def test_batch_of_samples_with_a_look(ctx):
         assert {l["material"]["preset"] for l in p["layers"]} == {"candy"}
         assert p["canvas"]["plate"]["material"]["preset"] == "glossy_plastic"
         geo = c.get(f"/api/projects/{it['projectId']}/geometry").json()
-        # PLAN 11 round 7: bevel clamped to thickness/2 only; layers re-stacked at their REAL heights with the
-        # look's zGap as the clearance (no interpenetrating bodies - QA defect 4)
+        # PLAN 11 rounds 7 + 8: bevel clamped to thickness/2 only; layers re-stacked at their REAL heights,
+        # overlap-aware, with the look's zGap (null = stackGap) as the clearance (no interpenetrating bodies)
         assert all(l["depth"]["bevel"] <= l["depth"]["thickness"] / 2 + 1e-9 for l in p["layers"])
-        proj = Project.model_validate(p)
-        gaps = stacking.stack_gaps(proj.layers, {k: v["maxRadius"] for k, v in geo["layers"].items()},
-                                   proj.canvas.art.scale)
         candy_gap = json.loads((ROOT / "shared" / "presets.json").read_text(encoding="utf-8"))["looks"]["candy"]["style"]["zGap"]
-        assert gaps == pytest.approx([candy_gap] * len(gaps), abs=2e-4)
+        assert_rule_stack(Project.model_validate(p), geo, candy_gap)
     sheet = _png(c, res["contactSheet"])
     assert res["contactSheet"] == f"/files/batches/{job['id']}/contact-sheet.png" and res["url"] == res["contactSheet"]
     assert sheet.size[0] >= 3 * 192 and sheet.convert("RGB").getpixel((3, 3)) == (18, 18, 22)

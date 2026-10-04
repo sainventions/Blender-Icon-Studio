@@ -340,6 +340,12 @@ open({out!r}, "w").write(json.dumps(out))
         g = T.geo([("d", [T.circle(0.3)], "#3366ff", 1.0)])
         g["maxRadius"] = 0.4                                   # the contract value wins over the worker's estimate
         cases["maxr"] = list(T.scene([lay], {"A": g}))
+        # round 8: H = max(rule height, in-layer stacked height) — here the rule (maxRadius 1.0) is the taller one
+        lay = T.layer("A", z=0.0)
+        lay["depth"]["inflate"] = 0.5
+        g = T.geo([("sq", [T.square(0.4)], "#3366ff", 1.0), ("disc", [T.circle(0.25, 0.2, 0.1)], "#ffffff", 0.6)])
+        g["maxRadius"] = 1.0
+        cases["both"] = list(T.scene([lay], {"A": g}))
         cp = tmp_path / "cases.json"
         cp.write_text(json.dumps(cases), encoding="utf-8")
         out = tmp_path / "scene.json"
@@ -355,3 +361,88 @@ open({out!r}, "w").write(json.dumps(out))
         assert st["lo"][1] >= st["hi"][0] + 0.001, st          # the disc rests on the square
         assert st["span"] == pytest.approx(st["hi"][1] - st["lo"][0], abs=0.01), st
         assert r["maxr"]["span"] == pytest.approx(0.1 + 2 * 0.5 * 0.4, rel=1e-6), r["maxr"]
+        both = r["both"]
+        assert both["stats"].get("stackedPieces") == 1 and both["overlap"] == 0, both
+        assert both["hi"][1] - both["lo"][0] < 1.1                    # the stacked bodies are lower than the rule ...
+        assert both["span"] == pytest.approx(0.1 + 2 * 0.5 * 1.0, rel=1e-6), both   # ... so the rule frames them
+
+    _TUBE_EXPR = """
+import sys, json
+import numpy as np
+sys.path.insert(0, {repo!r})
+from blender_worker import geometry as G, heightfield as H
+
+def folds(arr, xmax=None):
+    V, L, S = arr["verts"], arr["loops"], arr["starts"]
+    sizes = np.diff(np.append(S, len(L)))
+    tri = np.nonzero(sizes == 3)[0]
+    T = L[S[tri[:len(tri) // 2]][:, None] + np.arange(3)]
+    P = V[T]
+    fn = np.cross(P[:, 1] - P[:, 0], P[:, 2] - P[:, 0])
+    fn /= np.linalg.norm(fn, axis=1)[:, None]
+    e = np.concatenate([T[:, [0, 1]], T[:, [1, 2]], T[:, [2, 0]]])
+    f = np.tile(np.arange(len(T)), 3)
+    k = np.minimum(e[:, 0], e[:, 1]) * len(V) + np.maximum(e[:, 0], e[:, 1])
+    o = np.argsort(k, kind="stable")
+    k, f = k[o], f[o]
+    same = k[1:] == k[:-1]
+    fa, fb = f[:-1][same], f[1:][same]
+    ew = arr["info"]["wall"]
+    thr = ew + 0.45 * (V[:, 2].max() - ew)              # the upper 55 % above the side wall
+    m = (P[:, :, 2].min(1)[fa] > thr) & (P[:, :, 2].min(1)[fb] > thr)
+    if xmax is not None:                                # the middle of a strip (its square ends are corners)
+        m &= (np.abs(P[:, :, 0].max(1))[fa] < xmax) & (np.abs(P[:, :, 0].max(1))[fb] < xmax)
+    ang = np.degrees(np.arccos(np.clip((fn[fa] * fn[fb]).sum(1), -1, 1)))[m]
+    return float(np.percentile(ang, 99)), float(ang.max())
+
+out = {{}}
+# a stroke narrower than 2 x bevel (t 0.16, b 0.08, half width 0.03): a ROUND TUBE of radius 0.03 — HEAD built a roof
+# ridge along its spine (hb(0.03; 0.08) with slope 1.25 there)
+for tag, k in (("strip", 0.0), ("strip_k", 0.25)):
+    arr = H.build([G.rect_spline(-0.4, -0.03, 0.4, 0.03)], 0.16, 0.08, k, 8, 1.0)
+    V = arr["verts"]
+    mid = V[(np.abs(V[:, 0]) < 0.2) & (V[:, 2] > 0)]
+    e = arr["info"]["wall"]
+    out[tag] = dict(folds=folds(arr, 0.3), half=arr["info"]["half"], wall=e,
+                    spine=float(mid[np.abs(mid[:, 1]) < 0.004, 2].mean()) - e, **H.check_arrays(arr))
+# corpus pieces (the user's examples of the roof ridge) at their import depth
+for name, spl, t, bev, k, S in json.loads(open({shapes!r}).read()):
+    arr = H.build(spl, t, bev, k, 8, S)
+    out[name] = dict(folds=folds(arr), **H.check_arrays(arr))
+open({out!r}, "w").write(json.dumps(out))
+"""
+
+    def test_thin_strokes_are_round_tubes(corpus_index, tmp_path):
+        """PLAN §11 round 8 (QA r9 N4): the round edge is capped at each part's LOCAL half-width — a stroke narrower than
+        2 × bevel is a round tube (no roof ridge on its spine); Syno Photos' rings and Ti84's keys at their import depth
+        keep their dome folds low (HEAD: p99 58° / 74°)."""
+        index_path, _names = corpus_index
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+        shapes = []
+        for name, lid, k in (("Syno Photos", None, 0), ("Ti84", "L3", 5)):
+            proj = json.loads(Path(index[name]["project"]).read_text(encoding="utf-8"))
+            bundle = json.loads(Path(index[name]["geometryPath"]).read_text(encoding="utf-8"))
+            L = [x for x in proj["layers"] if lid is None or x["id"] == lid][0]
+            g = bundle["layers"][L["id"]]
+            S = float(proj["canvas"]["art"].get("scale", 1.0)) * float((L.get("transform") or {}).get("scale", 1.0))
+            dp = L["depth"]
+            shapes.append([name, g["regions"][k]["splines"], dp["thickness"] / S,
+                           min(dp["bevel"], dp["thickness"] / 2) / S, dp.get("inflate", 0.0), S])
+        sp = tmp_path / "shapes.json"
+        sp.write_text(json.dumps(shapes), encoding="utf-8")
+        out = tmp_path / "tube.json"
+        expr = _TUBE_EXPR.format(repo=str(REPO), out=str(out), shapes=str(sp))
+        p = subprocess.run([str(wc.BLENDER), "-b", "--factory-startup", "--python-expr", expr],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+        assert out.is_file(), p.stdout[-3000:] + p.stderr[-3000:]
+        r = json.loads(out.read_text(encoding="utf-8"))
+        for v in r.values():
+            assert v["nonManifold"] == 0 and v["misoriented"] == 0 and v["invertedNormals"] == 0 and v["volume"] > 0
+        s = r["strip"]
+        # a tube of radius 0.03 on the wall (the local half-width is measured with RING_TOL: up to ~4 % generous)
+        assert s["half"] == pytest.approx(s["wall"] + 0.03, rel=0.06), s
+        assert s["spine"] == pytest.approx(0.03, rel=0.06), s
+        assert s["folds"][1] < 25.0, s                # HEAD: a 77° ridge; now one 16-gon tube step (~11°) per row
+        assert r["strip_k"]["folds"][1] < 25.0, r["strip_k"]
+        assert r["Syno Photos"]["folds"][0] < 48.0, r["Syno Photos"]
+        assert r["Ti84"]["folds"][0] < 45.0, r["Ti84"]

@@ -1,46 +1,40 @@
-// Real-height layer stacking in the editor (PLAN §11 round 7; shared/presets.json "geometry"; server bis.stacking):
-// body heights H = thickness + 2 · inflate · maxRadius · S from the geometry bundle, the Re-stack button, and keeping a
-// recognised stack across client-side edits (thickness / inflate / scale / order / delete — a PUT stores the project as
-// sent, so the server cannot re-stack those).
-import type { GeometryBundle, Presets, Project } from '../../types'
+// Real-height, overlap-aware layer stacking in the editor (PLAN §11 rounds 7 + 8; the model is ./stackModel.ts): keeps a
+// recognised stack across client-side edits (thickness / inflate / position / scale / order / delete — a PUT stores the
+// project as sent, so the server cannot re-stack those) by installing keepProjectStack as the store's commit transform,
+// and reports the collisions of a hand-placed stack (the Re-stack hints of the Depth section and the Layers panel).
+import { useMemo } from 'react'
 import { useAppStore } from '../../store/app'
-import { setCommitTransform } from '../../store/editor'
-import { keepStack, restack, ruleHeight, stackAffected, stackRules, type BodyHeight } from './inspector/depth'
-import { layerBodyHeight, layerScale } from './viewportBridge'
+import { setCommitTransform, useEditor } from '../../store/editor'
+import { keepProjectStack, restackProject, stackStatus, type StackStatus } from './stackModel'
 
-/**
- * Body height of the layers of `p`: the shared rule with the bundle's maxRadius — raised to the viewport's mirror of the
- * worker's real bodies (layerBodyHeight) where that is taller: pieces of one layer that overlap stack inside it, and a
- * bundle without maxRadius is measured from the silhouette. Layers without geometry: the rule with maxRadius 0.
- */
-export function bodyHeights(p: Project, geometry: GeometryBundle | null | undefined): BodyHeight {
-  return (l) => {
-    const S = layerScale(p.canvas.art.scale, l.transform.scale)
-    const lg = geometry?.layers?.[l.id]
-    const H = ruleHeight(l, lg?.maxRadius, S)
-    return lg ? Math.max(H, layerBodyHeight(l, lg, S)) : H
-  }
-}
-
-/** The Re-stack button: every layer at its real height, z0 = stackLift, one stackGap between neighbours. */
-export function restackProject(p: Project, geometry: GeometryBundle | null | undefined, presets: Presets | null | undefined): Project {
-  const layers = restack(p.layers, bodyHeights(p, geometry), stackRules(presets))
-  return layers === p.layers ? p : { ...p, layers }
-}
-
-/** After a client-side edit `before` → `after`: a recognised real-height stack stays one (keepStack); else `after`. */
-export function keepProjectStack(
-  before: Project,
-  after: Project,
-  geometry: GeometryBundle | null | undefined,
-  presets: Presets | null | undefined,
-): Project {
-  if (before === after || !stackAffected(before.layers, after.layers, before.canvas.art.scale, after.canvas.art.scale)) return after
-  const layers = keepStack(before.layers, after.layers, bodyHeights(before, geometry), bodyHeights(after, geometry), stackRules(presets))
-  return layers === after.layers ? after : { ...after, layers }
-}
+export { bodyHeights, keepProjectStack, lowerLists, restackProject, stackStatus, type StackStatus } from './stackModel'
 
 /** Install keepProjectStack on every editor commit (EditorPage, at module load: before any edit can happen). */
 export function installStackKeeper(): void {
   setCommitTransform((before, after, geometry) => keepProjectStack(before, after, geometry, useAppStore.getState().presets.data))
+}
+
+/** The open project's stack: rule stack (gap) or hand-placed, and which layer bodies cut into each other. */
+export function useStackStatus(): StackStatus | null {
+  const project = useEditor((s) => s.project)
+  const geometry = useEditor((s) => s.geometry)
+  const presets = useAppStore((s) => s.presets.data)
+  const layers = project?.layers
+  const canvas = project?.canvas
+  return useMemo(() => (layers && canvas ? stackStatus({ layers, canvas }, geometry, presets) : null), [layers, canvas, geometry, presets])
+}
+
+/** Re-stack the open project (one undo step): every layer at its real height, overlap-aware. */
+export function restackOpenProject(): void {
+  const ed = useEditor.getState()
+  const presets = useAppStore.getState().presets.data
+  ed.commit((p) => restackProject(p, ed.geometry, presets), { coalesce: 'restack' })
+}
+
+/** "“A” and “B” cut 0.11 into each other" (+ how many more pairs) for the collision hints. */
+export function collisionText(status: StackStatus, names: string[]): string {
+  const [j, i, d] = status.collisions[0]
+  const more = status.collisions.length - 1
+  const q = (k: number) => `“${names[k] ?? `Layer ${k + 1}`}”`
+  return `${q(j)} and ${q(i)} cut ${d.toFixed(2)} into each other${more > 0 ? ` (+${more} more pair${more > 1 ? 's' : ''})` : ''}`
 }

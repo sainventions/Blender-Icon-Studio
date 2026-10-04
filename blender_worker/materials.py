@@ -16,7 +16,7 @@ the only pre-processing is the paint and a few classic texture helpers:
     Thin Film Thickness = Map Range(Noise, thickness · (1 ∓ filmVariation))                   (only when > 0)
     Tangent = Tangent (radial about Z)                                                        (only when > 0)
     Alpha = alpha · piece opacity [· art alpha]
-    Thickness (Material Output, EEVEE slab refraction) = Value
+    Thickness (Material Output, EEVEE refraction: sphere / slab model) = Value
 
 No Mix/Add Shader, no Emission/Transparent/Glass/Refraction/Volume shader nodes, no Light Path tricks: Cycles
 does the physics (refraction, real shadows, subsurface, thin film), EEVEE draws the same graph as a draft
@@ -32,6 +32,7 @@ import os
 from typing import Optional
 
 import bpy
+import numpy as np
 
 from . import presets as P
 from .nodes import Graph, TopologyMismatch, layout
@@ -43,6 +44,7 @@ SHAPE_PROP = "bis_shape"           # custom property marking materials owned by 
 GRAIN_BUMP_DISTANCE = 0.002        # object units: sandblast depth at grain 1
 FILM_NOISE_SCALE = 3.0             # film variation bands across the art square
 MAX_NAME = 63                      # Blender ID name limit
+SOFT_ALPHA = 0.25                  # a raster whose covered pixels are this often partly transparent has SOFT art alpha
 
 # params that map 1:1 onto a Principled input (the rest is pre-processing: paint, tints, grain, film, alpha)
 PRINCIPLED = {
@@ -157,22 +159,62 @@ def _set_if(obj, attr: str, value) -> None:
         setattr(obj, attr, value)
 
 
+def art_alpha_is_soft(paint: dict) -> bool:
+    """Is a paint's art alpha real translucency (a glow / shine raster, gradient stops below opacity 1) rather than a
+    coverage mask (an opaque raster whose only partial alpha is its anti-aliased edge: iMessage's bubble, Feit's house,
+    Outlook)? Rasters: the share of covered pixels (alpha > 0.02) that are partly transparent (< 0.98) is ≥ SOFT_ALPHA
+    (Find Device's shine 1.0, Vanced Neon's glow 0.99; iMessage 0.02, Outlook 0.003, Feit 0). Measured once per image
+    file and cached on the image (its path + mtime, :func:`load_image`)."""
+    if not paint.get("has_alpha"):
+        return False
+    if paint.get("kind") != "texture":
+        return True
+    img = load_image(paint.get("image"))
+    if img is None:
+        return False
+    mt = img.get("bis_mtime")
+    if img.get("bis_soft") is not None and img.get("bis_soft_mtime") == mt:
+        return float(img["bis_soft"]) >= SOFT_ALPHA
+    frac = 0.0
+    try:
+        n = len(img.pixels)
+        if int(img.channels) == 4 and n:
+            px = np.empty(n, dtype=np.float32)
+            img.pixels.foreach_get(px)
+            a = px[3::4]
+            cov = a > 0.02
+            frac = float(np.count_nonzero(cov & (a < 0.98))) / max(1, int(np.count_nonzero(cov)))
+    except (RuntimeError, ValueError, TypeError) as ex:
+        log("art alpha probe failed", paint.get("image"), ex)
+    img["bis_soft"] = frac
+    img["bis_soft_mtime"] = mt
+    return frac >= SOFT_ALPHA
+
+
 def _settings(mat: bpy.types.Material, spec: dict) -> None:
-    """Material settings (not nodes). EEVEE: transmissive surfaces use raytraced refraction with a slab of the
-    piece's thickness; translucent opaque ones (opacity / art alpha) are alpha-BLENDED (dithered alpha speckles at
-    16 TAA samples); everything else is dithered. Cycles ignores these."""
+    """Material settings (not nodes). EEVEE: transmissive surfaces use raytraced refraction through a SPHERE of the
+    piece's thickness (rounded height-field bodies; read closer to Cycles than a slab); translucent ones (opacity or
+    alpha < 1, soft art alpha) are alpha-BLENDED; everything else is dithered. Cycles ignores these."""
     pr = spec["params"]
     transmissive = is_transmissive(pr)
     translucent = spec.get("opacity", 1.0) * _num(pr, "alpha", 1.0) < 0.999
-    # translucent shapes (piece opacity / alpha < 1) are alpha-BLENDED — dithered alpha speckled at 16 TAA samples, also
-    # on translucent glass (Calculator's 44 % ÷, Files' 33 % tab; QA r8 #9): those lose EEVEE's raytraced refraction
-    # (blended surfaces cannot trace), a draft-only compromise; art alpha alone (texture coverage) stays dithered
-    blended = translucent or (bool(spec["paint"].get("has_alpha")) and not transmissive)
+    # translucent shapes (piece opacity / alpha < 1, art alpha on opaque materials, SOFT art alpha on glass: shine /
+    # glow rasters, gradient stops) are alpha-BLENDED. DITHERED alpha does not converge in EEVEE (a hashed per-pixel
+    # pattern: Calculator's 44 % ÷ and Find Device's shine image stayed grainy even at 128 TAA samples; QA r8 #9).
+    # Blended surfaces cannot raytrace: their transmission reads the light probes — the scene's plate probe
+    # (scene.SceneBuilder._probe: the plate beneath, not the dark studio world; a translucent Contacts head rendered
+    # near-black without it, QA r9 N1). That probe is a single-sample capture whose plate carries the bodies' noisy
+    # transparent shadows: a FLAT blended glass piece magnifies it into blotches (iMessage / Feit / Outlook rasters,
+    # round-8 review), so glass whose art alpha is only a coverage mask stays dithered + raytraced (edge-only dither)
+    paint = spec["paint"]
+    blended = translucent or (bool(paint.get("has_alpha")) and (not transmissive or art_alpha_is_soft(paint)))
     _set_if(mat, "surface_render_method", "BLENDED" if blended else "DITHERED")
     if blended:
-        _set_if(mat, "use_transparency_overlap", True)
+        # only the front-most surface of a blended body: with overlap its back faces (the underside) were drawn over
+        # the front in object order — blotchy raster glass (iMessage's bubble) without its key highlight
+        _set_if(mat, "use_transparency_overlap", False)
     _set_if(mat, "use_raytrace_refraction", transmissive and not blended)
-    _set_if(mat, "thickness_mode", "SLAB")
+    _set_if(mat, "thickness_mode", "SPHERE" if transmissive else "SLAB")
     _set_if(mat, "use_transparent_shadow", True)
     _set_if(mat, "use_backface_culling", False)
     pc = tuple(spec.get("preview_color", (0.8, 0.8, 0.8)))[:3]
@@ -392,7 +434,7 @@ def _build(nt: bpy.types.NodeTree, spec: dict, update: bool) -> None:
     out = g.node("ShaderNodeOutputMaterial", "Material Output", target="ALL")
     out.is_active_output = True
     g.link(bsdf.outputs[0], out.inputs["Surface"])
-    # EEVEE slab refraction thickness (object space); Cycles traces the real body
+    # EEVEE refraction thickness (object space; Material.thickness_mode); Cycles traces the real body
     g.link(g.value(max(1e-4, float(spec.get("thickness", 0.1))), "Thickness (EEVEE)"), out.inputs["Thickness"])
 
 
@@ -407,7 +449,7 @@ def resolve(layer_material: Optional[dict], element_material: Optional[dict] = N
 def make_spec(preset: str, params: Optional[dict], paint: dict, **kw) -> dict:
     """Material spec: ``params`` are merged over the preset's defaults (presets.json). Keys: preset, params, paint
     (kind texture|solid|linear|radial + data), opacity (piece opacity, multiplies Alpha), mono (tinted appearances:
-    {lo, hi, floor, tint}), thickness (EEVEE slab), preview_color, shape (owner tag)."""
+    {lo, hi, floor, tint}), thickness (EEVEE refraction), preview_color, shape (owner tag)."""
     if preset not in P.material_ids():
         preset = "liquid_glass"
     spec = {"preset": preset, "params": P.material_params(preset, params), "paint": paint, "opacity": 1.0,

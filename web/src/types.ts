@@ -209,8 +209,9 @@ export interface Presets {
   colorModes: Record<string, { label: string; viewTransform: string; look: string; softClip?: number; description?: string }>
   looks: Record<string, Look>
   principledSchema?: { groups: string[] } // Principled BSDF panel order of ParamSchema.group (PLAN §11)
-  /** Shared body / stacking rules (PLAN §11 round 7): H = thickness + 2·inflate·maxRadius; z0 = stackLift,
-   *  z(i+1) = z(i) + H(i) + stackGap (StyleSpec.zGap overrides the gap). */
+  /** Shared body / stacking rules (PLAN §11 rounds 7 + 8): H = max(thickness + 2·inflate·maxRadius, in-layer stacked
+   *  height); overlap-aware: z(i) = max(stackLift, max over the lower layers j it overlaps in XY of z(j) + H(j) + stackGap)
+   *  (footprints closer than stackGap overlap; StyleSpec.zGap overrides the gap). */
   geometry?: { stackLift: number; stackGap: number }
 }
 

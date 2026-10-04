@@ -49,7 +49,7 @@ test('sampling / profile constants mirror blender_worker/heightfield.py', () => 
   for (const k of [
     'CHORD_TOL', 'MAX_EDGE', 'MERGE_EPS', 'MERGE_Q', 'MIN_AREA', 'CORNER_DEG', 'GUARD_MIN', 'GUARD_MAX', 'FAN_DEG', 'RING_TOL',
     'KAPPA', 'KAPPA_REL', 'SOFT_REACH', 'NEAR', 'TAN_K', 'TAN_MIN', 'TAN_MAX', 'NORMAL_MIN_DOT', 'APEX_CLEAR', 'MIN_THICKNESS',
-    'CHORD_PASSES',
+    'CHORD_PASSES', 'WALL_MIN', 'WIDTH_BISECT', 'WIDTH_TOL', 'WIDTH_BLEND', 'APEX_TIE',
   ])
     assert.equal(hf[k], pyConst(src, k), k)
   // the layer layout mirrors scene.py
@@ -117,13 +117,126 @@ test('sphere head: bevel = radius rounds a thin island into a bead (1.webp), len
   const S = fx.artScale
   const t = 0.42 / S
   const b = 0.21 / S
-  for (const r of fx.regions) {
+  // the worker's numbers (blender_worker.heightfield.build, round 8): a 15 % wall, the round edge capped locally
+  const REF = [
+    { half: 0.195721, volume: 0.0867705 },
+    { half: 0.195721, volume: 0.0353771 },
+  ]
+  fx.regions.forEach((r, i) => {
     const { arr, mesh } = build(r.splines, t, b, 0, 8, S)
-    assertClean(mesh, r.elementId)
-    // e = 0: no vertical wall; the island is thinner than the edge radius, so it tapers to √(b² − (b − D)²)
-    assert.equal(arr.info.wall, 0)
-    if (arr.info.D < b) near(arr.info.half, Math.sqrt(b * b - (b - arr.info.D) ** 2), 0.01 * t, `${r.elementId} bead`)
+    const c = assertClean(mesh, r.elementId)
+    // round 8: no knife-thin rim — a WALL_MIN share of the half thickness stays a vertical wall
+    near(arr.info.wall, hf.WALL_MIN * (t / 2), 1e-12, 'minimum wall')
+    near(arr.info.bevel, (1 - hf.WALL_MIN) * (t / 2), 1e-12, 'rim radius')
+    // the island's apex: e + min(b, D) (a thinner island is a sphere of its own radius)
+    near(arr.info.half, hf.halfHeight(t, b, 0, arr.info.D), 0.01 * t, `${r.elementId} bead`)
+    near(arr.info.half, REF[i].half, 2e-4 * REF[i].half, `${r.elementId} half = worker`)
+    near(c.volume, REF[i].volume, 2e-3 * REF[i].volume, `${r.elementId} volume = worker`)
+  })
+})
+
+test('round 8 profile: minimum wall, bevel = radius = t/2 is a near-sphere, the round edge capped at the local half-width', () => {
+  // bevel = radius = half the thickness: a disc of radius R becomes a near-sphere — a round edge of radius
+  // (1 − WALL_MIN)·R on the minimum wall WALL_MIN·R
+  const R = 0.2
+  const bb = (1 - hf.WALL_MIN) * R
+  near(hf.rimBevel(2 * R, R), bb, 1e-15)
+  near(hf.wallHalf(2 * R, R), hf.WALL_MIN * R, 1e-15)
+  for (let i = 0; i <= 8; i++) {
+    const r = (R * i) / 8
+    near(hf.profile(R - r, 2 * R, R, 0, R), hf.WALL_MIN * R + Math.sqrt(bb * bb - (bb - Math.min(R - r, bb)) ** 2), 1e-12, `r=${r}`)
   }
+  near(hf.profile(R, 2 * R, R, 0, R), R, 1e-12)
+  // the disc model: an island narrower than the bevel is a round body of radius D, flat on its spine / apex
+  const t = 0.16
+  const b = 0.06
+  const e = hf.wallHalf(t, b)
+  for (const D of [0.01, 0.03, 0.059, 0.2]) {
+    near(hf.halfHeight(t, b, 0, D), e + Math.min(b, D), 1e-12, `D=${D}`)
+    near(hf.slope(D, b, 0, D), 0, 1e-9, 'flat on the spine')
+  }
+  for (let i = 0; i <= 4; i++) {
+    const d = 0.005 * i
+    near(hf.rimHeight(d, 0.02), Math.sqrt(0.02 ** 2 - (0.02 - d) ** 2), 1e-15, 'a tube of radius w')
+  }
+  assert.equal(hf.rimSlopes(0, 0.02)[0], Infinity)
+  assert.deepEqual(hf.rimSlopes(0.02, 0.02), [0, 1])
+  assert.deepEqual(hf.rimSlopes(0.03, 0.02), [0, 1])
+})
+
+/** Outline + island inradius at the body tolerances of bevel b (worker test helper _outline). */
+function outlineOf(splines, b = 0.04) {
+  const o = hf.outline(splines, hf.CHORD_TOL, hf.MAX_EDGE, hf.MERGE_EPS, Math.min(Math.max(0.5 * b, hf.GUARD_MIN), hf.GUARD_MAX))
+  const ol = new hf.OutlineQuery(o, Math.max(hf.NEAR, 16 * hf.CHORD_TOL))
+  return { ol, o, D: hf.islandInradius(ol) }
+}
+/** worker geometry.rect_spline: a rectangle with handles at 1/3. */
+function rect(x0, y0, x1, y1) {
+  const c = [
+    [x1, y1],
+    [x0, y1],
+    [x0, y0],
+    [x1, y0],
+  ]
+  return {
+    closed: true,
+    hole: false,
+    parent: -1,
+    depth: 0,
+    points: c.map(([x, y], i) => {
+      const [px, py] = c[(i + 3) % 4]
+      const [nx, ny] = c[(i + 1) % 4]
+      return { co: [x, y], hl: [x + (px - x) / 3, y + (py - y) / 3], hr: [x + (nx - x) / 3, y + (ny - y) / 3] }
+    }),
+  }
+}
+const ringVerts = (o) => o.rings.flatMap((r) => Array.from({ length: r.length >> 1 }, (_, i) => [r[2 * i], r[2 * i + 1]]))
+
+test('local half-width (worker local_width / blend_width): strips, discs, wide corners; round tubes without a ridge', () => {
+  const strip = poly([
+    [-0.5, -0.03],
+    [0.5, -0.03],
+    [0.5, 0.03],
+    [-0.5, 0.03],
+  ])
+  let { ol, o, D } = outlineOf([strip], 0.08)
+  let w = hf.localWidth(ol, D, 2 * hf.CHORD_TOL)
+  ringVerts(o).forEach(([x], i) => {
+    if (Math.abs(x) < 0.4) near(w[i], 0.03, 0.0015, `strip side x=${x}`)
+  })
+  ;({ ol, o, D } = outlineOf([circle(0.05)], 0.08))
+  for (const v of hf.localWidth(ol, D, 2 * hf.CHORD_TOL)) near(v, 0.05, 0.003, 'disc radius')
+  ;({ ol, o, D } = outlineOf([rect(-0.4, -0.4, 0.4, 0.4)], 0.08))
+  const raw = hf.localWidth(ol, D, 2 * hf.CHORD_TOL)
+  const win = hf.localWidth(ol, D, 2 * hf.CHORD_TOL, 0.08)
+  const corner = ringVerts(o).map(([x, y]) => Math.hypot(Math.abs(x) - 0.4, Math.abs(y) - 0.4) < 1e-9)
+  assert.equal(corner.filter(Boolean).length, 4)
+  assert.ok(Math.max(...raw.filter((_, i) => corner[i])) < 0.01, 'the corner itself → 0')
+  assert.ok(Math.min(...win.filter((_, i) => corner[i])) > 0.06, 'windowed: a wide part keeps its round edge')
+  // blend_width on the strip: the spine gets the half width from both sides, beside a side its own foot's value
+  ;({ ol, o, D } = outlineOf([strip], 0.08))
+  w = hf.localWidth(ol, D, 2 * hf.CHORD_TOL, 0.08)
+  const bw = hf.blendWidth(ol, w, [0, 0, 0.1, 0.02, 0.1, -0.025])
+  bw.w.forEach((v) => near(v, 0.03, 0.002, 'blended width'))
+  ;[0.03, 0.01, 0.005].forEach((v, i) => near(bw.d[i], v, 1e-6, 'distance'))
+  assert.ok(Math.max(...Array.from(bw.gw, Math.abs)) < 0.05, 'constant width: no slope')
+  // a thin stroke with a big bevel is a ROUND TUBE of its own radius: no roof ridge on the spine
+  const { arr, mesh } = build([strip], 0.16, 0.08, 0, 8)
+  assertClean(mesh, 'tube')
+  const e = hf.wallHalf(0.16, 0.08)
+  near(arr.info.half, e + 0.03, 0.0015, 'tube top = wall + half width')
+  for (const [x, y, z] of topVerts(mesh))
+    if (Math.abs(x) < 0.3 && Math.abs(y) < 0.027) near(z, e + Math.sqrt(0.03 ** 2 - y * y), 0.0025, `tube cross-section at y=${y.toFixed(4)}`)
+})
+
+test('deterministic dome apex (worker island_inradius): tied cells / moves break the same way on both sides', () => {
+  const c = new Map()
+  hf.islandInradius(outlineOf([rect(-0.3, -0.1, 0.5, 0.1)], 0.04).ol, 40, c)
+  near(c.get(0)[0], 0.1, 0.02, 'apex x = the rectangle centre')
+  near(c.get(0)[1], 0, 0.01, 'apex y')
+  const m = new Map()
+  hf.islandInradius(outlineOf([rect(-0.5, -0.1, 0.3, 0.1)], 0.04).ol, 40, m)
+  near(m.get(0)[0], -c.get(0)[0], 0.02, 'the mirror image gives the mirrored apex')
 })
 
 test('inflated disc reaches its apex (island centre Steiner point), dome normals are radial', () => {
@@ -499,11 +612,15 @@ test('inflated bodies = the worker: a Poisson dome (round tube on thin parts, no
   // the corpus shapes whose distance dome grew fins (Gemini's tips): adjacent upper-dome faces meet at < 30°, and the
   // body equals the worker's (half height / volume measured with blender_worker.heightfield.build, thickness 0.16,
   // bevel 0.08, 8 segments — the import defaults)
+  // (round 8: the 15 % minimum wall and the locally capped round edge; inflate 0 = the flat import body)
   const REF = {
-    'gemini-star.json|0|0.5': { half: 0.245228, volume: 0.1944458 },
-    'gemini-star.json|0|1': { half: 0.415896, volume: 0.3119194 },
-    'contacts.json|0|1': { half: 0.320313, volume: 0.125551 },
-    'contacts.json|1|1': { half: 0.270939, volume: 0.047004 },
+    'gemini-star.json|0|0.5': { half: 0.245228, volume: 0.1966417 },
+    'gemini-star.json|0|1': { half: 0.415896, volume: 0.3141193 },
+    'contacts.json|0|1': { half: 0.320313, volume: 0.1267213 },
+    'contacts.json|1|1': { half: 0.270939, volume: 0.0477233 },
+    'gemini-star.json|0|0': { half: 0.07456, volume: 0.0791435 },
+    'contacts.json|0|0': { half: 0.07456, volume: 0.0376607 },
+    'contacts.json|1|0': { half: 0.07456, volume: 0.0160825 },
   }
   for (const [key, ref] of Object.entries(REF)) {
     const [file, ri, k] = key.split('|')
@@ -513,7 +630,7 @@ test('inflated bodies = the worker: a Poisson dome (round tube on thin parts, no
     const c = assertClean(r.mesh, key)
     near(r.arr.info.half, ref.half, 0.002 * ref.half, `${key} half`)
     near(c.volume, ref.volume, 0.005 * ref.volume, `${key} volume`)
-    if (file === 'gemini-star.json') assert.ok(crease(r.mesh) < 30, `${key}: crease ${crease(r.mesh).toFixed(1)}°`)
+    if (file === 'gemini-star.json' && k !== '0') assert.ok(crease(r.mesh) < 30, `${key}: crease ${crease(r.mesh).toFixed(1)}°`)
   }
 })
 
@@ -618,4 +735,48 @@ test('layer layout mirrors scene._layer / _body_height: inset touching pieces, s
   // with maxRadius in the bundle and no overlaps: H = thickness + 2·inflate·maxRadius·S exactly (presets "geometry")
   const one = geometryOf({ hash: 'mr', regions: [geometryOf().regions[0]], maxRadius: 0.25 })
   near(lg.layerBodyHeight(L2, one, 1.5), 0.1 + 2 * 0.5 * 0.25 * 1.5, 1e-12)
+})
+
+// Worker references (fixtures/round8-parity.json, from blender_worker/heightfield.py on corpus pieces).
+const r8 = fixture('round8-parity.json')
+/** The worker's outline of a fixture piece at thickness t / bevel bv (world units) and its scale S. */
+function workerOutline(key, t, bv) {
+  const S = r8.scale[key]
+  const b = hf.rimBevel(t / S, bv / S)
+  const tol = hf.CHORD_TOL / S
+  const o = hf.outline(r8.pieces[key], tol, hf.MAX_EDGE / S, hf.MERGE_EPS / S, Math.min(Math.max(0.5 * b, hf.GUARD_MIN / S), hf.GUARD_MAX / S))
+  const ol = new hf.OutlineQuery(o, Math.max(hf.NEAR / S, 16 * tol))
+  return { o, ol, b, tol, D: hf.islandInradius(ol, 40) }
+}
+
+test('local half-width = the worker at sharp corners: a probe nearest to a shared vertex takes the worker’s (float32) segment', () => {
+  // Scandit's dot (thin) and Earth's coast (import defaults): tangent discs that reach a vertex shared by two segments
+  // decided the material side by whichever segment the float64 search hit first — Scandit's vertex 53 came out 9.6e-4
+  // narrower (just above its bevel), Earth's vertex 169 capped 17 % of the bevel lower than the worker (a dent in the
+  // round edge that Cycles does not have).
+  for (const key of ['scanditR0', 'earthSil']) {
+    const ref = r8.localWidth[key]
+    const { o, ol, b, tol, D } = workerOutline(key, ref.thickness, ref.bevel)
+    assert.deepEqual(o.rings.map((r) => r.length >> 1), ref.rings, `${key}: the worker's sample rings`)
+    const wv = hf.localWidth(ol, D, hf.WIDTH_TOL * tol, b)
+    // the round edge only sees min(w, b) (rimRadius); widths above the bevel may differ (wide parts, not capped)
+    let worst = 0
+    for (let i = 0; i < wv.length; i++) worst = Math.max(worst, Math.abs(Math.min(wv[i], b) - Math.min(ref.wv[i], b)))
+    // (one late bisection step of 1.05·D / 2^10 may still differ: ≤ 0.3 % of the bevel here, 16.9 % without the tie-break)
+    assert.ok(worst < 0.01 * b, `${key}: capped local half-width within ${worst.toExponential(2)} of the worker (bevel ${b.toFixed(4)})`)
+  }
+})
+
+test('rings touching another ring mid-edge (a T-junction): a coarser jitter retry instead of a flat ear-clipped body', () => {
+  // Home's silhouette and Scandit's dot at layer scale 0.7, thickness 0.3, bevel 0.15, inflate 0.3: poly2tri's
+  // "Collinear not supported" at the 1e-8 input jitter used to fall back to ear clipping (no Steiner points: a FLAT
+  // body of the wall height) while the worker's CDT domes them.
+  for (const key of ['homeSil', 'scanditR4']) {
+    const ref = r8.fallback[key]
+    const S = r8.scale[key] * ref.scaleMul
+    const { arr, mesh } = build(r8.pieces[key], ref.thickness / S, ref.bevel / S, ref.inflate, ref.segments, S)
+    assert.equal(arr.info.fallbacks, 0, `${key}: no ear-clipping fallback`)
+    near(arr.info.half, ref.half, 1e-4 * ref.half + 1e-6, `${key}: half height = the worker's`)
+    assertClean(mesh, key)
+  }
 })

@@ -319,12 +319,171 @@ def test_value_changes_update_in_place(worker, outdir):
 
 @needs_blender
 def test_eevee_material_settings(worker, outdir):
-    """EEVEE draws the same graph: raytraced refraction on transmissive shapes, alpha-blended translucent opaque ones."""
+    """EEVEE draws the same graph: raytraced refraction through a sphere of the piece's thickness on transmissive
+    shapes, alpha-BLENDED translucent ones (only their front-most surface); the scene carries the plate's sphere
+    probe, which sees the plate only (every layer body hidden from it) — Cycles ignores both."""
     render(worker, two_discs(preset="clear_glass", elem={"e2": {"preset": "satin", "params": {"alpha": 0.5}}}),
            outdir / "eevee.png")
+    info = worker.result("scene_info")
+    mats = info["materials"]
+    e1, e2 = mats["BIS Discs / e1"], mats["BIS Discs / e2"]
+    assert e1["raytraceRefraction"] is True and e1["renderMethod"] == "DITHERED" and e1["thicknessMode"] == "SPHERE"
+    assert e2["raytraceRefraction"] is False and e2["renderMethod"] == "BLENDED" and e2["thicknessMode"] == "SLAB"
+    assert e2["transparencyOverlap"] is False
+    # translucent GLASS is blended too (dithered alpha never converged: speckle) and reads the plate probe
+    render(worker, two_discs(preset="clear_glass", elem={"e2": {"preset": "clear_glass", "params": {"alpha": 0.6}}}),
+           outdir / "eevee2.png")
+    info = worker.result("scene_info")
+    e2 = info["materials"]["BIS Discs / e2"]
+    assert e2["renderMethod"] == "BLENDED" and e2["raytraceRefraction"] is False
+    objs = {o["name"]: o for o in info["objects"]}
+    assert objs["BIS Probe"]["type"] == "LIGHT_PROBE"
+    assert objs["BIS Plate"]["hideProbeSphere"] is False
+    assert objs["BIS A r0"]["hideProbeSphere"] is True and objs["BIS A r1"]["hideProbeSphere"] is True
+
+
+def translucent_disc(z=0.0, opacity=0.66, colour="#ffffff", plate="#ff7c3b", r=0.3):
+    lay = T.layer("A", z=z, preset="liquid_glass", bevel=0.08, thickness=0.16)
+    lay["depth"]["inflate"] = 0.25
+    g = T.geo([("e", [T.circle(r)], colour, opacity)], safe=r)
+    return T.scene([lay], {"A": g}, plate_fill=plate, color_mode="brand")
+
+
+@needs_blender
+def test_translucent_glass_drafts_track_cycles(worker, outdir):
+    """QA r9 N1: a 66 % white liquid-glass head on an orange plate (Contacts) rendered near-black in EEVEE drafts —
+    (104,70,67) against Cycles' (207,93,67): alpha-blended glass cannot trace and read the dark studio world. With the
+    plate probe the draft head reads the plate through the glass like the Cycles preview."""
+    got = {}
+    for q in ("draft", "preview"):
+        out = outdir / f"translucent_{q}.png"
+        render(worker, translucent_disc(), out, quality=q)
+        got[q] = rgb_at(out, 0.0, 0.0, r=5)
+    d, pv = got["draft"], got["preview"]
+    assert d.sum() > 0.8 * pv.sum(), got                               # not dark (HEAD: 0.6x)
+    assert d[0] > d[1] + 50 and d[0] > 150, got                          # the orange plate seen through the glass
+
+
+@needs_blender
+def test_floating_glass_draft_at_iso_is_not_dark(worker, outdir):
+    """QA r9 N2: glass floating above the plate in the CAD iso view refracted the dark studio world in drafts (Photos'
+    petals (76,65,50) against Cycles' (155,126,85)): the plate probe gives the screen-space refraction a plate to fall
+    back to. Compared over the disc's pixels in the Cycles render."""
+    imgs = {}
+    for q in ("draft", "preview"):
+        out = outdir / f"floating_{q}.png"
+        render(worker, translucent_disc(z=0.45, opacity=1.0, colour="#f4b400", plate="#ffffff", r=0.25), out,
+               quality=q, camera={"view": "front", "iso": 1.0})
+        imgs[q] = T.rgba(out)[..., :3]
+    pv = imgs["preview"]
+    mask = (pv[..., 0] - pv[..., 2] > 45) & (pv.sum(-1) > 150)           # the yellow glass in the Cycles render
+    assert mask.sum() > 200, mask.sum()
+    d, p = imgs["draft"][mask].mean(0), pv[mask].mean(0)
+    assert d.sum() > 0.8 * p.sum(), (d.round(), p.round())               # HEAD: about half as bright
+
+
+def _black_pixels(path) -> int:
+    a = T.rgba(path)
+    return int(((a[..., :3].sum(-1) < 30) & (a[..., 3] > 200)).sum())
+
+
+@needs_blender
+@pytest.mark.parametrize("art_scale", [0.9, 1.0, 1.073])
+def test_flat_blended_glass_is_never_black(worker, outdir, art_scale):
+    """Round-8 review: an orthographic head-on view EXACTLY parallel to a flat face's normal made EEVEE's forward
+    (alpha-blended) refraction NaN — a flat 60 % glass disc (inflate 0, Contacts' head as a thin card) and Find Device's
+    flat soft-alpha shine card rendered as pure black shapes in drafts at art scales 0.8–1.1 (1.072957 happened to
+    round clear). The head-on camera is pitched by scene.FRONT_TILT (0.01°)."""
+    lay = T.layer("A", preset="liquid_glass", bevel=0.006, thickness=0.02)
+    g = T.geo([("e1", [T.circle(0.3, -0.45)], "#ffffff", 0.6), ("e2", [T.circle(0.3, 0.45)], "#ffffff", 0.6)])
+    proj, bundle = T.scene([lay], {"A": g}, plate_fill="#ff7c3b", color_mode="brand")
+    proj["canvas"]["art"] = {"x": 0.0, "y": 0.0, "scale": art_scale}
+    out = outdir / f"flat_blended_{art_scale}.png"
+    render(worker, (proj, bundle), out)
     mats = worker.result("scene_info")["materials"]
-    assert mats["BIS Discs / e1"]["raytraceRefraction"] is True and mats["BIS Discs / e1"]["renderMethod"] == "DITHERED"
-    assert mats["BIS Discs / e2"]["raytraceRefraction"] is False and mats["BIS Discs / e2"]["renderMethod"] == "BLENDED"
+    assert {m["renderMethod"] for k, m in mats.items() if k.startswith("BIS A /")} == {"BLENDED"}
+    assert _black_pixels(out) == 0, _black_pixels(out)                    # before: both discs (1571–2223 px)
+    c = rgb_at(out, -0.45 * art_scale, 0.0)
+    assert c[0] > 150 and c[0] > c[2] + 60, c.round()                     # the orange plate through the glass
+
+
+def raster_cards(outdir: Path):
+    """Two flat raster glass cards (liquid glass, inflate 0): e1's PNG is opaque inside its disc (its only partial alpha
+    the anti-aliased rim: iMessage / Feit / Outlook), e2's a soft radial glow (Find Device's shine)."""
+    import numpy as np
+    from PIL import Image
+    n = 128
+    yy, xx = np.mgrid[0:n, 0:n]
+    r = np.hypot(xx - (n - 1) / 2, yy - (n - 1) / 2) / (n / 2)
+    rgb = np.zeros((n, n, 3), np.uint8)
+    rgb[...] = (40, 90, 200)
+    paths = {}
+    for k, a in (("e1", np.clip((1.0 - r) * 40.0, 0, 1)), ("e2", np.clip(1.0 - r, 0, 1) * 0.6)):
+        p = outdir / f"raster_{k}.png"
+        Image.fromarray(np.dstack([rgb, (a * 255).astype(np.uint8)]), "RGBA").save(p)
+        paths[k] = str(p)
+    lay = T.layer("A", preset="liquid_glass", bevel=0.006, thickness=0.02)
+    lay["name"] = "Raster"
+    g = T.geo([("e1", [T.circle(0.4, -0.45)], "#2850c8", 1.0), ("e2", [T.circle(0.4, 0.45)], "#2850c8", 1.0)])
+    g["images"] = [{"elementId": "e1", "path": paths["e1"], "bbox": [-0.85, -0.4, -0.05, 0.4]},
+                   {"elementId": "e2", "path": paths["e2"], "bbox": [0.05, -0.4, 0.85, 0.4]}]
+    return T.scene([lay], {"A": g}, plate_fill="#ffffff", color_mode="brand")
+
+
+@needs_blender
+def test_raster_glass_dithers_unless_its_alpha_is_soft(worker, outdir):
+    """Round-8 review: glass whose art alpha is only a coverage mask stays DITHERED + raytraced; only SOFT art alpha
+    (≥ materials.SOFT_ALPHA of the covered pixels partly transparent: a glow / shine) is alpha-blended. Blended glass
+    refracts the plate probe, a single-sample capture that carries the bodies' noisy shadows — iMessage's, Feit's and
+    Outlook's flat raster glass turned blotchy."""
+    render(worker, raster_cards(outdir), outdir / "raster_cards.png")
+    mats = worker.result("scene_info")["materials"]
+    e1, e2 = mats["BIS Raster / e1"], mats["BIS Raster / e2"]
+    assert e1["renderMethod"] == "DITHERED" and e1["raytraceRefraction"] is True, e1
+    assert e2["renderMethod"] == "BLENDED" and e2["raytraceRefraction"] is False, e2
+    assert _black_pixels(outdir / "raster_cards.png") == 0
+
+
+@needs_blender
+def test_flat_raster_glass_draft_is_smooth(worker, outdir):
+    """iMessage's bubble (an opaque raster, a flat image card) in a 256 px draft: its high-pass grain inside the bubble
+    stays at the Cycles preview's level — blended, it was a blotchy pattern from the plate probe (1.5 vs 0.5)."""
+    import make_fixtures
+    import numpy as np
+    from numpy.lib.stride_tricks import sliding_window_view
+    index = make_fixtures.make(["iMessage"], HERE / "_fixtures")
+    e = index["iMessage"]
+    proj = json.loads(Path(e["project"]).read_text(encoding="utf-8"))
+    out = outdir / "imessage_draft.png"
+    worker.result("render", {"project": proj, "geometryPath": e["geometryPath"], "quality": "draft", "size": 256,
+                             "out": str(out)})
+    a = T.rgba(out)[..., :3].mean(-1)
+    k = 5
+    hp = a - sliding_window_view(np.pad(a, k // 2, mode="edge"), (k, k)).mean(axis=(-1, -2))
+    grain = float(T.patch(hp[..., None], 0.0, 0.08, 24).std())
+    assert grain < 1.0, grain
+
+
+@needs_blender
+@pytest.mark.parametrize("appearance", ["clear-light", "clear-dark"])
+def test_glass_plate_probe_sees_the_wallpaper(worker, outdir, appearance):
+    """Round-8 review: in the clear (and tinted-light) renditions the plate is frosted glass over the wallpaper; the
+    plate probe captured the glass plate itself and EEVEE drafts showed a flat grey plate ((109,109,109) where Cycles
+    shows the lavender wallpaper (212,221,248); clear-dark (92,92,92) vs navy (63,73,112)). A glass plate is hidden from
+    the probe, which then sees the wallpaper beneath it."""
+    lay = T.layer("A", preset="liquid_glass", bevel=0.08, thickness=0.16)
+    scn = T.scene([lay], {"A": T.geo([("e", [T.circle(0.3)], "#ffffff", 1.0)])}, color_mode="brand")
+    got = {}
+    for q in ("draft", "preview"):
+        out = outdir / f"glass_plate_{appearance}_{q}.png"
+        render(worker, scn, out, quality=q, appearance=appearance)
+        got[q] = rgb_at(out, -0.7, 0.55)
+        if q == "draft":
+            objs = {o["name"]: o for o in worker.result("scene_info")["objects"]}
+            assert objs["BIS Plate"]["hideProbeSphere"] is True
+    d, p = got["draft"], got["preview"]
+    assert d[2] > d[0] + 8 and p[2] > p[0] + 8, (d.round(), p.round())   # the wallpaper's blue, not a neutral grey
+    assert abs(d.sum() - p.sum()) < 0.4 * p.sum(), (d.round(), p.round())   # before: 0.52 (clear-light)
 
 
 @needs_blender

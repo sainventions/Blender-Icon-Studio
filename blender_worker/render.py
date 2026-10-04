@@ -4,7 +4,7 @@ Tiers (OptiX everywhere, OptiX denoiser, persistent data off):
 
 | tier    | engine | size | samples | bounces max/trans/transp/glossy/diffuse |
 |---------|--------|------|---------|------------------------------------------|
-| draft   | EEVEE  | 512  | 16 TAA  | raytracing SCREEN, trace_max_roughness 0.8, overscan |
+| draft   | EEVEE  | 512  | 16 TAA  | raytracing SCREEN, trace_max_roughness 0.2, overscan |
 | preview | Cycles | 512  | 48      | 16/16/16/6/2, adaptive 0.05             |
 | final   | Cycles | 1024 | 384     | 32/32/32/8/4, adaptive 0.01 (min 64)    |
 | ultra   | Cycles | 2048 | 1024    | 32/32/32/8/4, adaptive 0.005            |
@@ -131,7 +131,10 @@ def configure(scene: bpy.types.Scene, quality: str, size: Optional[int], *, tran
         ee.ray_tracing_method = "SCREEN"
         rto = ee.ray_tracing_options
         rto.resolution_scale = "1" if px <= 512 else "2"
-        rto.trace_max_roughness = 0.8
+        # rougher surfaces (satin plates 0.45, frosted glass 0.27) read the light probes — the plate probe
+        # (scene._probe) / the world — instead of noisy screen traces: smoother plates, draft-vs-preview glyph dE
+        # 12.3 -> 11.9 on 16 icons (round 8), and a little faster; clear glass / coats (≤ 0.05) still trace
+        rto.trace_max_roughness = 0.2
         rto.screen_trace_quality = 0.25
         rto.screen_trace_thickness = 0.2
         rto.use_denoise = True

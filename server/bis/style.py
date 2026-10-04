@@ -8,11 +8,13 @@
 
 Apply rules (StyleSpec): every layer gets ``layerDefaults`` (material/depth/shadow) or
 ``layerMaterials[i]`` (by index from the bottom, clamped to the last entry); the bevel is clamped to thickness / 2
-(the only clamp - height-field bodies taper thin parts; round 7 dropped the safe-radius clamp); layers are
-re-stacked at their REAL heights (PLAN §11 round 7, :mod:`bis.stacking`): z0 = stackLift,
-z(i+1) = z(i) + H(i) + gap with H = thickness + 2 · inflate · maxRadius · S and gap = ``zGap`` (None → the
-presets' stackGap) - so bodies of neighbouring layers never interpenetrate, whatever the look's thickness and
-inflate; plate material/thickness/bevel are copied (+ fill/shape when not None); lighting, camera,
+(the only clamp - height-field bodies taper thin parts; round 7 dropped the safe-radius clamp); raster image
+layers stay flat cards (round 8: no dome, at most ``bis.stacking.IMAGE_CARD`` thick); layers are re-stacked at
+their REAL heights, overlap-aware (PLAN §11 rounds 7 + 8, :mod:`bis.stacking`): a layer stacks only above the lower
+layers it overlaps in XY, z(i) = max(stackLift, max over overlapped lower j of z(j) + H(j) + gap) with
+H = max(thickness + 2 · inflate · maxRadius · S, in-layer stacked height) and gap = ``zGap`` (None → the presets'
+stackGap) - so bodies never interpenetrate, whatever the look's thickness and inflate, and layers side by side
+share the base; plate material/thickness/bevel are copied (+ fill/shape when not None); lighting, camera,
 ``render.colorMode`` and ``appearances.tint`` are copied when given. Per-layer *material* overrides of the dark/mono appearances and the
 per-shape overrides (``Layer.elementMaterials``) are dropped so the look shows in every rendition and on every
 shape.
@@ -126,19 +128,21 @@ def extracted_mode(layers: list, auto_modes: Optional[Mapping[str, str]]) -> Opt
 
 def extract_style(project: Project, *, plate_fill: Optional[bool] = None, plate_shape: bool = False,
                   auto_modes: Optional[Mapping[str, str]] = None,
-                  max_radii: Optional[Mapping[str, float]] = None) -> StyleSpec:
+                  max_radii: Optional[Mapping[str, Any]] = None) -> StyleSpec:
     """The transferable look of `project` ("Copy style").
 
     * layerDefaults: material/shadow of the dominant material among the visible layers (most layers, ties →
       the higher one; its top-most layer is the representative). The bevel is the largest bevel among those
-      layers (builder clamping only ever lowers a bevel, so the largest is closest to what was requested).
+      layers (builder clamping only ever lowers a bevel, so the largest is closest to what was requested). Raster
+      image layers (flat cards) only give the depth when the project has no other layer.
       ``mode`` is None unless the user fused the visible layers into 'combined' bodies on purpose — see
       :func:`extracted_mode`; `auto_modes` (layer id → the pipeline's auto mode, :meth:`ProjectStore.auto_modes`)
       tells the two apart. Without it the mode is never copied.
     * layerMaterials: every layer's material by index from the bottom — only when they are not all equal.
-    * zGap: median clearance between neighbouring layers' bodies, z(i+1) − (z(i) + H(i)) ≥ 0 (real heights:
-      `max_radii` = layer id → ``LayerGeometry.maxRadius``, else a bbox bound); None for a single layer (the
-      target then uses the presets' stackGap).
+    * zGap: median clearance of the stacked layers, z(i) − max over its overlapped lower layers j of
+      (z(j) + H(j)) ≥ 0 (overlap-aware real heights: `max_radii` = layer id → ``bis.stacking.LayerShape`` /
+      ``LayerGeometry.maxRadius`` (footprint unknown: every layer overlaps), else a bbox bound); None when no layer
+      sits on another (a single layer, side-by-side layers: the target then uses the presets' stackGap).
     * plate: material/thickness/bevel always; ``fill`` when `plate_fill` is True, or (None = auto) when the
       fill is a deliberate system/none fill rather than the icon's own source colour; ``shape`` only when
       `plate_shape`.
@@ -154,9 +158,11 @@ def extract_style(project: Project, *, plate_fill: Optional[bool] = None, plate_
         preset = max(counts, key=lambda k: (counts[k], top_index[k]))
         same = [l for l in visible if l.material.preset == preset]
         rep = same[-1]
-        depth = rep.depth.model_copy(deep=True)
+        kinds = element_kinds(project)
+        shaped = [l for l in same if not stacking.is_image_layer(l, kinds)] or same   # cards are not the look's depth
+        depth = shaped[-1].depth.model_copy(deep=True)
         depth.z = 0.0
-        depth.bevel = max(l.depth.bevel for l in same)
+        depth.bevel = max(l.depth.bevel for l in shaped)
         defaults = StyleLayerDefaults(material=rep.material.model_copy(deep=True), depth=depth,
                                       shadow=rep.shadow.model_copy(deep=True),
                                       mode=extracted_mode(visible, auto_modes))
@@ -167,8 +173,10 @@ def extract_style(project: Project, *, plate_fill: Optional[bool] = None, plate_
     z_gap: Optional[float] = None
     if len(layers) >= 2:
         radii = radii_or_bbox(project, max_radii)
-        gaps = sorted(stacking.stack_gaps(layers, radii, project.canvas.art.scale))
-        z_gap = round(max(gaps[len(gaps) // 2], 0.0), 5)
+        gaps = sorted(g for g in stacking.stack_clearances(layers, radii, art_scale=project.canvas.art.scale,
+                                                           art_offset=project.canvas.art) if g is not None)
+        if gaps:
+            z_gap = round(max(gaps[len(gaps) // 2], 0.0), 5)
 
     plate = project.canvas.plate
     copy_fill = plate_fill if plate_fill is not None else plate.fill.type in DESIGN_PLATE_FILLS
@@ -205,29 +213,40 @@ def bbox_radii(project: Project) -> dict[str, float]:
     return {l.id: stacking.bbox_radius([boxes[i] for i in l.elementIds if i in boxes]) for l in project.layers}
 
 
-def radii_or_bbox(project: Project, max_radii: Optional[Mapping[str, float]]) -> dict[str, float]:
-    """`max_radii` (layer id → ``LayerGeometry.maxRadius``) with every missing layer filled by :func:`bbox_radii`."""
+def element_kinds(project: Project) -> dict[str, str]:
+    """Element id → kind ('path' / 'image')."""
+    return {e.id: e.kind for e in project.elements}
+
+
+def radii_or_bbox(project: Project, max_radii: Optional[Mapping[str, Any]]) -> dict[str, Any]:
+    """`max_radii` (layer id → ``bis.stacking.LayerShape`` / ``LayerGeometry.maxRadius``) with every missing layer
+    filled by :func:`bbox_radii` (footprint unknown: it stacks on every lower layer - never under-estimated)."""
     given = dict(max_radii or {})
     if all(l.id in given for l in project.layers):
         return given
     fallback = bbox_radii(project)
-    return {l.id: float(given[l.id]) if l.id in given else fallback[l.id] for l in project.layers}
+    # given values stay as they are (a LayerShape or a number: bis.stacking.as_shape reads both)
+    return {l.id: given[l.id] if l.id in given else fallback[l.id] for l in project.layers}
 
 
-def apply_style(project: Project, style: StyleSpec, max_radii: Optional[Mapping[str, float]] = None,
+def apply_style(project: Project, style: StyleSpec, max_radii: Optional[Mapping[str, Any]] = None,
                 presets: Any = None) -> Project:
     """Return a restyled deep copy of `project` (the input is not modified). `max_radii` maps layer id →
-    ``LayerGeometry.maxRadius`` (of the mode each layer ends up with; missing layers use a bbox bound) for the
+    ``bis.stacking.LayerShape`` (maxRadius + XY footprint + pieces of the mode each layer ends up with) or a bare
+    ``LayerGeometry.maxRadius`` (footprint unknown); missing layers use a bbox bound - for the overlap-aware
     real-height stack; `presets` (PresetStore / dict / None = shared/presets.json) gives stackLift / stackGap.
-    ``layerDefaults.mode`` None keeps every layer's own mode."""
+    ``layerDefaults.mode`` None keeps every layer's own mode. Raster image layers stay flat cards."""
     p = project.model_copy(deep=True)
     ld = style.layerDefaults
     mats = list(style.layerMaterials or [])
+    kinds = element_kinds(p)
     for i, layer in enumerate(p.layers):
         material = mats[min(i, len(mats) - 1)] if mats else ld.material
         layer.material = material.model_copy(deep=True)
         layer.elementMaterials = {}   # the look replaces per-shape tweaks too (element ids are icon-specific)
         depth = ld.depth.model_copy(deep=True)
+        if stacking.is_image_layer(layer, kinds):
+            stacking.card_depth(depth)   # a raster is a flat card under every look (PLAN §11 round 8)
         depth.bevel = clamp_bevel(depth.bevel, depth.thickness)
         layer.depth = depth
         layer.shadow = ld.shadow.model_copy(deep=True)
@@ -235,7 +254,7 @@ def apply_style(project: Project, style: StyleSpec, max_radii: Optional[Mapping[
         if ld.mode is not None:
             layer.mode = ld.mode
     stacking.restack(p.layers, radii_or_bbox(p, max_radii), gap=style.zGap, art_scale=p.canvas.art.scale,
-                     presets=presets)
+                     presets=presets, art_offset=p.canvas.art)
     for ov in (p.appearances.dark, p.appearances.mono):
         for lo in ov.layers.values():
             lo.material = None
@@ -300,30 +319,41 @@ def project_style(store: "ProjectStore", pid: str, *, plate_fill: Optional[bool]
     is the clearance between real body heights)."""
     project = store.load(pid)
     try:
-        radii: Optional[dict[str, float]] = project_max_radii(store, project)
+        radii: Optional[dict[str, Any]] = project_layer_shapes(store, project)
     except Exception as e:  # noqa: BLE001 - a bbox bound still gives a sensible gap
-        log.warning("max radii of %s unavailable (%s); using bbox bounds", pid, e)
+        log.warning("layer shapes of %s unavailable (%s); using bbox bounds", pid, e)
         radii = None
     return extract_style(project, plate_fill=plate_fill, plate_shape=plate_shape,
                          auto_modes=store.auto_modes(project), max_radii=radii)
 
 
-def project_max_radii(store: "ProjectStore", project: Project, mode: Optional[str] = None) -> dict[str, float]:
-    """``LayerGeometry.maxRadius`` of every layer of `project` (built as `mode` when given, else each layer's own
-    mode). Uses the hash-cached geometry bundle, so the following render reuses it."""
+def project_layer_shapes(store: "ProjectStore", project: Project, mode: Optional[str] = None) -> dict[str, Any]:
+    """``bis.stacking.LayerShape`` (maxRadius, XY footprint, pieces) of every layer of `project` (built as `mode`
+    when given, else each layer's own mode) - from the SVG pipeline's element store (no geometry bundle needed);
+    a pipeline without that op (tests' fake): from the hash-cached geometry bundle (the following render reuses
+    it)."""
+    shapes = store.layer_shapes(project, mode) if hasattr(store, "layer_shapes") else None
+    if shapes is not None:
+        return shapes
     probe = project
     if mode is not None:
         probe = project.model_copy(deep=True)
         for layer in probe.layers:
             layer.mode = mode  # type: ignore[assignment]
     bundle, _ = store.geometry(probe)
-    return {lid: float(lg.maxRadius) for lid, lg in bundle.layers.items()}
+    return stacking.shapes_from_bundle(bundle, probe.layers, probe.canvas.art.scale)
 
 
-def layer_max_radii(store: "ProjectStore", project: Project, style: StyleSpec) -> dict[str, float]:
-    """Max inscribed radius of every layer's bodies *as the style will build them* (it depends on the layer mode;
-    a None style mode keeps each layer's own) - the real-height stack of :func:`apply_style`."""
-    return project_max_radii(store, project, style.layerDefaults.mode)
+def project_max_radii(store: "ProjectStore", project: Project, mode: Optional[str] = None) -> dict[str, float]:
+    """``LayerGeometry.maxRadius`` of every layer of `project` (built as `mode` when given, else each layer's own)."""
+    return {lid: float(stacking.as_shape(sh).maxRadius)
+            for lid, sh in project_layer_shapes(store, project, mode).items()}
+
+
+def layer_max_radii(store: "ProjectStore", project: Project, style: StyleSpec) -> dict[str, Any]:
+    """The shapes of every layer's bodies *as the style will build them* (maxRadius and pieces depend on the layer
+    mode; a None style mode keeps each layer's own) - the overlap-aware real-height stack of :func:`apply_style`."""
+    return project_layer_shapes(store, project, style.layerDefaults.mode)
 
 
 def restyle_project(store: "ProjectStore", pid: str, style: StyleSpec) -> Project:
@@ -337,6 +367,6 @@ def restyle_project(store: "ProjectStore", pid: str, style: StyleSpec) -> Projec
         except SvgPipelineUnavailable:
             raise
         except Exception as e:  # a style must still apply: bbox bounds over-estimate heights, never under
-            log.warning("max radii for %s unavailable (%s); stacking with bbox bounds", pid, e)
+            log.warning("layer shapes for %s unavailable (%s); stacking with bbox bounds", pid, e)
             radii = {}
         return store.save(apply_style(project, style, radii, presets=store.presets))

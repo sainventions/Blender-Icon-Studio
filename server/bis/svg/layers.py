@@ -1,15 +1,18 @@
 """Default layers: naming, depth stack, bevel and shadow defaults (PLAN §2 'Default stack on import',
-§11 round 7), plus helpers to re-stack layers after structural edits.
+§11 rounds 7 + 8), plus helpers to re-stack layers after structural edits.
 
 Import defaults (round 7): Liquid Glass bodies that read like thick, fully rounded glass - thickness 0.16, round
 edge radius = thickness / 2 (a pill edge; height-field bodies taper thin parts, so the bevel is clamped to
-thickness / 2 only - no safe-radius clamp), a gentle Poisson dome (inflate 0.25), physical shadows, and REAL-HEIGHT
-stacking (:mod:`bis.stacking`): z0 = stackLift, z(i+1) = z(i) + H(i) + stackGap with
-H = thickness + 2 · inflate · maxRadius · S (``LayerGeometry.maxRadius``, :func:`bis.svg.geometry.layer_max_radius`)."""
+thickness / 2 only - no safe-radius clamp), a gentle Poisson dome (inflate 0.25), physical shadows, and REAL-HEIGHT,
+OVERLAP-AWARE stacking (:mod:`bis.stacking`, round 8): a layer stacks only above the lower layers it overlaps in XY,
+z(i) = max(stackLift, max over overlapped lower j of z(j) + H(j) + stackGap) with H = max(thickness + 2 · inflate ·
+maxRadius · S, the in-layer stacked height) (footprints + radii: :func:`bis.svg.geometry.layer_shape`).
+Raster image layers (every member an <image>) are flat cards (round 8, ``bis.stacking.IMAGE_CARD``): no dome,
+thickness 0.02, round edge 0.006."""
 from __future__ import annotations
 
 import re
-from typing import Dict, Iterable, List, Mapping, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from bis import stacking
 from bis.models import Layer, LayerDepth, LayerShadow, MaterialSpec
@@ -121,44 +124,56 @@ def next_layer_ids(existing: Iterable[str], n: int) -> List[str]:
     return out
 
 
+def is_image_only(members: Sequence[Elem]) -> bool:
+    """Every member is a raster <image>: the layer is a flat card (round 8)."""
+    return bool(members) and all(m.image for m in members)
+
+
 def make_layer(lid: str, members: Sequence[Elem], template: Optional[Layer] = None,
                mode: Optional[str] = None) -> Layer:
     """A default layer (or a copy of `template`) holding `members`. `mode` ('individual' / 'combined', see
     :func:`bis.svg.tiling.auto_mode`) overrides the template's. ``depth.z`` is left for the stack
-    (:func:`restack`)."""
+    (:func:`restack`). A layer of raster images only is a flat card (:func:`bis.stacking.card_depth`: no dome, at
+    most 0.02 thick) - also when it is split off a vector layer."""
     ids = [m.id for m in members]
     name = layer_name(members)
     if template is None:
-        return Layer(id=lid, name=name, elementIds=ids, mode=mode or "individual", depth=default_depth(),
-                     material=MaterialSpec(preset=DEFAULT_MATERIAL), shadow=shadow_for(members))
-    lay = template.model_copy(deep=True)
-    lay.id = lid
-    lay.name = name
-    lay.elementIds = ids
-    if mode is not None:
-        lay.mode = mode
+        lay = Layer(id=lid, name=name, elementIds=ids, mode=mode or "individual", depth=default_depth(),
+                    material=MaterialSpec(preset=DEFAULT_MATERIAL), shadow=shadow_for(members))
+    else:
+        lay = template.model_copy(deep=True)
+        lay.id = lid
+        lay.name = name
+        lay.elementIds = ids
+        if mode is not None:
+            lay.mode = mode
+    if is_image_only(members):
+        stacking.card_depth(lay.depth)
     clamp_bevel(lay)
     return lay
 
 
-Radii = Mapping[str, float]
+Radii = Mapping[str, Any]   # layer id -> bis.stacking.LayerShape (or a bare maxRadius)
 
 
-def stack_gap(layers: Sequence[Layer], radii: Radii, art_scale: float = 1.0) -> Optional[float]:
-    """The gap of the layers' real-height stack (the import default, a look's zGap, a legacy i x 0.13 stack);
-    None when the user placed layers by hand (:func:`bis.stacking.stack_gap`)."""
-    return stacking.stack_gap(layers, radii, art_scale=art_scale)
+def stack_gap(layers: Sequence[Layer], radii: Radii, art_scale: float = 1.0,
+              art_offset=(0.0, 0.0)) -> Optional[float]:
+    """The gap of the layers' rule stack (the overlap-aware import default, a look's zGap, a round-7 sequential or a
+    legacy i x 0.13 stack); None when the user placed layers by hand (:func:`bis.stacking.stack_gap`). `radii`:
+    layer id → :class:`bis.stacking.LayerShape` (or a bare maxRadius: footprint unknown)."""
+    return stacking.stack_gap(layers, radii, art_scale=art_scale, art_offset=art_offset)
 
 
-def restack(layers: List[Layer], radii: Radii, gap: Optional[float], art_scale: float = 1.0) -> None:
-    """After a structural edit (in place): a stack that was a real-height stack (`gap` = its gap, see
-    :func:`stack_gap`) is re-stacked with the new layers' heights; a hand-placed stack (`gap` None) keeps every z
-    except that a layer reaching into its lower neighbour is lifted onto it (new layers slot in above their
+def restack(layers: List[Layer], radii: Radii, gap: Optional[float], art_scale: float = 1.0,
+            art_offset=(0.0, 0.0)) -> None:
+    """After a structural edit (in place): a stack that was a rule stack (`gap` = its gap, see :func:`stack_gap`)
+    is re-stacked overlap-aware with the new layers' heights; a hand-placed stack (`gap` None) keeps every z except
+    that a layer reaching into a lower layer it overlaps is lifted onto it (new layers slot in above their
     source)."""
     if gap is not None:
-        stacking.restack(layers, radii, gap=gap, art_scale=art_scale)
+        stacking.restack(layers, radii, gap=gap, art_scale=art_scale, art_offset=art_offset)
         return
-    stacking.lift_overlaps(layers, radii, art_scale=art_scale)
+    stacking.lift_overlaps(layers, radii, art_scale=art_scale, art_offset=art_offset)
 
 
 def members_for(store: ElementStore, ids: Sequence[str]) -> List[Elem]:

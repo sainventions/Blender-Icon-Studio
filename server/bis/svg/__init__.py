@@ -14,7 +14,7 @@
 
 Public API (PLAN.md §4 A): :func:`import_svg`, :func:`split_layers`, :func:`merge_layers`,
 :func:`split_layer`, :func:`move_elements`, :func:`build_geometry`, :func:`geometry_path`,
-:func:`thumbnail_png`, :func:`layer_thumbnail_png` (+ :func:`layer_auto_modes`). Invalid edits raise ``ValueError``
+:func:`thumbnail_png`, :func:`layer_thumbnail_png` (+ :func:`layer_auto_modes`, :func:`layer_shapes`). Invalid edits raise ``ValueError``
 (:class:`ZOrderError` for stacking-order violations)."""
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ from . import raster, textures
 
 __all__ = [
     "ImportResult", "ZOrderError", "import_svg", "split_layers", "merge_layers", "split_layer",
-    "move_elements", "layer_auto_modes", "build_geometry", "geometry_path", "thumbnail_png",
+    "move_elements", "layer_auto_modes", "layer_shapes", "build_geometry", "geometry_path", "thumbnail_png",
     "layer_thumbnail_png", "read_store", "PIPELINE_VERSION",
 ]
 
@@ -205,6 +205,19 @@ def move_elements(project_dir: Path, project: Project, element_ids: List[str],
     """Move elements to another layer (None = a new layer). Emptied layers are removed; the
     result is re-ordered to stay z-order consistent. Raises ZOrderError if impossible."""
     return _ops.move(read_store(project_dir), project, element_ids, to_layer_id)
+
+
+def layer_shapes(project_dir: Path, project: Project, mode: Optional[str] = None) -> Dict[str, object]:
+    """{layer id: :class:`bis.stacking.LayerShape`} - maxRadius, footprint and pieces of every layer's bodies as
+    built in `mode` (None = each layer's own), from the element store without building geometry: the overlap-aware
+    real-height stack of looks / styles (PLAN §11 round 8). Cached per layer content."""
+    store = read_store(project_dir)
+    probe = project
+    if mode is not None:
+        probe = project.model_copy(deep=True)
+        for L in probe.layers:
+            L.mode = mode  # type: ignore[assignment]
+    return dict(_ops.layer_shapes(store, probe.layers, float(project.canvas.art.scale)))
 
 
 def layer_auto_modes(project_dir: Path, project: Project) -> Dict[str, str]:

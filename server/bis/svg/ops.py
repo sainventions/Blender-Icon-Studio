@@ -11,9 +11,9 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from bis.models import Layer, Project
 from .elements import ElementStore, Elem, element_name, to_model
-from .geometry import layer_max_radius
-from .layers import (clamp_bevel, dedupe_names, layer_name, make_layer, members_for, next_layer_ids, restack,
-                     stack_gap)
+from .geometry import layer_max_radius, layer_shape
+from .layers import (clamp_bevel, dedupe_names, default_depth, is_image_only, layer_name, make_layer, members_for,
+                     next_layer_ids, restack, stack_gap)
 from .paths import clean_d, islands, skia_from_d, bounds
 from .prepass import auto_name
 from .split import Analysis, SplitParams, components, forced_units, split, topo_order, _unit_preserving
@@ -43,8 +43,9 @@ def fresh_layers(store: ElementStore, strategy: str, params: Optional[SplitParam
                  active: Optional[Iterable[str]] = None, art_scale: float = 1.0) -> Tuple[List[Layer], dict]:
     """Default layers for all non-plate (active) elements with the given strategy. The smart split
     keeps the pieces that tile one shape together; every layer gets its default mode ('combined'
-    for tiled art, :func:`bis.svg.tiling.auto_mode`) and the default depth, and the layers are stacked at
-    their REAL heights (:func:`bis.stacking.restack`; `art_scale` = ``canvas.art.scale``)."""
+    for tiled art, :func:`bis.svg.tiling.auto_mode`) and the default depth (raster-only layers: flat cards), and
+    the layers are stacked at their REAL heights, overlap-aware (:func:`bis.stacking.restack`, PLAN §11 round 8:
+    a layer stacks only above the lower layers it overlaps; `art_scale` = ``canvas.art.scale``)."""
     fg = foreground_indices(store, active)
     tiles = []
     if strategy == "smart":   # pieces that tile one shape, edge lines drawn under a piece, covered prints
@@ -54,15 +55,15 @@ def fresh_layers(store: ElementStore, strategy: str, params: Optional[SplitParam
     an = Analysis(store.elems, store.gaps, store.edges, fg, store.view_box, store.inside, tiles)
     groups, info = split(an, strategy, params)
     layers: List[Layer] = []
-    radii: Dict[str, float] = {}
+    shapes: Dict[str, stacking.LayerShape] = {}
     for i, g in enumerate(groups):
         members = [an.els[k] for k in g]
-        mode, mr = layer_defaults(store, [m.id for m in members])
+        mode, _mr = layer_defaults(store, [m.id for m in members])
         layers.append(make_layer(f"L{i + 1}", members, mode=mode))
-        radii[layers[-1].id] = mr
-    stacking.restack(layers, radii, art_scale=art_scale)
+        shapes[layers[-1].id] = layer_shape(store, layers[-1].elementIds, mode, S=art_scale)
+    stacking.restack(layers, shapes, art_scale=art_scale)
     info["combined"] = [L.id for L in layers if L.mode == "combined"]
-    info["maxRadius"] = radii
+    info["maxRadius"] = {lid: sh.maxRadius for lid, sh in shapes.items()}
     dedupe_names(layers)
     return layers, info
 
@@ -72,11 +73,24 @@ def layer_radii(store: ElementStore, layers: Sequence[Layer]) -> Dict[str, float
     return {L.id: layer_max_radius(store, L.elementIds, L.mode) for L in layers}
 
 
+def layer_shapes(store: ElementStore, layers: Sequence[Layer], art_scale: float = 1.0) -> Dict[str, stacking.LayerShape]:
+    """{layer id: :class:`bis.stacking.LayerShape` (maxRadius, footprint, pieces) of its bodies in its mode}
+    (cached per layer content) - what the overlap-aware stack needs."""
+    return {L.id: layer_shape(store, L.elementIds, L.mode, S=stacking.layer_scale(L, art_scale)) for L in layers}
+
+
 def _art_scale(project: Project) -> float:
     try:
         return float(project.canvas.art.scale)
     except (AttributeError, TypeError, ValueError):
         return 1.0
+
+
+def _art_offset(project: Project) -> Tuple[float, float]:
+    try:
+        return float(project.canvas.art.x), float(project.canvas.art.y)
+    except (AttributeError, TypeError, ValueError):
+        return 0.0, 0.0
 
 
 def _assign(store: ElementStore, layers: Sequence[Layer]) -> List[int]:
@@ -146,19 +160,41 @@ def _auto_named(L: Layer, members: Sequence[Elem]) -> bool:
 
 
 def _refresh(store: ElementStore, layers: List[Layer], auto: Dict[str, bool], gap: Optional[float],
-             art_scale: float = 1.0) -> List[Layer]:
-    """Names, real-height re-stack (`gap` of the stack before the edit, None = hand-placed) and unique names."""
+             art_scale: float = 1.0, art_offset: Tuple[float, float] = (0.0, 0.0)) -> List[Layer]:
+    """Names, real-height overlap-aware re-stack (`gap` of the stack before the edit, None = hand-placed) and
+    unique names."""
     for L in layers:
         if auto.get(L.id, True):
             L.name = layer_name(members_for(store, L.elementIds))
-    restack(layers, layer_radii(store, layers), gap, art_scale)
+    restack(layers, layer_shapes(store, layers, art_scale), gap, art_scale, art_offset)
     dedupe_names(layers)
     return layers
 
 
-def _stack_gap(store: ElementStore, layers: Sequence[Layer], art_scale: float) -> Optional[float]:
-    """The real-height stack gap of the layers BEFORE an edit (None = hand-placed z)."""
-    return stack_gap(layers, layer_radii(store, layers), art_scale)
+def _stack_gap(store: ElementStore, layers: Sequence[Layer], art_scale: float,
+               art_offset: Tuple[float, float] = (0.0, 0.0)) -> Optional[float]:
+    """The rule-stack gap of the layers BEFORE an edit (None = hand-placed z)."""
+    return stack_gap(layers, layer_shapes(store, layers, art_scale), art_scale, art_offset)
+
+
+def _is_card(store: ElementStore, L: Optional[Layer]) -> bool:
+    """The layer holds raster images only (a round-8 flat card)."""
+    return L is not None and is_image_only(members_for(store, L.elementIds))
+
+
+def _card_rule(store: ElementStore, L: Layer, was_card: bool, donor: Optional[Layer] = None) -> None:
+    """Flat raster cards across structural edits (PLAN §11 round 8; in place, z kept): a layer that NOW holds raster
+    images only becomes a flat card; a former card that now holds vector art too gets a full body back - the
+    depth of `donor` (a non-card layer the art came from) or the import default - instead of flattening the
+    vector art into a 0.02 card. A layer that stays a card (or stays vector) is left as it is."""
+    now_card = _is_card(store, L)
+    if now_card and not was_card:
+        stacking.card_depth(L.depth)
+    elif was_card and not now_card:
+        z = L.depth.z
+        L.depth = donor.depth.model_copy(deep=True) if donor is not None else default_depth()
+        L.depth.z = z
+    clamp_bevel(L)
 
 
 def _auto_flags(store: ElementStore, layers: Sequence[Layer]) -> Dict[str, bool]:
@@ -184,22 +220,25 @@ def merge(store: ElementStore, project: Project, layer_ids: Sequence[str]) -> Li
     layers = [L.model_copy(deep=True) for L in project.layers]
     auto = _auto_flags(store, layers)
     scale = _art_scale(project)
-    gap = _stack_gap(store, layers, scale)
+    offset = _art_offset(project)
+    gap = _stack_gap(store, layers, scale, offset)
     sel = sorted(ids, key=lambda i: pos[i])
     primary = layers[pos[sel[0]]]
     # layers still on their default mode -> the merged layer gets the default of its new content
     # (merging the tiles of one shape makes it 'combined'); a mode the user picked is kept
     derive = all(default_mode_kept(store, layers[pos[i]].mode, layers[pos[i]].elementIds) for i in sel)
+    was_card = _is_card(store, primary)
+    donor = next((layers[pos[i]] for i in sel if not _is_card(store, layers[pos[i]])), None)
     merged_ids = _sorted_ids(store, [e for i in sel for e in layers[pos[i]].elementIds])
     primary.elementIds = merged_ids
     if derive:
         primary.mode = auto_mode(store, merged_ids)
-    clamp_bevel(primary)
+    _card_rule(store, primary, was_card, donor)   # a card merged with vector art is a full body again
     auto[primary.id] = all(auto.get(i, True) for i in sel)
     keep = [L for L in layers if L.id not in sel[1:]]
     prio = [float(pos[L.id]) for L in keep]
     out = ordered_legal(store, keep, prio)
-    return _refresh(store, out, auto, gap, scale)
+    return _refresh(store, out, auto, gap, scale, offset)
 
 
 def move(store: ElementStore, project: Project, element_ids: Sequence[str], to_layer_id: Optional[str]) -> List[Layer]:
@@ -209,7 +248,8 @@ def move(store: ElementStore, project: Project, element_ids: Sequence[str], to_l
     layers = [L.model_copy(deep=True) for L in project.layers]
     auto = _auto_flags(store, layers)
     scale = _art_scale(project)
-    gap = _stack_gap(store, layers, scale)
+    offset = _art_offset(project)
+    gap = _stack_gap(store, layers, scale, offset)
     pos = {L.id: k for k, L in enumerate(layers)}
     if to_layer_id is not None and to_layer_id not in pos:
         raise ValueError(f"unknown layer id: {to_layer_id}")
@@ -217,6 +257,9 @@ def move(store: ElementStore, project: Project, element_ids: Sequence[str], to_l
     origin = next((L for L in layers if moving & set(L.elementIds)), None)
     touched = {L.id for L in layers if moving & set(L.elementIds)} | ({to_layer_id} if to_layer_id else set())
     derive = {L.id: default_mode_kept(store, L.mode, L.elementIds) for L in layers if L.id in touched}
+    cards = {L.id: _is_card(store, L) for L in layers if L.id in touched}
+    # the depth a former card takes when vector art joins it: the first non-card source layer's
+    donor = next((L for L in layers if moving & set(L.elementIds) and not cards.get(L.id)), None)
     for L in layers:
         L.elementIds = [e for e in L.elementIds if e not in moving]
     prio = {L.id: float(k) for k, L in enumerate(layers)}
@@ -233,6 +276,7 @@ def move(store: ElementStore, project: Project, element_ids: Sequence[str], to_l
         new = make_layer(new_id, members, template=origin, mode=mode)
         if origin is not None:   # slots in right above its source; the re-stack sorts out the heights
             new.depth.z = origin.depth.z
+            _card_rule(store, new, cards.get(origin.id, False), donor)   # a card template + vector art
         layers.append(new)
         prio[new_id] = (pos[origin.id] + 0.5) if origin is not None else -0.5
         auto[new_id] = True
@@ -242,9 +286,11 @@ def move(store: ElementStore, project: Project, element_ids: Sequence[str], to_l
             if mode != L.mode:
                 L.mode = mode
                 clamp_bevel(L)
+        if L.elementIds and L.id in cards:   # gave / got elements: raster-only -> flat card, card + vector -> body
+            _card_rule(store, L, cards[L.id], donor)
     keep = [L for L in layers if L.elementIds]
     out = ordered_legal(store, keep, [prio[L.id] for L in keep])
-    return _refresh(store, out, auto, gap, scale)
+    return _refresh(store, out, auto, gap, scale, offset)
 
 
 def split_layer(store: ElementStore, project: Project, layer_id: str, mode: str,
@@ -257,7 +303,8 @@ def split_layer(store: ElementStore, project: Project, layer_id: str, mode: str,
     layers = [L.model_copy(deep=True) for L in project.layers]
     auto = _auto_flags(store, layers)
     scale = _art_scale(project)
-    gap = _stack_gap(store, layers, scale)
+    offset = _art_offset(project)
+    gap = _stack_gap(store, layers, scale, offset)
     src = layers[pos[layer_id]]
     derive = default_mode_kept(store, src.mode, src.elementIds)
     idx = store.index
@@ -311,7 +358,7 @@ def split_layer(store: ElementStore, project: Project, layer_id: str, mode: str,
     out = layers[:k0] + pieces + layers[k0 + 1:]
     prio = [float(i) for i in range(len(out))]
     out = ordered_legal(store, out, prio)
-    return _refresh(store, out, auto, gap, scale)
+    return _refresh(store, out, auto, gap, scale, offset)
 
 
 def _expanded(store: ElementStore, ids: Sequence[str]) -> List[Elem]:

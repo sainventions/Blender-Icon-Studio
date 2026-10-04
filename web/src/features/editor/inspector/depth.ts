@@ -1,11 +1,14 @@
 // Depth controls of a layer (PLAN §11 Geometry): height-field bodies whose round edge has radius `bevel` ≤ thickness/2
 // (both renderers clamp to exactly that: blender_worker scene._layer, viewport layerDepth). Thin parts and tips taper
 // by themselves (z is limited by the inward distance), so no thin-feature limit applies any more: the inspector shows
-// Roundness = bevel / (thickness / 2) and 1 is a full pill edge on every part wide enough to take it.
+// Roundness = bevel / (thickness / 2) and 1 is a near-pill edge on every part wide enough to take it (round 8: the body
+// keeps a minimum vertical wall of 15 % of the half thickness, and thin parts are round tubes of their own width).
 //
-// Real-height stacking (PLAN §11 round 7, shared/presets.json "geometry" — the same rule as server bis.stacking): a
-// layer's bodies are H = thickness + 2 · inflate · maxRadius · S tall (LayerGeometry.maxRadius, S = canvas.art.scale ×
-// layer.transform.scale) and layers stack bottom → top: z0 = stackLift, z(i+1) = z(i) + H(i) + gap (gap = stackGap).
+// Real-height stacking (PLAN §11 rounds 7 + 8, shared/presets.json "geometry" — the same rule as server bis.stacking):
+// a layer's bodies are H = max(thickness + 2 · inflate · maxRadius · S, in-layer stacked height) tall
+// (LayerGeometry.maxRadius, S = canvas.art.scale × layer.transform.scale) and layers stack bottom → top OVERLAP-AWARE:
+// a layer only stacks above the lower layers whose footprints it overlaps in XY (features/editor/overlap.ts),
+// z(i) = max(stackLift, max over those j of z(j) + H(j) + gap) (gap = stackGap); layers side by side share the base.
 import type { Layer } from '../../../types'
 
 /** presets.json "geometry": where the stack starts and the clearance between neighbouring layers' bodies. */
@@ -38,7 +41,7 @@ export function bevelLimit(l: Layer): number {
   return Math.max(0, l.depth.thickness / 2)
 }
 
-/** Roundness 0..1 = bevel / bevelLimit (1 = full pill edge; with Inflate a lens / sphere). */
+/** Roundness 0..1 = bevel / bevelLimit (1 = near-pill edge; with Inflate a lens / sphere). */
 export function roundnessOf(l: Layer): number {
   const lim = bevelLimit(l)
   return lim > 1e-9 ? Math.min(1, Math.max(0, l.depth.bevel / lim)) : 0
@@ -68,24 +71,43 @@ export function ruleHeight(l: Layer, maxRadius: number | null | undefined, S: nu
 export type BodyHeight = (l: Layer) => number
 
 /**
- * Layers (bottom → top) re-stacked at their real heights: z0 = stackLift, z(i+1) = z(i) + H(i) + gap (gap = the rules'
- * stackGap unless given). Locked layers keep their z but still take their room in the stack. Returns the same array
- * when nothing moves.
+ * For every layer i the indices of the LOWER layers j < i whose footprints it overlaps in XY (server
+ * bis.stacking.overlap_lists; features/editor/overlap.ts computes them from the geometry bundle). Without them every
+ * layer overlaps every lower one — the round-7 sequential stack.
+ */
+export type LowerLists = number[][]
+
+/** Every layer overlaps every lower one (footprints unknown): the sequential stack. */
+export function allLower(n: number): LowerLists {
+  return Array.from({ length: n }, (_, i) => Array.from({ length: i }, (_, j) => j))
+}
+
+/**
+ * Layers (bottom → top) re-stacked at their real heights, OVERLAP-AWARE (PLAN §11 round 8, server stacking.restack):
+ * z(i) = max(stackLift, max over the lower layers j it overlaps of z(j) + H(j) + gap) — layers side by side share the
+ * base (gap = the rules' stackGap unless given). Locked layers keep their z (the ones above still clear them). The
+ * running z stays UNROUNDED like the server's (the output is rounded to 5 decimals). Returns the same array when nothing
+ * moves.
  */
 export function restack(
   layers: Layer[],
   heightOf: BodyHeight = (l) => l.depth.thickness,
   rules: StackRules = DEFAULT_STACK_RULES,
   gap: number = rules.stackGap,
+  lower: LowerLists = allLower(layers.length),
 ): Layer[] {
   const g = Math.max(0, num(gap, rules.stackGap))
-  let z = Math.max(0, num(rules.stackLift))
+  const lift = Math.max(0, num(rules.stackLift))
+  const z: number[] = []
+  const h: number[] = []
   let changed = false
-  const out = layers.map((l) => {
-    const nz = round5(z)
-    // a locked layer stays put; the next one starts above wherever it sits. The running z stays UNROUNDED (like the
-    // server's stacking.stack_z): accumulating the rounded values drifted 1e-5 off the server's import stack (Photos)
-    z = (l.locked ? Math.max(z, l.depth.z) : z) + Math.max(0, heightOf(l)) + g
+  const out = layers.map((l, i) => {
+    h.push(Math.max(0, heightOf(l)))
+    let zi = lift
+    for (const j of lower[i] ?? []) if (j < i) zi = Math.max(zi, z[j] + h[j] + g)
+    if (l.locked) zi = num(l.depth.z)
+    z.push(zi)
+    const nz = round5(zi)
     if (l.locked || Math.abs(l.depth.z - nz) < 1e-9) return l
     changed = true
     return { ...l, depth: { ...l.depth, z: nz } }
@@ -93,29 +115,74 @@ export function restack(
   return changed ? out : layers
 }
 
+/** For every layer: z(i) − max over its overlapped lower layers j of (z(j) + H(j)), null for a layer on the base
+ *  (server stacking.stack_clearances). */
+export function stackClearances(zs: number[], hs: number[], lower: LowerLists): (number | null)[] {
+  return zs.map((z, i) => {
+    const low = (lower[i] ?? []).filter((j) => j < i)
+    return low.length ? z - Math.max(...low.map((j) => zs[j] + hs[j])) : null
+  })
+}
+
 /**
- * server bis.stacking.stack_gap: the gap of a real-height stack (z0 = stackLift and ONE clearance between every pair of
- * neighbours), the rules' stackGap for the pre-round-7 default stack (z_i = i × 0.13) and for a single layer at stackLift
- * — null for a custom (hand-placed) stack.
+ * Server bis.stacking.stack_gap: the gap of a RULE stack, null for a custom (hand-placed) one. Rule stacks: the
+ * overlap-aware real-height stack (round 8: base layers at stackLift, every other layer one gap above its overlapped
+ * lower layers) and the round-7 sequential real-height stack (one gap between every pair of neighbours) — both give
+ * their gap — and the pre-round-7 default stack (z_i = i × 0.13) and a stack with no overlapping layers at all (every
+ * layer at stackLift) — both give the rules' stackGap.
  */
-export function stackGapOf(layers: Layer[], heightOf: BodyHeight, rules: StackRules = DEFAULT_STACK_RULES): number | null {
+export function stackGapOf(
+  layers: Layer[],
+  heightOf: BodyHeight,
+  rules: StackRules = DEFAULT_STACK_RULES,
+  lower: LowerLists = allLower(layers.length),
+): number | null {
   if (!layers.length) return null
   const zs = layers.map((l) => num(l.depth.z))
   if (zs.length > 1 && zs.every((z, i) => Math.abs(z - i * LEGACY_STEP) <= Z_TOL)) return rules.stackGap
   if (Math.abs(zs[0] - rules.stackLift) > Z_TOL) return null
+  const hs = layers.map((l) => heightOf(l))
+  const cl = stackClearances(zs, hs, lower)
+  const gaps = cl.filter((g): g is number => g !== null)
+  const baseOk = cl.every((g, i) => g !== null || Math.abs(zs[i] - rules.stackLift) <= Z_TOL)
+  const spread = (v: number[]) => Math.max(...v) - Math.min(...v)
+  const mean = (v: number[]) => round5(Math.max(0, v.reduce((a, b) => a + b, 0) / v.length))
+  if (baseOk) {
+    if (!gaps.length) return rules.stackGap
+    if (spread(gaps) <= 2 * Z_TOL && Math.min(...gaps) >= -Z_TOL) return mean(gaps)
+  }
+  // the round-7 sequential stack (one gap between every pair of neighbours)
   if (zs.length < 2) return rules.stackGap
-  const gaps = zs.slice(1).map((z, i) => z - (zs[i] + heightOf(layers[i])))
-  const lo = Math.min(...gaps)
-  const hi = Math.max(...gaps)
-  if (hi - lo > 2 * Z_TOL || lo < -Z_TOL) return null
-  return round5(Math.max(0, gaps.reduce((a, b) => a + b, 0) / gaps.length))
+  const seq = zs.slice(1).map((z, i) => z - (zs[i] + hs[i]))
+  if (spread(seq) > 2 * Z_TOL || Math.min(...seq) < -Z_TOL) return null
+  return mean(seq)
+}
+
+/**
+ * Pairs of layers [j, i] (j < i) whose bodies cut into each other (server stacking.interpenetrations): footprints that
+ * touch or overlap in XY (`touching`: overlap lists at a ~0 clearance) and z ranges [z, z + H] that overlap by more than
+ * Z_TOL → [j, i, overlap depth]. Hidden layers count too (they keep their slot).
+ */
+export function interpenetrations(layers: Layer[], heightOf: BodyHeight, touching: LowerLists): [number, number, number][] {
+  const zs = layers.map((l) => num(l.depth.z))
+  const hs = layers.map((l) => heightOf(l))
+  const out: [number, number, number][] = []
+  touching.forEach((low, i) => {
+    for (const j of low) {
+      if (j >= i) continue
+      const d = Math.min(zs[i] + hs[i], zs[j] + hs[j]) - Math.max(zs[i], zs[j])
+      if (d > Z_TOL) out.push([j, i, d])
+    }
+  })
+  return out
 }
 
 /**
  * Keep a real-height stack across an edit (the server re-stacks on structural edits; a PUT stores the project as sent,
- * so client-side edits re-stack here): when the layers BEFORE the edit formed a recognised stack (stackGapOf), the
- * edited layers are re-stacked with the same gap — a thicker / more inflated / rescaled / reordered / deleted layer
- * moves the ones above it. Custom stacks are left alone. Returns `after` itself when nothing moves.
+ * so client-side edits re-stack here): when the layers BEFORE the edit formed a recognised rule stack (stackGapOf), the
+ * edited layers are re-stacked overlap-aware with the same gap — a thicker / more inflated / rescaled / moved /
+ * reordered / deleted layer moves the layers above it that it overlaps. Custom stacks are left alone (the Depth section
+ * offers Re-stack when their bodies collide). Returns `after` itself when nothing moves.
  */
 export function keepStack(
   before: Layer[],
@@ -123,15 +190,22 @@ export function keepStack(
   heightBefore: BodyHeight,
   heightAfter: BodyHeight,
   rules: StackRules = DEFAULT_STACK_RULES,
+  lowerBefore: LowerLists = allLower(before.length),
+  lowerAfter: LowerLists = allLower(after.length),
 ): Layer[] {
-  const gap = stackGapOf(before, heightBefore, rules)
+  const gap = stackGapOf(before, heightBefore, rules, lowerBefore)
   if (gap === null || !after.length) return after
-  return restack(after, heightAfter, rules, gap)
+  return restack(after, heightAfter, rules, gap, lowerAfter)
 }
 
-/** True when an edit can change the stack heights / order (layer set, order, thickness, inflate, bevel, mode, scale). */
-export function stackAffected(before: Layer[], after: Layer[], artScaleBefore: number, artScaleAfter: number): boolean {
-  if (artScaleBefore !== artScaleAfter && after.length) return true
+type ArtLike = number | { scale: number; x?: number; y?: number }
+
+/** True when an edit can change the stack (layer set, order, thickness, inflate, bevel, mode, position / scale, art). */
+export function stackAffected(before: Layer[], after: Layer[], artBefore: ArtLike, artAfter: ArtLike): boolean {
+  const art = (a: ArtLike) => (typeof a === 'number' ? [a, 0, 0] : [a.scale, a.x ?? 0, a.y ?? 0])
+  const [sb, xb, yb] = art(artBefore)
+  const [sa, xa, ya] = art(artAfter)
+  if ((sb !== sa || xb !== xa || yb !== ya) && after.length) return true
   if (before === after) return false
   if (before.length !== after.length) return true
   for (let i = 0; i < after.length; i++) {
@@ -146,6 +220,8 @@ export function stackAffected(before: Layer[], after: Layer[], artScaleBefore: n
       da.inflate !== db.inflate ||
       da.bevel !== db.bevel ||
       a.transform.scale !== b.transform.scale ||
+      a.transform.x !== b.transform.x ||
+      a.transform.y !== b.transform.y ||
       a.mode !== b.mode
     )
       return true

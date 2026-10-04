@@ -324,9 +324,10 @@ function cachedInradius(key: string, splines: Spline[], S: number): number {
 }
 
 /**
- * World height of a layer's bodies — worker scene._body_height (PLAN §11 round 7, presets.json "geometry"):
- * H = thickness + 2 × inflate × maxRadius × S (LayerGeometry.maxRadius; without it the silhouette's own inradius) —
- * or, when pieces of the layer overlap, their real-height stack inside the layer (layerRelations).
+ * World height H of a layer's bodies — worker scene._body_height (PLAN §11 round 8, identical in the server's
+ * bis.stacking): H = max(rule height, in-layer stacked height). Rule height (presets.json "geometry") = thickness + 2 ×
+ * inflate × maxRadius × S (LayerGeometry.maxRadius; without it the silhouette's own inradius); in-layer stacked height =
+ * the real-height stack of the layer's OVERLAPPING pieces (layerRelations): max_j(shift_j + h_j) + max_j h_j.
  */
 export function layerBodyHeight(layer: Layer, lg: LayerGeometry, S: number): number {
   const t = Math.max(0, num(layer.depth.thickness, 0.1))
@@ -335,6 +336,12 @@ export function layerBodyHeight(layer: Layer, lg: LayerGeometry, S: number): num
   const base = `${lg.layerId}:${lg.hash}:${r5(S)}`
   const half = (spl: Spline[], key: string) => (k <= 0 ? t / 2 : halfHeight(t, b, k, cachedInradius(`${base}:${key}`, spl, S) * S))
   const regions = lg.regions ?? []
+  let rule = t
+  if (k > 0) {
+    const mr = lg.maxRadius
+    if (typeof mr === 'number' && Number.isFinite(mr) && mr > 0) rule = t + 2 * k * mr * S
+    else rule = Math.max(t, 2 * half(lg.silhouette?.length ? lg.silhouette : regions.flatMap((r) => r.splines ?? []), 'sil'))
+  }
   if (layer.mode !== 'combined' && regions.length > 1) {
     const pairs = layerRelations(lg, S).stack
     if (pairs.length) {
@@ -346,14 +353,10 @@ export function layerBodyHeight(layer: Layer, lg: LayerGeometry, S: number): num
         top = Math.max(top, sh[i] + h)
         hmax = Math.max(hmax, h)
       })
-      return top + hmax
+      return Math.max(rule, top + hmax)
     }
   }
-  if (k <= 0) return t
-  const mr = lg.maxRadius
-  if (typeof mr === 'number' && Number.isFinite(mr) && mr > 0) return t + 2 * k * mr * S
-  const spl = lg.silhouette?.length ? lg.silhouette : regions.flatMap((r) => r.splines ?? [])
-  return Math.max(t, 2 * half(spl, 'sil'))
+  return rule
 }
 
 /**

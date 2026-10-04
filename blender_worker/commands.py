@@ -305,7 +305,9 @@ def cmd_scene_info(ctx: Context, args: dict, progress) -> dict:
                             "types": sorted(n.bl_idname for n in nodes), "principled": values,
                             "linked": sorted(s.name for s in (bsdf[0].inputs if bsdf else []) if s.is_linked),
                             "raytraceRefraction": bool(m.use_raytrace_refraction), "users": m.users,
-                            "renderMethod": m.surface_render_method}
+                            "renderMethod": m.surface_render_method,
+                            "transparencyOverlap": bool(m.use_transparency_overlap),
+                            "thicknessMode": m.thickness_mode}
     objs = []
     for ob in bpy.data.objects:
         if ob.name.startswith("BIS"):
@@ -315,7 +317,8 @@ def cmd_scene_info(ctx: Context, args: dict, progress) -> dict:
                          ob.material_slots[0].material else None,
                          "location": [round(v, 5) for v in ob.matrix_world.translation],
                          "visibleTransmission": bool(ob.visible_transmission),
-                         "visibleShadow": bool(ob.visible_shadow)})
+                         "visibleShadow": bool(ob.visible_shadow),
+                         "hideProbeSphere": bool(getattr(ob, "hide_probe_sphere", False))})
             if args.get("check") and ob.type == "MESH" and ob.data and ob.data.get("bis_route") == "heightfield":
                 # the body mesh: non-manifold edges, self-intersections, normals facing away from their faces
                 objs[-1]["check"] = heightfield.check_mesh(ob.data)

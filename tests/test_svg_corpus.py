@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from conftest import CORPUS_DIR, SVGTESTS_DIR
+from conftest import CORPUS_DIR, SVGTESTS_DIR, assert_rule_stack
 
 import bis.svg as svg
 from bis import stacking
@@ -53,10 +53,16 @@ def test_icon(path, import_icon):
         assert Path(lg.texturePath).exists()
         assert 0 <= L.depth.bevel <= L.depth.thickness / 2 + 1e-9
         assert lg.maxRadius > 0
-    # round 7: the import stack is the real-height stack for the bundle's max radii (no interpenetration)
-    gaps = stacking.stack_gaps(project.layers, {k: v.maxRadius for k, v in bundle.layers.items()},
-                               project.canvas.art.scale)
-    assert gaps == pytest.approx([stacking.geometry_rules()["stackGap"]] * len(gaps), abs=2e-4)
+    # rounds 7 + 8: the import stack is the overlap-aware real-height stack for the bundle's geometry (footprints +
+    # max radii measured from the exported splines): reproduced exactly, no interpenetrating layers; raster-only
+    # layers are flat cards
+    assert_rule_stack(project, bundle)
+    kinds = {e.id: e.kind for e in project.elements}
+    for L in project.layers:
+        if stacking.is_image_layer(L, kinds):
+            assert (L.depth.thickness, L.depth.bevel, L.depth.inflate) == (0.02, 0.006, 0.0), L.name
+        else:
+            assert (L.depth.thickness, L.depth.bevel, L.depth.inflate) == (0.16, 0.08, 0.25), L.name
     vb = res.source.viewBox
     w = 160
     h = max(1, int(round(w * vb[3] / vb[2])))

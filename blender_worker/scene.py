@@ -12,7 +12,8 @@ Layout (PLAN §3, D1): icon in the XY plane, camera on +Z looking −Z, 1 BU = 1
                                       point stays on z). Pieces of one layer never interpenetrate: touching ones
                                       pull back INSET_GAP, overlapping ones stack by real height (_relations)
     BIS Rig (collection)              camera (front / CAD iso orthographic / perspective), then the light rig and
-                                      the world turned with the camera (camera-relative lighting, round 7), wallpaper
+                                      the world turned with the camera (camera-relative lighting, round 7), wallpaper,
+                                      BIS Probe: EEVEE sphere probe of the plate (refraction fallback, round 8)
 
 Everything is updated in place between renders: objects/empties are reused by name, piece meshes come from
 heightfield's cache (layer hash + depth params), materials update their node values in place.
@@ -40,6 +41,10 @@ PLATE_WALLPAPER_GAP = 0.9  # wallpaper plane below the plate's back face
 STACK_GAP = 0.002          # overlapping pieces of one layer are stacked by their real heights, this far apart
 INSET_GAP = 0.003          # touching pieces of one layer: the lower one pulls back this far from the upper one
 TOUCH_TOL = 0.0018         # world: pieces closer than this (3 x heightfield.CHORD_TOL) touch
+PROBE_NAME = "BIS Probe"   # EEVEE sphere light probe of the plate (see SceneBuilder._probe)
+PROBE_Z = 0.02             # world: its capture point, just above the plate's front face (z = 0)
+PROBE_REACH = 1.5          # its influence radius beyond the subject's top / the plate (world units)
+FRONT_TILT = 2e-4          # rad: head-on cameras are pitched this much about the world origin (see SceneBuilder._camera)
 
 
 def _collection(name: str, parent: Optional[bpy.types.Collection] = None) -> bpy.types.Collection:
@@ -313,8 +318,11 @@ class SceneBuilder:
                 fplan = framing.ortho_plan([(pts, cam["iso"])], zoom)
         cam_ob = self._camera(rig_col, cam, full_bleed, fplan)
         # camera-relative studio (PLAN §11 round 7): the key / rim / fill rig and the world are defined in the camera's
-        # frame (lighting.angle is relative to the view), so iso / perspective / animated views light like head-on
+        # frame (lighting.angle is relative to the view), so iso / perspective / animated views light like head-on;
+        # without the head-on FRONT_TILT nudge (a numerical guard of the camera only: the rig stays where it was)
         view = cam_ob.matrix_world.to_3x3().normalized()
+        if cam_ob.get("bis_tilt"):
+            view = Matrix.Rotation(-FRONT_TILT, 3, "X") @ view
         lighting.update_lights(scene, rig_col, rig, engine, view)
         lighting.update_world(scene, rig, (*hex_to_linear(backdrop_color), 1.0), engine, view)
 
@@ -365,6 +373,9 @@ class SceneBuilder:
             self._wallpaper(rig_col, wp_kind, plate["thickness"], camera_visible=(backdrop == "wallpaper"))
             keep.add("BIS Wallpaper")
 
+        # ---- EEVEE: the plate's sphere light probe (what refraction falls back to) ---------------------------
+        self._probe(rig_col, eff, bnd, sa, plate_ok)
+
         # ---- cleanup stale BIS objects / materials ---------------------------------------------------
         for ob in list(icon_col.objects) + [o for o in rig_col.objects if o.name == "BIS Wallpaper"]:
             if ob.name not in keep:
@@ -407,12 +418,18 @@ class SceneBuilder:
         zoom = max(0.05, float(cam.get("zoom", 1.0)))
         cd.clip_start = 0.05
         cd.clip_end = 200.0
+        # head-on views are pitched by FRONT_TILT (0.01°, < 0.05 px at 512) about the world origin: an orthographic view
+        # EXACTLY parallel to a flat face's normal makes EEVEE's forward (alpha-blended) refraction NaN — flat
+        # translucent glass and flat soft-alpha raster cards rendered as pure black discs in drafts at some art scales
+        # (whether the transformed normal stays exactly (0, 0, 1) depends on float rounding; round-8 review)
+        tilt = Matrix.Rotation(FRONT_TILT, 4, "X")
+        ob["bis_tilt"] = bool(full_bleed or not fplan or (fplan.get("kind") == "ortho" and _iso(cam) <= 0.0))
         if full_bleed or not fplan:
             # front: the fixed App-Store framing (room for shadows); unchanged by auto-framing
             cd.type = "ORTHO"
             cd.ortho_scale = (2.0 if full_bleed else 2.24) / zoom
             cd.shift_x = cd.shift_y = 0.0
-            ob.matrix_world = Matrix.Translation((0.0, 0.0, 10.0))
+            ob.matrix_world = tilt @ Matrix.Translation((0.0, 0.0, 10.0))
         elif fplan.get("kind") == "ortho":
             # CAD iso view: orthographic, rotated head-on -> isometric, real z distances (framing.ortho_plan)
             cd.type = "ORTHO"
@@ -422,7 +439,7 @@ class SceneBuilder:
             cd.shift_x, cd.shift_y = (float(s) for s in fplan["shift"])
             m = Matrix([list(r) for r in rot]).to_4x4()
             m.translation = Vector([float(c) for c in pos])
-            ob.matrix_world = m
+            ob.matrix_world = tilt @ m if ob["bis_tilt"] else m
             cd.clip_end = max(200.0, float(fplan.get("clip", 200.0)))
         else:
             cd.type = "PERSP"
@@ -482,9 +499,11 @@ class SceneBuilder:
         return out
 
     def _body_height(self, Lr: dict, g: dict, S: float) -> float:
-        """World height of a layer's bodies (PLAN §11 round 7, presets.json "geometry"): H = thickness +
-        2 × inflate × maxRadius (LayerGeometry.maxRadius; the worker's own inradius of the silhouette when the bundle
-        has none) — plus the real-height stacking of overlapping pieces inside the layer (:meth:`_relations`)."""
+        """World height H of a layer's bodies (PLAN §11 round 8, identical in the server's bis.stacking and the web):
+        H = max(rule height, in-layer stacked height). Rule height (presets.json "geometry") = thickness + 2 × inflate ×
+        maxRadius × S (LayerGeometry.maxRadius; the worker's own inradius of the silhouette when the bundle has none);
+        in-layer stacked height = the real-height stack of the layer's OVERLAPPING pieces (:meth:`_relations`, the same
+        stack :meth:`_layer` builds): max_j(shift_j + h_j) + max_j h_j with every body's half height h_j."""
         dp = Lr["depth"]
         th = max(0.0, float(dp.get("thickness", 0.1)))
         k = max(0.0, min(1.0, float(dp.get("inflate", 0.0) or 0.0)))
@@ -496,6 +515,14 @@ class SceneBuilder:
             return heightfield.half_height(th, b, k, heightfield.inradius(spl, S, key) * S)
 
         regions = g.get("regions") or []
+        mr = g.get("maxRadius")
+        if k <= 0.0:
+            rule = th
+        elif isinstance(mr, (int, float)) and mr > 0:
+            rule = th + 2.0 * k * float(mr) * S
+        else:
+            spl = g.get("silhouette") or [s for r in regions for s in r.get("splines") or []]
+            rule = max(th, 2.0 * half(spl, "D-" + geo_key(g, Lr["id"])))
         if Lr.get("mode") != "combined" and len(regions) > 1:
             pids = [f"r{i}" for i in range(len(regions))]
             pairs = self._relations(g, Lr["id"], pids, S)["stack"]
@@ -503,14 +530,8 @@ class SceneBuilder:
                 hk = "D-" + geo_key(g, Lr["id"])
                 hs = [half(r.get("splines") or [], f"{hk}-r{i}") for i, r in enumerate(regions)]
                 sh = heightfield.stack_shifts(len(hs), pairs, hs, STACK_GAP)
-                return float(max(s + h for s, h in zip(sh, hs)) + max(hs))
-        if k <= 0.0:
-            return th
-        mr = g.get("maxRadius")
-        if isinstance(mr, (int, float)) and mr > 0:
-            return th + 2.0 * k * float(mr) * S
-        spl = g.get("silhouette") or [s for r in regions for s in r.get("splines") or []]
-        return max(th, 2.0 * half(spl, "D-" + geo_key(g, Lr["id"])))
+                return max(rule, float(max(s + h for s, h in zip(sh, hs)) + max(hs)))
+        return rule
 
     def _relations(self, g: dict, lid: str, pids: list, S: float) -> dict:
         """How the pieces of one layer meet (PLAN §11 round 7; pieces = regions 'r<k>' in paint order, cached by the
@@ -610,6 +631,12 @@ class SceneBuilder:
         _set_material(ob, mat)
         self._specs.append(spec)
         ob.visible_shadow = True
+        # the plate is what the plate probe captures (_probe) — unless it is glass itself (clear / tinted renditions:
+        # frosted glass over the wallpaper): then the probe sees the wallpaper beneath it, which is what Cycles' rays
+        # reach through it (a probe of the glass plate itself left the plate a flat grey in drafts, round-8 review)
+        hide = materials.is_transmissive(spec["params"])
+        if ob.hide_probe_sphere != hide:
+            ob.hide_probe_sphere = hide
 
     # -------------------------------------------------------------------------- layers
     def _covered_pieces(self, layers: list, geos: dict, art: dict) -> set:
@@ -807,6 +834,8 @@ class SceneBuilder:
             _set_material(ob, pmat)
             if ob.visible_shadow != cast:
                 ob.visible_shadow = cast
+            if not ob.hide_probe_sphere:
+                ob.hide_probe_sphere = True     # the plate probe sees the plate only (_probe)
             names.add(ob.name)
             stats["pieces"] += 1
         # every body of the layer shares one mid-plane at z + thickness/2; an inflated layer is lifted so that its
@@ -841,6 +870,8 @@ class SceneBuilder:
             _set_material(ob, cmat)
             if ob.visible_shadow != cast:
                 ob.visible_shadow = cast
+            if not ob.hide_probe_sphere:
+                ob.hide_probe_sphere = True
             names.add(ob.name)
         return names, mats
 
@@ -896,6 +927,50 @@ class SceneBuilder:
             ob.data.materials.append(mat)
         else:
             ob.data.materials[0] = mat
+
+    # -------------------------------------------------------------------------- EEVEE plate probe
+    def _probe(self, col, eff: dict, bnd: dict, sa: float, plate_ok: bool) -> None:
+        """EEVEE sphere light probe of the PLATE (Cycles ignores light probes; QA r9 N1 / N2).
+
+        EEVEE refracts by screen-space ray tracing; a ray that finds nothing behind the glass on screen — glass floating
+        above the plate in iso / perspective views, glass beyond the plate's silhouette — and every alpha-BLENDED surface
+        (translucent glass cannot trace) falls back to the light probes. Without this probe that was the studio world
+        behind the icon, which is dark: Photos' floating petals at iso read (76,65,50) against Cycles' (155,126,85), and a
+        66 % Contacts head rendered near-black. The probe captures the scene from just above the plate's front face with
+        every layer body hidden from it (Object.hide_probe_sphere), so its lower hemisphere is the lit plate (and the
+        wallpaper / world beyond its edge) — what Cycles' rays reach through the glass; a glass plate (clear / tinted
+        renditions) is hidden too, so the probe shows the wallpaper beneath it (:meth:`_plate`). The viewport does the
+        same by drawing the studio behind the icon in its transmission pass. Scene-level only: materials are untouched.
+        Limit: the capture is a single EEVEE sample and the bodies' (transparent) shadows on the plate are in it, noisy —
+        flat glass that would read it through a large magnification stays raytraced (materials.art_alpha_is_soft)."""
+        ob = bpy.data.objects.get(PROBE_NAME)
+        layers = [Lr for Lr in eff["layers"] if Lr.get("visible", True) and Lr["id"] in bnd["layers"]]
+        if ob is not None and (not (plate_ok and layers) or ob.type != "LIGHT_PROBE"):
+            bpy.data.objects.remove(ob, do_unlink=True)
+            ob = None
+        if not (plate_ok and layers):
+            return
+        if ob is None:
+            lp = bpy.data.lightprobes.get(PROBE_NAME)
+            if lp is None or lp.type != "SPHERE":
+                lp = bpy.data.lightprobes.new(PROBE_NAME, "SPHERE")
+            ob = bpy.data.objects.new(PROBE_NAME, lp)
+        if ob.name not in col.objects:
+            col.objects.link(ob)
+        top = 0.0
+        for Lr in layers:
+            sl = float(Lr["transform"].get("scale", 1.0))
+            top = max(top, float(Lr["depth"].get("z", 0.0)) + LAYER_EPS
+                      + self._body_height(Lr, bnd["layers"][Lr["id"]], sa * sl))
+        lp = ob.data
+        settings = {"influence_type": "ELIPSOID", "influence_distance": max(1.5, top) + PROBE_REACH,
+                    "falloff": 0.2, "clip_start": 0.002, "clip_end": 100.0}
+        for k, v in settings.items():
+            cur = getattr(lp, k)
+            if (abs(cur - v) > 1e-6) if isinstance(v, float) else cur != v:
+                setattr(lp, k, v)
+        if tuple(ob.location) != (0.0, 0.0, PROBE_Z):
+            ob.location = (0.0, 0.0, PROBE_Z)
 
     def specs(self) -> list:
         return list(self._specs)

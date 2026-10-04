@@ -56,11 +56,70 @@ def test_inflate_dome_and_sphere():
     assert H.half_height(t, b, k, D) == pytest.approx(t / 2 + k * D)
     assert np.isinf(H.slope(np.array([0.0]), 0.0, k, D)[0])           # inflate alone also meets the rim vertically
     assert H.slope(np.array([D]), b, k, D)[0] == pytest.approx(0.0)
-    # bevel = radius = half the thickness: a disc of radius R becomes a sphere z(r) = sqrt(R² − r²)
+    # bevel = radius = half the thickness: a disc of radius R becomes a near-sphere — a round edge of radius
+    # (1 − WALL_MIN)·R on the minimum wall WALL_MIN·R (round 8: no knife-thin rims)
     R = 0.2
     r = np.linspace(0, R, 9)
     z = H.profile(R - r, 2 * R, R, 0.0, R)
-    assert np.allclose(z, np.sqrt(R * R - r * r))
+    b = (1.0 - H.WALL_MIN) * R
+    assert H.rim_bevel(2 * R, R) == pytest.approx(b) and H.wall_half(2 * R, R) == pytest.approx(H.WALL_MIN * R)
+    assert np.allclose(z, H.WALL_MIN * R + np.sqrt(b * b - (b - np.minimum(R - r, b)) ** 2))
+    assert z[0] == pytest.approx(R) and z[-1] == pytest.approx(H.WALL_MIN * R)
+
+
+def test_round_edge_is_capped_at_the_local_half_width():
+    """Round 8 (QA r9 N4): the round-edge radius is capped LOCALLY. The disc model: an island narrower than the bevel
+    is a round body of radius D (slope 0 at its centre: no roof ridge), its half height e + min(b, D)."""
+    t, b = 0.16, 0.06
+    e = H.wall_half(t, b)
+    for D in (0.01, 0.03, 0.059, 0.2):
+        assert H.half_height(t, b, 0.0, D) == pytest.approx(e + min(b, D))
+        assert H.slope(np.array([D]), b, 0.0, D)[0] == pytest.approx(0.0, abs=1e-9)    # flat on the spine / apex
+    d = np.linspace(0.0, 0.02, 5)
+    assert np.allclose(H.rim_height(d, 0.02), np.sqrt(0.02 ** 2 - (0.02 - d) ** 2))   # a tube of radius w
+    sd, sb = H.rim_slopes(np.array([0.0, 0.01, 0.02, 0.03]), np.full(4, 0.02))
+    assert np.isinf(sd[0]) and sd[2] == 0.0 and sd[3] == 0.0 and sb[3] == 1.0
+
+
+def test_local_width_of_strips_discs_and_corners():
+    """local_width(): the largest tangent disc at each outline vertex — a strip's half width along its sides, a disc's
+    radius; the sliding max over ±b keeps a wide part's corner at the plain round edge (w ≥ b there)."""
+    strip = _poly([(-0.5, -0.03), (0.5, -0.03), (0.5, 0.03), (-0.5, 0.03)])
+    ol, D = _outline([strip], 0.08)
+    w = H.local_width(ol, D, 2 * H.CHORD_TOL)
+    side = np.abs(np.vstack(ol.rings)[:, 0]) < 0.4
+    assert np.allclose(w[side], 0.03, atol=0.0015)
+    disc = [G.circle_spline(0.0, 0.0, 0.05)]
+    ol, D = _outline(disc, 0.08)
+    assert np.allclose(H.local_width(ol, D, 2 * H.CHORD_TOL), 0.05, atol=0.003)
+    sq = [G.rect_spline(-0.4, -0.4, 0.4, 0.4)]
+    ol, D = _outline(sq, 0.08)
+    raw = H.local_width(ol, D, 2 * H.CHORD_TOL)
+    win = H.local_width(ol, D, 2 * H.CHORD_TOL, 0.08)
+    corner = np.hypot(*(np.abs(np.vstack(ol.rings)) - 0.4).T) < 1e-9
+    assert raw[corner].max() < 0.01 and win[corner].min() > 0.06       # the corner itself → 0; windowed: wide again
+    # blend_width on the strip: the spine gets the half width from both sides, beside a side its own foot's value
+    ol, D = _outline([strip], 0.08)
+    w = H.local_width(ol, D, 2 * H.CHORD_TOL, 0.08)
+    bw, gw, d, gd = H.blend_width(ol, w, np.array([(0.0, 0.0), (0.1, 0.02), (0.1, -0.025)]))
+    assert np.allclose(bw, 0.03, atol=0.002) and np.allclose(d, [0.03, 0.01, 0.005], atol=1e-6)
+    assert np.abs(gw).max() < 0.05                                       # constant width: no slope
+
+
+def test_island_apex_is_deterministic():
+    """Round 8: the inradius probe's start cell and moves break ties deterministically (a rectangle's medial plateau;
+    float32 vs float64 noise): the apex of a key-like rounded rectangle is its centre, and a tiny perturbation of the
+    distances (a mirrored copy) gives the mirrored apex."""
+    r = G.rect_spline(-0.3, -0.1, 0.5, 0.1)
+    ol, _ = _outline([r], 0.04)
+    c: dict = {}
+    H.island_inradius(ol, centres=c)
+    assert c[0][0] == pytest.approx(0.1, abs=0.02) and c[0][1] == pytest.approx(0.0, abs=0.01)
+    m = G.rect_spline(-0.5, -0.1, 0.3, 0.1)                            # the mirror image
+    ol2, _ = _outline([m], 0.04)
+    c2: dict = {}
+    H.island_inradius(ol2, centres=c2)
+    assert c2[0][0] == pytest.approx(-c[0][0], abs=0.02)
 
 
 def test_ring_distances_are_graded_toward_the_rim():

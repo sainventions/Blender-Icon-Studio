@@ -14,6 +14,9 @@
 // ring + its holes + Steiner points, then Lawson flips to the Delaunay one) instead of mathutils' delaunay_2d_cdt.
 // The pieces of ONE layer meet like in scene.py (_relations): touching ones pull back INSET_GAP from each other,
 // overlapping ones stack by their real heights (ringsRelation / insetRings / stackShifts below).
+// Round 8 (mirrored): a minimum vertical wall (rimBevel, WALL_MIN), the round-edge radius capped at each part's LOCAL
+// half-width (localWidth / blendWidth / rimRadius: thin strokes are round tubes, small discs spheres, no roof ridge),
+// medial points bisected onto the spine, and a deterministic dome apex (islandInradius).
 //
 // Units: everything is in the piece's LOCAL units (art units of its splines); tolerances are WORLD units divided by
 // `scale` (art scale × layer scale), exactly like the worker. The body is centred on its mid-plane z = 0.
@@ -54,26 +57,56 @@ export const POISSON_F = 4.0
 /** Conjugate-gradient stop: |residual| ≤ POISSON_TOL × |load|. */
 export const POISSON_TOL = 1e-5
 export const POISSON_MAX_ITER = 4000
+/** The round edge keeps at least this fraction of the half thickness as a vertical wall (round 8, rimBevel). */
+export const WALL_MIN = 0.15
+/** Bisection steps of the local half-width at every outline vertex (localWidth, SAMPLING 3c). */
+export const WIDTH_BISECT = 10
+/** Its absolute slack × CHORD_TOL: a disc tangent to the TRUE curve pokes out of the sampled outline. */
+export const WIDTH_TOL = 2.0
+/** Foot points of a vertex blend their local half-widths over this × its distance (blendWidth). */
+export const WIDTH_BLEND = 0.5
+/** × the inradius grid cell: distances this close tie (deterministic apex, SAMPLING 2). */
+export const APEX_TIE = 1e-4
 
 type Ring = Float64Array // flat x,y pairs, no repeated closing point
 
 // ================================================================================================ profile
-/** e = max(t/2 − b, 0): half height of the vertical side wall. */
-export function wallHalf(thickness: number, bevel: number): number {
-  return Math.max(thickness / 2 - bevel, 0)
+/** The round-edge radius a body really gets: b = min(bevel, (1 − WALL_MIN)·t/2) — a minimum vertical wall of WALL_MIN ×
+ *  the half thickness (round 8: knife-thin rims made tube ends refract the studio's dark side — Gemini's tip notch). */
+export function rimBevel(thickness: number, bevel: number): number {
+  return Math.max(0, Math.min(bevel, ((1 - WALL_MIN) * thickness) / 2))
 }
 
-/** Top height z(d) = e + hb(d) + inflate·D·sqrt(1 − (1 − min(d/D, 1))²) (mirrored for the bottom): the round edge plus
- *  the DISC MODEL of the Poisson dome (exact for a disc of radius D; a body itself uses its solved u — buildBody).
- *  Used for the round edge (inflate 0), sampling and the half-height bound. */
+/** e = max(t/2 − b, 0) with b = rimBevel (≥ WALL_MIN·t/2): half height of the vertical side wall. */
+export function wallHalf(thickness: number, bevel: number): number {
+  return Math.max(thickness / 2 - rimBevel(thickness, bevel), 0)
+}
+
+/** hb(d; β) = sqrt(β² − (β − min(d, β))²): the round edge, a quarter circle of radius β (flat beyond d = β). */
+export function rimHeight(d: number, beta: number): number {
+  const dd = Math.max(d, 0)
+  const bb = Math.max(beta, 0)
+  return Math.sqrt(Math.max(bb * bb - (bb - Math.min(dd, bb)) ** 2, 0))
+}
+
+/** (∂hb/∂d, ∂hb/∂β) of rimHeight: ((β − d)/hb, d/hb) for d < β (∂/∂d infinite at d = 0), else (0, 1). */
+export function rimSlopes(d: number, beta: number): [number, number] {
+  const dd = Math.max(d, 0)
+  const bb = Math.max(beta, 0)
+  if (!(dd < bb)) return [0, 1]
+  const hb = rimHeight(dd, bb)
+  return hb > 0 ? [(bb - dd) / hb, dd / hb] : [Infinity, 0]
+}
+
+/** Top height z(d) = e + hb(d; min(b, D)) + inflate·D·sqrt(1 − (1 − min(d/D, 1))²) (mirrored for the bottom): the DISC
+ *  MODEL of an island of inradius D — its local half-width is D everywhere, so the round edge is capped at D (round 8: a
+ *  disc narrower than the bevel is a sphere) — plus the disc model of the Poisson dome (a body itself uses its solved u
+ *  and the local half-width — buildBody). Used for sampling and the half height. b = rimBevel(thickness, bevel). */
 export function profile(d: number, thickness: number, bevel: number, inflate: number, D: number): number {
   const dd = Math.max(d, 0)
-  const b = Math.max(0, bevel)
+  const b = rimBevel(thickness, bevel)
   let z = wallHalf(thickness, b)
-  if (b > 0) {
-    const db = Math.min(dd, b)
-    z += Math.sqrt(Math.max(b * b - (b - db) ** 2, 0))
-  }
+  if (b > 0) z += rimHeight(dd, Math.min(b, Math.max(D, 1e-12)))
   const k = Math.max(0, inflate)
   if (k > 0) {
     const Dv = Math.max(D, 1e-12)
@@ -83,15 +116,13 @@ export function profile(d: number, thickness: number, bevel: number, inflate: nu
   return z
 }
 
-/** dz/dd of profile (Infinity at d = 0 when bevel > 0 or inflate > 0). */
+/** dz/dd of profile with the round edge capped at D (Infinity at d = 0 when bevel > 0 or inflate > 0). `bevel` is used
+ *  as given (the builder passes the rimBevel'd radius). */
 export function slope(d: number, bevel: number, inflate: number, D: number): number {
   const dd = Math.max(d, 0)
   const b = Math.max(0, bevel)
   let s = 0
-  if (b > 0 && dd < b) {
-    const hb = Math.sqrt(Math.max(b * b - (b - Math.min(dd, b)) ** 2, 0))
-    s += hb > 0 ? (b - dd) / hb : Infinity
-  }
+  if (b > 0) s += rimSlopes(dd, Math.min(b, Math.max(D, 1e-12)))[0]
   const k = Math.max(0, inflate)
   if (k > 0) {
     const Dv = Math.max(D, 1e-12)
@@ -104,7 +135,8 @@ export function slope(d: number, bevel: number, inflate: number, D: number): num
   return s
 }
 
-/** Max top height of an island with inradius D (= its half height). */
+/** Max top height of an island with inradius D (= its half height): max(t/2 − b, 0) + min(b, D) + inflate·D with
+ *  b = rimBevel(t, bevel) (the local bevel cap: at the island's apex the local half-width is D). */
 export function halfHeight(thickness: number, bevel: number, inflate: number, D: number): number {
   return profile(Math.max(D, 0), thickness, bevel, inflate, Math.max(D, 1e-12))
 }
@@ -793,9 +825,20 @@ const DIRS8: P2[] = [
   [-0.7, -0.7],
 ]
 
+/** numpy.arange(start, stop, step): ceil((stop − start) / step) values start + i·step. */
+function arange(start: number, stop: number, step: number): number[] {
+  const n = Math.max(0, Math.ceil((stop - start) / step))
+  return Array.from({ length: n }, (_, i) => start + i * step)
+}
+
 /**
  * Estimated inradius D per ring's island (holes carry their island's value): max d over a grid × grid scanline raster
  * refined by 12 steps of pattern search from each island's best cell; `centres` receives {island: apex}.
+ * DETERMINISTIC APEX (round 8, heightfield.island_inradius — float32 there, float64 here, so exact ties must not decide):
+ * the island's tied cells are those with d ≥ max d − APEX_TIE·h; the start cell is the tied cell nearest the tied cells'
+ * centroid (the first in list order — rows bottom → top, x left → right — within APEX_TIE·h of the nearest); every move
+ * takes the FIRST of the eight directions within APEX_TIE·h of their best, and only when it beats the current d by
+ * more than APEX_TIE·h.
  */
 export function islandInradius(ol: OutlineQuery, grid = 40, centres?: Map<number, P2>): Float64Array {
   const rings = ol.o.shapes
@@ -816,46 +859,53 @@ export function islandInradius(ol: OutlineQuery, grid = 40, centres?: Map<number
   }
   const h = Math.max(x1 - x0, y1 - y0) / grid
   if (!(h > 0)) return D
-  const xs: number[] = []
-  const ys: number[] = []
-  for (let x = x0 + h / 2; x < x1; x += h) xs.push(x)
-  for (let y = y0 + h / 2; y < y1; y += h) ys.push(y)
+  const xs = arange(x0 + h / 2, x1, h)
+  const ys = arange(y0 + h / 2, y1, h)
   const ins = scanInside(rings, xs, ys)
   const P: number[] = []
   ys.forEach((y, j) => xs.forEach((x, i) => ins[j * xs.length + i] && P.push(x, y)))
   if (P.length) {
     const near = nearest(P, ol.shape)
     const N = P.length >> 1
-    const isl = new Int32Array(N)
-    const bestIdx = new Map<number, number>()
+    const tie = APEX_TIE * h
+    const members = new Map<number, number[]>() // island -> its cells, in list order
     for (let q = 0; q < N; q++) {
       const k = island[ol.shape.ringOf[near.seg[q]]]
-      isl[q] = k
       if (near.d[q] > D[k]) D[k] = near.d[q]
-      const b = bestIdx.get(k)
-      if (b === undefined || near.d[q] > near.d[b]) bestIdx.set(k, q)
+      let m = members.get(k)
+      if (!m) members.set(k, (m = []))
+      m.push(q)
     }
-    for (const [k, q0] of bestIdx) {
-      let px = P[2 * q0]
-      let py = P[2 * q0 + 1]
+    for (const k of [...members.keys()].sort((a, b) => a - b)) {
+      const sel = members.get(k)!
+      let dmax = -Infinity
+      for (const q of sel) dmax = Math.max(dmax, near.d[q])
+      const tied = sel.filter((q) => near.d[q] >= dmax - tie)
+      let cx = 0
+      let cy = 0
+      for (const q of tied) {
+        cx += P[2 * q]
+        cy += P[2 * q + 1]
+      }
+      cx /= tied.length
+      cy /= tied.length
+      const dist = tied.map((q) => Math.hypot(P[2 * q] - cx, P[2 * q + 1] - cy))
+      const dmin = Math.min(...dist)
+      const start = tied[dist.findIndex((v) => v <= dmin + tie)]
+      let px = P[2 * start]
+      let py = P[2 * start + 1]
       let step = 0.5 * h
-      let best = D[k]
+      let best = near.d[start]
       for (let it = 0; it < 12; it++) {
         const cand: number[] = []
         for (const [dx, dy] of DIRS8) cand.push(px + step * dx, py + step * dy)
         const r = nearest(cand, ol.shape)
-        let j = -1
-        let bv = -1
-        for (let c = 0; c < 8; c++) {
-          const ok = island[ol.shape.ringOf[r.seg[c]]] === k
-          const v = ok ? r.d[c] : -1
-          if (v > bv) {
-            bv = v
-            j = c
-          }
-        }
-        if (j >= 0 && bv >= 0 && r.d[j] > best) {
-          best = r.d[j]
+        const val: number[] = []
+        for (let c = 0; c < 8; c++) val.push(island[ol.shape.ringOf[r.seg[c]]] === k ? r.d[c] : -1)
+        const vmax = Math.max(...val)
+        const j = val.findIndex((v) => v >= vmax - tie) // the first direction tied with the best
+        if (val[j] > best + tie) {
+          best = val[j]
           px = cand[2 * j]
           py = cand[2 * j + 1]
         } else step *= 0.5
@@ -872,6 +922,346 @@ export function islandInradius(ol: OutlineQuery, grid = 40, centres?: Map<number
     }
   }
   return Float64Array.from(island, (k) => D[k])
+}
+
+// ================================================================================================ local half-width
+const f32 = Math.fround
+
+/**
+ * The segment the WORKER takes as nearest to p, among segment k (this module's float64 choice) and its ring neighbours
+ * sharing its endpoints: heightfield.nearest runs in float32 (its hot loop) and takes numpy's argmin, the lowest index
+ * among equal distances. Where p's nearest outline point is a vertex shared by two segments, both are (almost exactly)
+ * as near, and at a sharp corner the material-side test of localWidth depends on which one is taken — mirroring the
+ * worker's float32 arithmetic keeps the local half-width (hence the capped round edge) identical to the worker's
+ * (without it ~0.4 % of the corpus' outline vertices got a different width, up to 17 % of the bevel at Earth's coast).
+ */
+function workerNearestSeg(S: SegmentSet, k: number, px: number, py: number): number {
+  const x = f32(px)
+  const y = f32(py)
+  let best = k
+  let bd = Infinity
+  for (const c of [k, S.prev[k], S.next[k]]) {
+    // segprep: A and B − A as float32, 1/|B − A|² from float64; nearest: (P − A)·(B − A)·inv clipped, then the residual
+    const ex = S.bx[c] - S.ax[c]
+    const ey = S.by[c] - S.ay[c]
+    const L2 = ex * ex + ey * ey
+    const inv = f32(L2 > 1e-30 ? 1 / L2 : 0)
+    const bx = f32(ex)
+    const by = f32(ey)
+    const apx = f32(x - f32(S.ax[c]))
+    const apy = f32(y - f32(S.ay[c]))
+    let t = f32(f32(f32(apx * bx) + f32(apy * by)) * inv)
+    t = t < 0 ? 0 : t > 1 ? 1 : t
+    const dx = f32(apx - f32(t * bx))
+    const dy = f32(apy - f32(t * by))
+    const d = f32(Math.sqrt(f32(f32(dx * dx) + f32(dy * dy))))
+    if (d < bd || (d === bd && c < best)) {
+      bd = d
+      best = c
+    }
+  }
+  return best
+}
+
+/**
+ * LOCAL HALF-WIDTH w at every sample-ring vertex (local units, in the sample segment order; heightfield.local_width,
+ * SAMPLING 3c): the radius of the largest disc tangent to the outline at the vertex — centred on its inward bisector —
+ * that stays inside the piece (centre on the material side of its nearest shape segment, true distance ≥
+ * (1 − RING_TOL)·r − tolAbs), by WIDTH_BISECT bisection steps in [0, 1.05·D] (`Dr`: the inradius per ring). `window`
+ * (the bevel b): then the sliding MAX over ±b of arclength along the ring, then the sliding MEAN over ±b/2 — a part is
+ * thin where it stays thin along its outline, not at the corner of a wide part.
+ */
+export function localWidth(ol: OutlineQuery, Dr: ArrayLike<number>, tolAbs: number, window = 0): Float64Array {
+  const rings = ol.o.rings
+  let M = 0
+  for (const r of rings) M += r.length >> 1
+  const O = new Float64Array(2 * M)
+  const Nd = new Float64Array(2 * M)
+  const lo = new Float64Array(M)
+  const hi = new Float64Array(M)
+  let s = 0
+  rings.forEach((r, k) => {
+    const n = r.length >> 1
+    const Dk = k < Dr.length ? Dr[k] : 0
+    for (let i = 0; i < n; i++) {
+      const p = (i - 1 + n) % n
+      const q = (i + 1) % n
+      let tix = r[2 * i] - r[2 * p]
+      let tiy = r[2 * i + 1] - r[2 * p + 1]
+      let l = Math.max(Math.hypot(tix, tiy), 1e-300)
+      tix /= l
+      tiy /= l
+      let tox = r[2 * q] - r[2 * i]
+      let toy = r[2 * q + 1] - r[2 * i + 1]
+      l = Math.max(Math.hypot(tox, toy), 1e-300)
+      tox /= l
+      toy /= l
+      const bx = -tiy - toy
+      const by = tix + tox
+      const bn = Math.hypot(bx, by)
+      const g = s + i
+      O[2 * g] = r[2 * i]
+      O[2 * g + 1] = r[2 * i + 1]
+      if (bn > 1e-6) {
+        Nd[2 * g] = bx / bn
+        Nd[2 * g + 1] = by / bn
+      } else {
+        Nd[2 * g] = -tiy
+        Nd[2 * g + 1] = tix
+      }
+      hi[g] = 1.05 * Dk + tolAbs
+    }
+    s += n
+  })
+  if (!M) return lo
+  const Q = new Float64Array(2 * M)
+  const mid = new Float64Array(M)
+  const S = ol.shape
+  for (let it = 0; it < WIDTH_BISECT; it++) {
+    for (let g = 0; g < M; g++) {
+      mid[g] = 0.5 * (lo[g] + hi[g])
+      Q[2 * g] = O[2 * g] + Nd[2 * g] * mid[g]
+      Q[2 * g + 1] = O[2 * g + 1] + Nd[2 * g + 1] * mid[g]
+    }
+    const r = nearest(Q, S)
+    for (let g = 0; g < M; g++) {
+      // the worker's segment where the nearest point is a vertex shared by two segments (workerNearestSeg)
+      const sg = workerNearestSeg(S, r.seg[g], Q[2 * g], Q[2 * g + 1])
+      const dg = S.segDist(sg, Q[2 * g], Q[2 * g + 1], _v)
+      const ex = S.bx[sg] - S.ax[sg]
+      const ey = S.by[sg] - S.ay[sg]
+      const inside = _v[1] * ex - _v[0] * ey > 0 // on the material side (left) of its segment
+      if (inside && dg >= (1 - RING_TOL) * mid[g] - tolAbs) lo[g] = mid[g]
+      else hi[g] = mid[g]
+    }
+  }
+  if (window > 0) return slide(slide(lo, rings, window, 'max'), rings, 0.5 * window, 'mean')
+  return lo
+}
+
+/** First index of the sorted `a` with a[i] ≥ x (side 'left') / a[i] > x (side 'right') — numpy.searchsorted. */
+function searchSorted(a: ArrayLike<number>, x: number, right: boolean): number {
+  let lo = 0
+  let hi = a.length
+  while (lo < hi) {
+    const m = (lo + hi) >> 1
+    if (right ? a[m] <= x : a[m] < x) lo = m + 1
+    else hi = m
+  }
+  return lo
+}
+
+/** Sliding max / mean of a per-vertex value along each closed ring over the arclength window ±half (heightfield._slide). */
+function slide(v: Float64Array, rings: Ring[], half: number, op: 'max' | 'mean'): Float64Array {
+  const out = Float64Array.from(v)
+  let s0 = 0
+  for (const r of rings) {
+    const n = r.length >> 1
+    const seg = new Float64Array(n)
+    let Lr = 0
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n
+      seg[i] = Math.hypot(r[2 * j] - r[2 * i], r[2 * j + 1] - r[2 * i + 1])
+      Lr += seg[i]
+    }
+    if (n < 3 || !(Lr > 0)) {
+      s0 += n
+      continue
+    }
+    const sv = new Float64Array(n)
+    for (let i = 1; i < n; i++) sv[i] = sv[i - 1] + seg[i - 1]
+    const s3 = new Float64Array(3 * n)
+    const v3 = new Float64Array(3 * n)
+    for (let i = 0; i < n; i++) {
+      s3[i] = sv[i] - Lr
+      s3[n + i] = sv[i]
+      s3[2 * n + i] = sv[i] + Lr
+      v3[i] = v3[n + i] = v3[2 * n + i] = v[s0 + i]
+    }
+    const c = new Float64Array(3 * n + 1)
+    for (let i = 0; i < 3 * n; i++) c[i + 1] = c[i] + v3[i]
+    const h = Math.min(half, 0.5 * Lr)
+    for (let i = 0; i < n; i++) {
+      const a = searchSorted(s3, sv[i] - h, false)
+      const b = searchSorted(s3, sv[i] + h, true)
+      if (op === 'max') {
+        let m = -Infinity
+        for (let k = a; k < b; k++) if (v3[k] > m) m = v3[k]
+        out[s0 + i] = m
+      } else out[s0 + i] = (c[b] - c[a]) / Math.max(b - a, 1)
+    }
+    s0 += n
+  }
+  return out
+}
+
+export interface WidthResult {
+  /** Local half-width at each point, its gradient (x, y pairs), the distance to the sample outline, its gradient. */
+  w: Float64Array
+  gw: Float64Array
+  d: Float64Array
+  gd: Float64Array
+}
+
+/**
+ * (w, ∇w, d, ∇d) at points P (heightfield.blend_width): d = the distance to the sample outline; w = the local
+ * half-width `wv` at P's FOOT POINTS — sample segments whose distance is a local minimum along their ring and at most
+ * d·(1 + 5·WIDTH_BLEND) away (the nearest one always) — each interpolated linearly at P's projection onto it, the feet
+ * weighted by exp(−(dist − d) / (WIDTH_BLEND·d)). On a medial axis both sides blend evenly (no crease). Analytic
+ * gradients (feet fixed).
+ */
+export function blendWidth(ol: OutlineQuery, wv: ArrayLike<number>, P: ArrayLike<number>): WidthResult {
+  const n = P.length >> 1
+  const out: WidthResult = { w: new Float64Array(n), gw: new Float64Array(2 * n), d: new Float64Array(n), gd: new Float64Array(2 * n) }
+  const S = ol.sample
+  if (!n || !S.size) return out
+  const fk: number[] = []
+  const fdist: number[] = []
+  const fqx: number[] = []
+  const fqy: number[] = []
+  const ft: number[] = []
+  const fraw: number[] = []
+  const tie = 1e-6
+  for (let q = 0; q < n; q++) {
+    const px = P[2 * q]
+    const py = P[2 * q + 1]
+    let best = Infinity
+    S.scan(px, py, (k) => {
+      const dist = S.segDist(k, px, py)
+      if (dist < best) best = dist
+      return best
+    })
+    const kap = WIDTH_BLEND * Math.max(best, 1e-12)
+    const reach = best + 5 * kap
+    fk.length = fdist.length = fqx.length = fqy.length = ft.length = fraw.length = 0
+    let jmin = -1
+    S.scan(px, py, (k) => {
+      const ax = S.ax[k]
+      const ay = S.ay[k]
+      const ex = S.bx[k] - ax
+      const ey = S.by[k] - ay
+      const L2 = Math.max(ex * ex + ey * ey, 1e-300)
+      const traw = ((px - ax) * ex + (py - ay) * ey) / L2
+      const t = traw < 0 ? 0 : traw > 1 ? 1 : traw
+      const qx = px - ax - t * ex
+      const qy = py - ay - t * ey
+      const dist = Math.sqrt(qx * qx + qy * qy)
+      if (dist <= reach + 1e-12) {
+        const isMin = dist <= best
+        if (!isMin && !(dist <= S.segDist(S.prev[k], px, py) + tie && dist <= S.segDist(S.next[k], px, py) + tie)) return reach
+        if (isMin && jmin < 0) jmin = fk.length
+        fk.push(k)
+        fdist.push(dist)
+        fqx.push(qx)
+        fqy.push(qy)
+        ft.push(t)
+        fraw.push(traw)
+      }
+      return reach
+    })
+    if (jmin < 0) continue
+    const dm = Math.max(best, 1e-300)
+    const usx = fqx[jmin] / dm
+    const usy = fqy[jmin] / dm
+    let Ws = 0
+    let Sw = 0
+    const W: number[] = []
+    const wi: number[] = []
+    for (let m = 0; m < fk.length; m++) {
+      const k = fk[m]
+      const dd = Math.max(fdist[m], 1e-300)
+      const Wf = Math.exp(-(dd - best) / kap)
+      const w0 = wv[k]
+      const w1 = wv[S.next[k]]
+      const v = w0 + ft[m] * (w1 - w0)
+      W.push(Wf)
+      wi.push(v)
+      Ws += Wf
+      Sw += Wf * v
+    }
+    Ws = Math.max(Ws, 1e-300)
+    const wb = Sw / Ws
+    let gx = 0
+    let gy = 0
+    const k2 = kap * kap
+    for (let m = 0; m < fk.length; m++) {
+      const k = fk[m]
+      const dd = Math.max(fdist[m], 1e-300)
+      const ux = fqx[m] / dd
+      const uy = fqy[m] / dd
+      const ex = S.bx[k] - S.ax[k]
+      const ey = S.by[k] - S.ay[k]
+      const L2 = Math.max(ex * ex + ey * ey, 1e-300)
+      const inseg = fraw[m] > 0 && fraw[m] < 1 ? (wv[S.next[k]] - wv[k]) / L2 : 0
+      const dl = dd - best
+      const glx = -((ux - usx) / kap - (dl * WIDTH_BLEND * usx) / k2)
+      const gly = -((uy - usy) / kap - (dl * WIDTH_BLEND * usy) / k2)
+      gx += W[m] * inseg * ex + W[m] * (wi[m] - wb) * glx
+      gy += W[m] * inseg * ey + W[m] * (wi[m] - wb) * gly
+    }
+    out.w[q] = wb
+    out.gw[2 * q] = gx / Ws
+    out.gw[2 * q + 1] = gy / Ws
+    out.d[q] = best
+    out.gd[2 * q] = usx
+    out.gd[2 * q + 1] = usy
+  }
+  return out
+}
+
+/** The LOCALLY capped round-edge radius β = min(b, max(w, d)) at points P and ∇β (heightfield.rim_radius): w, d from
+ *  the nearest sample segment when P is closer to it than w/4 (the other side's feet weigh < e^-10), else blendWidth. */
+export function rimRadius(ol: OutlineQuery, wv: ArrayLike<number>, P: ArrayLike<number>, bevel: number): { beta: Float64Array; grad: Float64Array } {
+  const n = P.length >> 1
+  const beta = new Float64Array(n)
+  const grad = new Float64Array(2 * n)
+  if (!n) return { beta, grad }
+  const S = ol.sample
+  const b = bevel
+  const r = nearest(P, S)
+  const w = new Float64Array(n)
+  const gw = new Float64Array(2 * n)
+  const d = r.d
+  const gd = r.g
+  const far: number[] = []
+  for (let q = 0; q < n; q++) {
+    const k = r.seg[q]
+    const ex = S.bx[k] - S.ax[k]
+    const ey = S.by[k] - S.ay[k]
+    const L2 = Math.max(ex * ex + ey * ey, 1e-300)
+    const traw = ((P[2 * q] - S.ax[k]) * ex + (P[2 * q + 1] - S.ay[k]) * ey) / L2
+    const w0 = wv[k]
+    const w1 = wv[S.next[k]]
+    w[q] = w0 + Math.min(Math.max(traw, 0), 1) * (w1 - w0)
+    const sl = traw > 0 && traw < 1 ? (w1 - w0) / L2 : 0
+    gw[2 * q] = sl * ex
+    gw[2 * q + 1] = sl * ey
+    if (d[q] >= 0.25 * w[q]) far.push(q)
+  }
+  if (far.length) {
+    const Pf = new Float64Array(2 * far.length)
+    far.forEach((q, m) => {
+      Pf[2 * m] = P[2 * q]
+      Pf[2 * m + 1] = P[2 * q + 1]
+    })
+    const bw = blendWidth(ol, wv, Pf)
+    far.forEach((q, m) => {
+      w[q] = bw.w[m]
+      gw[2 * q] = bw.gw[2 * m]
+      gw[2 * q + 1] = bw.gw[2 * m + 1]
+      d[q] = bw.d[m]
+      gd[2 * q] = bw.gd[2 * m]
+      gd[2 * q + 1] = bw.gd[2 * m + 1]
+    })
+  }
+  for (let q = 0; q < n; q++) {
+    beta[q] = Math.min(b, Math.max(w[q], d[q]))
+    if (w[q] >= b) continue
+    const src = w[q] >= d[q] ? gw : gd
+    grad[2 * q] = src[2 * q]
+    grad[2 * q + 1] = src[2 * q + 1]
+  }
+  return { beta, grad }
 }
 
 // ================================================================================================ Steiner points
@@ -1175,9 +1565,11 @@ export function steinerPoints(
     const sel: number[] = []
     isl.forEach((v, i) => v === I && sel.push(i))
     const D = Dr[I]
-    // inflated bodies: global rings for the round edge only; the dome gets per-ray rows (SAMPLING 3b, domeRows)
+    // inflated bodies: global rings for the round edge only; the dome gets per-ray rows (SAMPLING 3b, domeRows).
+    // flat bodies: the round edge's rings at the island's capped radius min(b, D) (round 8: an island narrower than the
+    // bevel is a round tube / sphere of radius D — rings graded to b stopped short of its spine)
     const kRing = dome ? 0 : inflate
-    const ds = ringDistances(bevel, kRing, D, segments)
+    const ds = ringDistances(dome ? bevel : Math.min(bevel, D), kRing, D, segments)
     const K = ds.length
     if (!K && !dome) continue
     const Rn = sel.length
@@ -1213,20 +1605,44 @@ export function steinerPoints(
       for (const v of rows) out.push(v)
       continue
     }
-    // medial points: halfway between the last valid ring point (or the outline vertex) and the first failure
+    // medial points: ON the ray's medial crossing — BISECT bisection steps between the last valid ring (or the outline
+    // vertex) and the first failure (round 8: the spine of a thin part is the top of its round tube; halfway between the
+    // two rings left it 20-40 % short and the tube's top a coarse fold)
     let med: number[] = []
     let rad: number[] = []
-    for (let a = 0; a < Rn; a++) {
-      const fb = firstBad[a]
-      if (fb >= K) continue
-      const ri = sel[a]
-      const ax = fb > 0 ? P[(a * K + fb - 1) * 2] : ox[ri]
-      const ay = fb > 0 ? P[(a * K + fb - 1) * 2 + 1] : oy[ri]
-      med.push(0.5 * (ax + P[(a * K + fb) * 2]), 0.5 * (ay + P[(a * K + fb) * 2 + 1]))
-      const dmed = 0.5 * ((fb > 0 ? ds[fb - 1] : 0) + ds[fb])
-      let si = 0
-      while (si < K && ds[si] < dmed) si++
-      rad.push(0.35 * Math.min(gaps[Math.min(si, K - 1)], maxEdge))
+    const rr: number[] = []
+    for (let a = 0; a < Rn; a++) if (firstBad[a] < K) rr.push(a)
+    if (rr.length) {
+      const loT = new Float64Array(rr.length)
+      const hiT = new Float64Array(rr.length)
+      rr.forEach((a, m) => {
+        const fb = firstBad[a]
+        loT[m] = fb > 0 ? ds[fb - 1] : 0
+        hiT[m] = ds[fb]
+      })
+      const Q = new Float64Array(2 * rr.length)
+      const mid = new Float64Array(rr.length)
+      for (let it = 0; it < BISECT; it++) {
+        rr.forEach((a, m) => {
+          const ri = sel[a]
+          mid[m] = 0.5 * (loT[m] + hiT[m])
+          Q[2 * m] = ox[ri] + dx[ri] * sc[ri] * mid[m]
+          Q[2 * m + 1] = oy[ri] + dy[ri] * sc[ri] * mid[m]
+        })
+        const dq = ol.query(Q).d
+        for (let m = 0; m < rr.length; m++) {
+          if (dq[m] >= (1 - RING_TOL) * mid[m]) loT[m] = mid[m]
+          else hiT[m] = mid[m]
+        }
+      }
+      rr.forEach((a, m) => {
+        const ri = sel[a]
+        med.push(ox[ri] + dx[ri] * sc[ri] * loT[m], oy[ri] + dy[ri] * sc[ri] * loT[m])
+        const dmed = Math.max(loT[m], 0.5 * ds[0])
+        let si = 0
+        while (si < K && ds[si] < dmed) si++
+        rad.push(0.35 * Math.min(gaps[Math.min(si, K - 1)], maxEdge))
+      })
     }
     if (med.length) {
       const first = firstPerCell(med, 2 * median(rad))
@@ -1260,7 +1676,7 @@ export function withApices(
   for (const [q, c] of centres) {
     const D = Dr[q]
     if (D <= 0 || !(inflate > 0 || D < bevel)) continue
-    const ds = ringDistances(bevel, inflate, D, segments)
+    const ds = ringDistances(inflate > 0 ? bevel : Math.min(bevel, D), inflate, D, segments)
     const clear = APEX_CLEAR * (D - (ds.length ? ds[ds.length - 1] : 0))
     let near = false
     for (let i = 0; i < steiner.length && !near; i += 2) if (Math.hypot(steiner[i] - c[0], steiner[i + 1] - c[1]) < clear) near = true
@@ -1326,9 +1742,14 @@ function islandOf(ol: OutlineQuery, x: number, y: number, guess: number, groups:
  * MAX_EDGE, axis-aligned edges). The mesh keeps the exact positions (poly2tri only returns indices).
  */
 export const JITTER = 1e-8
-function jit(i: number, axis: number): number {
+/** × JITTER of the last poly2tri attempt before the ear-clipping fallback: a vertex of one ring ON another ring's edge
+ *  (or a Steiner point on it) stays "collinear" for poly2tri's 1e-12 orientation test at 1e-8 — the island then fell back
+ *  to a FLAT ear-clipped body while the worker's CDT domes it (Home's silhouette and Scandit's dot at layer scale 0.7,
+ *  Recorder / Translate pieces at 1.3: 61 of the corpus' 97 such builds now triangulate). */
+export const JITTER_RETRY = 100
+function jit(i: number, axis: number, scale = 1): number {
   const s = Math.sin(i * 12.9898 + axis * 78.233) * 43758.5453
-  return (s - Math.floor(s) - 0.5) * 2 * JITTER
+  return (s - Math.floor(s) - 0.5) * 2 * JITTER * scale
 }
 
 /** Relative size (× the island's extent) of a touch between rings, and of the separating nudge (see separateHoles). */
@@ -1403,6 +1824,7 @@ function triangulateIsland(
   starts: number[],
   steiner: TriPoint[],
   separate = false,
+  jscale = 1,
 ): number[] | null {
   const rings = ol.o.rings
   const off = separate ? separateHoles(rings, ringIdx) : null
@@ -1413,13 +1835,13 @@ function triangulateIsland(
     for (let i = 0; i < n; i++) {
       const id = starts[k] + i
       const o = off?.get(k * 0x100000 + i)
-      pts.push({ x: r[2 * i] + jit(id, 0) + (o ? o[0] : 0), y: r[2 * i + 1] + jit(id, 1) + (o ? o[1] : 0), i: id })
+      pts.push({ x: r[2 * i] + jit(id, 0, jscale) + (o ? o[0] : 0), y: r[2 * i + 1] + jit(id, 1, jscale) + (o ? o[1] : 0), i: id })
     }
     return pts
   }
   const ctx = new poly2tri.SweepContext(contour(ringIdx[0]), { cloneArrays: false })
   for (let m = 1; m < ringIdx.length; m++) ctx.addHole(contour(ringIdx[m]))
-  if (steiner.length) ctx.addPoints(steiner.map((p) => ({ x: p.x + jit(p.i, 0), y: p.y + jit(p.i, 1), i: p.i })))
+  if (steiner.length) ctx.addPoints(steiner.map((p) => ({ x: p.x + jit(p.i, 0, jscale), y: p.y + jit(p.i, 1, jscale), i: p.i })))
   ctx.triangulate()
   const T: number[] = []
   for (const t of ctx.getTriangles()) {
@@ -1453,8 +1875,8 @@ function earcutIsland(ol: OutlineQuery, ringIdx: number[], starts: number[]): nu
 
 /**
  * CDT of the outline (rings) + Steiner points, one poly2tri sweep per island. Steiner points are assigned to the island
- * that contains them; an island poly2tri rejects is retried without its Steiner points closest to the outline, then
- * ear-clipped without any.
+ * that contains them; an island poly2tri rejects is retried without its Steiner points closest to the outline, with its
+ * touching holes nudged apart, with a coarser input jitter (JITTER_RETRY), then ear-clipped without any (flat).
  */
 export function triangulate(ol: OutlineQuery, steiner: number[]): Triangulation {
   const rings = ol.o.rings
@@ -1516,6 +1938,15 @@ export function triangulate(ol: OutlineQuery, steiner: number[]): Triangulation 
       if (tri || !sp || ringIdx.length < 2) continue
       try {
         tri = triangulateIsland(ol, ringIdx, starts, sp, true)
+      } catch {
+        tri = null
+      }
+    }
+    // a point ON another ring's edge (a T-junction separateHoles does not nudge): a coarser jitter (JITTER_RETRY)
+    for (const sep of [false, true]) {
+      if (tri || (sep && ringIdx.length < 2)) continue
+      try {
+        tri = triangulateIsland(ol, ringIdx, starts, safe ?? pts, sep, JITTER_RETRY)
       } catch {
         tri = null
       }
@@ -2246,7 +2677,7 @@ export function buildBody(
   const t0 = now()
   const sc = Math.max(scale, 1e-9)
   const th = Math.max(thickness, MIN_THICKNESS / sc)
-  let b = Math.max(0, Math.min(bevel ?? 0, th / 2))
+  let b = bevel === null || bevel === undefined ? 0 : rimBevel(th, bevel)
   const k = Math.max(0, inflate || 0)
   if (b < 1e-7 / sc) b = 0
   const tol = CHORD_TOL / sc
@@ -2407,14 +2838,43 @@ export function buildBody(
   const z = new Float64Array(nv)
   const nt = new Float64Array(nv * 3)
   const vertical = new Uint8Array(nv)
-  // the round-edge rim e + hb(d) and its gradient hb'(d)·g (g = the unit gradient of d)
+  // the round-edge rim e + hb(d; β), β capped at the LOCAL half-width (round 8: thin parts are round tubes, small discs
+  // spheres — heightfield.local_width / rim_radius), and its gradient ∂hb/∂d·g + ∂hb/∂β·∇β (g = the unit gradient of d)
+  const beta = new Float64Array(nv).fill(b)
+  const gbeta = new Float64Array(nv * 2)
+  const cand: number[] = []
+  if (b > 0) for (let i = 0; i < nv; i++) if (!onB[i] && d[i] < b) cand.push(i)
+  if (cand.length) {
+    const wv = localWidth(ol, Dr, WIDTH_TOL * tol, b)
+    let wmin = Infinity
+    for (const v of wv) if (v < wmin) wmin = v
+    if (wmin < b) {
+      // a wide piece (every local half-width ≥ b) keeps the plain round edge of radius b
+      const Pc = new Float64Array(2 * cand.length)
+      cand.forEach((v, m) => {
+        Pc[2 * m] = V2[2 * v]
+        Pc[2 * m + 1] = V2[2 * v + 1]
+      })
+      const rr = rimRadius(ol, wv, Pc, b)
+      cand.forEach((v, m) => {
+        beta[v] = rr.beta[m]
+        gbeta[2 * v] = rr.grad[2 * m]
+        gbeta[2 * v + 1] = rr.grad[2 * m + 1]
+      })
+    }
+  }
+  const e0 = wallHalf(th, b)
   const grad = new Float64Array(nv * 2)
   for (let i = 0; i < nv; i++) {
-    z[i] = profile(d[i], th, b, 0, Dv[i])
-    const s = slope(d[i], b, 0, Dv[i])
-    const ss = Number.isFinite(s) ? s : 0
-    grad[2 * i] = ss * g[2 * i]
-    grad[2 * i + 1] = ss * g[2 * i + 1]
+    let sd = 0
+    let sb = 0
+    if (b > 0) {
+      z[i] = e0 + rimHeight(d[i], beta[i])
+      ;[sd, sb] = rimSlopes(d[i], beta[i])
+    } else z[i] = e0
+    const ss = Number.isFinite(sd) ? sd : 0
+    grad[2 * i] = ss * g[2 * i] + sb * gbeta[2 * i]
+    grad[2 * i + 1] = ss * g[2 * i + 1] + sb * gbeta[2 * i + 1]
     // vertical tangent at the rim (round edge or dome): horizontal normals
     vertical[i] = onB[i] && !loose[i] && (b > 0 || k > 0) ? 1 : 0
   }

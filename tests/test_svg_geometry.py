@@ -447,7 +447,8 @@ def test_find_device_sweep_has_no_pinholes(import_icon):
         holes = [abs(Polygon(_ring(s)).area) for s in lg.silhouette if s.hole]
         assert not [a for a in holes if a < 2e-4], holes
         assert lg.safeRadius > 0.1
-        assert L.depth.bevel == pytest.approx(L.depth.thickness / 2)
+        # round 8: a raster layer is a flat card (no dome, 0.02 thick, round edge 0.006 <= thickness / 2)
+        assert (L.depth.thickness, L.depth.bevel, L.depth.inflate) == (0.02, 0.006, 0.0)
 
 
 @pytest.mark.parametrize("name,limit", [("Ti84", 0.041), ("Google Calendar", 0.03)])

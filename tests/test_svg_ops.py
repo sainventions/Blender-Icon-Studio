@@ -31,18 +31,14 @@ def ids_of(layers):
 
 
 def assert_real_stack(pdir, project, layers, gap=None):
-    """`layers` form the real-height stack (PLAN 11 round 7) for the max radii the geometry bundle reports."""
-    from bis import stacking
+    """`layers` form the overlap-aware real-height stack (PLAN 11 rounds 7 + 8) for the geometry the bundle
+    reports (footprints + max radii): reproduced exactly, no interpenetrating layers."""
+    from conftest import assert_rule_stack
 
     p = project.model_copy(deep=True)
     p.layers = layers
     bundle = svg.build_geometry(pdir, p, "/files/projects/p", texture_size=64)
-    radii = {lid: lg.maxRadius for lid, lg in bundle.layers.items()}
-    rules = stacking.geometry_rules()
-    assert layers[0].depth.z == pytest.approx(rules["stackLift"], abs=1e-5)
-    gaps = stacking.stack_gaps(layers, radii, project.canvas.art.scale)
-    want = rules["stackGap"] if gap is None else gap
-    assert gaps == pytest.approx([want] * len(gaps), abs=2e-4), gaps
+    return assert_rule_stack(p, bundle, gap)
 
 
 def test_resplit_strategies_exclude_plate(import_icon):
@@ -116,6 +112,11 @@ def test_split_layer_elements_mode(import_icon):
     order = [L.elementIds[0] for L in layers]
     ids = {e.origId: e.id for e in res.elements}
     assert order.index(ids["A"]) < order.index(ids["B"]) < order.index(ids["C"])
+    # round 8: overlap-aware - A, B, C overlap in a chain (each stacks on the one below it); the small circle D
+    # overlaps none of them and sits on the base
+    z = {L.elementIds[0]: L.depth.z for L in layers}
+    assert z[ids["A"]] == 0.0 and z[ids["D"]] == 0.0
+    assert 0.0 < z[ids["B"]] < z[ids["C"]]
     with pytest.raises(ValueError):
         svg.split_layer(pdir, project, "L42", "elements")
 
