@@ -6,13 +6,14 @@
 // S = canvas.art.scale × layer.transform.scale, built with thickness / S and bevel / S (bevel = min(bevel, t/2): thin
 // parts taper by construction, so there is no safe-radius clamp), centred on their mid-plane. Each body sits at local
 // z = (thickness / 2 + zSub) / S + lift, where lift = max(0, half − thickness / 2) keeps an inflated layer's lowest
-// point on the layer's z.
+// point on the layer's z. Pieces of one layer never interpenetrate (worker scene._relations, round 7): touching ones
+// pull back INSET_GAP from each other, overlapping ones are stacked by their real heights in paint order.
 import * as THREE from 'three'
 import type { Layer, LayerGeometry, Plate, PlateShape, RasterCard, Spline, Vec2 } from '../../types'
 import { hasOwnMaterials, type PaintUv } from '../../lib/materials3d'
 import { plateOutline } from '../../lib/shapes'
 import { RefCache } from '../refCache'
-import { buildBody, halfHeight, inradius } from './heightfield'
+import { buildBody, halfHeight, inradius, insetRings, pieceRings, ringsRelation, ringsToSplines, stackShifts } from './heightfield'
 
 export interface Body {
   geometry: THREE.BufferGeometry
@@ -30,6 +31,12 @@ export const LAYER_EPS = 0.002
 export const REGION_DZ = 0.001
 /** Flat raster cards (worker CARD_THICKNESS), centred 0.0005 above the layer's z. */
 export const CARD_THICKNESS = 0.004
+/** Overlapping pieces of one layer are stacked by their real heights this far apart (worker STACK_GAP, world). */
+export const STACK_GAP = 0.002
+/** Touching pieces of one layer: the lower one pulls back this far from the upper one (worker INSET_GAP, world). */
+export const INSET_GAP = 0.003
+/** Pieces closer than this touch (worker TOUCH_TOL = 3 × CHORD_TOL, world). */
+export const TOUCH_TOL = 0.0018
 
 export interface DepthParams {
   /** World thickness (= layer.depth.thickness). */
@@ -220,16 +227,20 @@ export function layerBodyParts(layer: Layer, lg: LayerGeometry, d: DepthParams):
         build: () => bodyFromSplines(splines, d.thickness, d.bevel, d.inflate, d.segments, S),
       })
     } else {
+      // pieces that only touch pull back INSET_GAP from each other (worker scene._relations)
+      const rel = regions.length > 1 ? layerRelations(lg, S) : null
       regions.forEach((region, i) => {
+        const inset = rel?.inset.get(i)
+        const splines = inset ?? region.splines ?? []
         parts.push({
-          key: `${base}|r${i}:${region.elementId}|${dk}`,
+          key: `${base}|r${i}:${region.elementId}${inset ? '|inset' : ''}|${dk}`,
           elementId: region.elementId || `r${i}`,
           regionIndex: i,
           opacity: num(region.opacity, 1),
           z: (mid + regionOffset(region.zSub)) / S,
           image: autoPaint ? (images.get(region.elementId) ?? null) : null,
           card: false,
-          build: () => bodyFromSplines(region.splines ?? [], d.thickness, d.bevel, d.inflate, d.segments, S),
+          build: () => bodyFromSplines(splines, d.thickness, d.bevel, d.inflate, d.segments, S),
         })
       })
     }
@@ -259,25 +270,124 @@ export function layerLift(bodies: { part: BodyPart; body: Body }[], d: DepthPara
   return Math.max(0, half - d.thickness / 2)
 }
 
+/** How the pieces (regions) of one layer meet — worker scene._relations. Indices into LayerGeometry.regions. */
+export interface PieceRelations {
+  /** [i, j]: piece j OVERLAPS the earlier piece i (a translucent piece over another) → stacked by real heights. */
+  stack: [number, number][]
+  /** Piece i only TOUCHES later pieces along a shared edge → its outline pulled back INSET_GAP from them. */
+  inset: Map<number, Spline[]>
+}
+
+const relationsCache = new Map<string, PieceRelations>()
+/** worker scene._relations of a layer's regions at scale S (cached by the layer geometry hash). */
+export function layerRelations(lg: LayerGeometry, S: number): PieceRelations {
+  const key = `${lg.layerId}:${lg.hash}:${r5(S)}`
+  const hit = relationsCache.get(key)
+  if (hit) return hit
+  const regions = lg.regions ?? []
+  const sc = Math.max(S, 1e-9)
+  const rings = regions.map((r) => (r.splines?.length ? pieceRings(r.splines, sc) : []))
+  const tol = TOUCH_TOL / sc
+  const stack: [number, number][] = []
+  const touch = new Map<number, number[]>()
+  for (let j = 0; j < rings.length; j++)
+    for (let i = 0; i < j; i++) {
+      const rel = ringsRelation(rings[i], rings[j], tol)
+      if (rel === 2) stack.push([i, j])
+      else if (rel === 1) {
+        let l = touch.get(i)
+        if (!l) touch.set(i, (l = []))
+        l.push(j)
+      }
+    }
+  const inset = new Map<number, Spline[]>()
+  for (const [i, js] of touch) {
+    let ri = rings[i]
+    for (const j of js) ri = insetRings(ri, rings[j], INSET_GAP / sc)
+    inset.set(i, ringsToSplines(ri))
+  }
+  const out = { stack, inset }
+  if (relationsCache.size > 64) relationsCache.clear()
+  relationsCache.set(key, out)
+  return out
+}
+
 const inradiusCache = new Map<string, number>()
+function cachedInradius(key: string, splines: Spline[], S: number): number {
+  let D = inradiusCache.get(key)
+  if (D === undefined) {
+    D = inradius(splines, S)
+    if (inradiusCache.size > 512) inradiusCache.clear()
+    inradiusCache.set(key, D)
+  }
+  return D
+}
+
 /**
- * World height of a layer's bodies (worker scene._body_height): its thickness, or twice the half height of an inflated
- * body (the silhouette's inradius bounds every piece's).
+ * World height of a layer's bodies — worker scene._body_height (PLAN §11 round 7, presets.json "geometry"):
+ * H = thickness + 2 × inflate × maxRadius × S (LayerGeometry.maxRadius; without it the silhouette's own inradius) —
+ * or, when pieces of the layer overlap, their real-height stack inside the layer (layerRelations).
  */
 export function layerBodyHeight(layer: Layer, lg: LayerGeometry, S: number): number {
   const t = Math.max(0, num(layer.depth.thickness, 0.1))
-  const k = Math.max(0, num(layer.depth.inflate, 0))
-  if (k <= 0) return t
-  const key = `${lg.layerId}:${lg.hash}:${r5(S)}`
-  let D = inradiusCache.get(key)
-  if (D === undefined) {
-    const spl = lg.silhouette?.length ? lg.silhouette : (lg.regions ?? []).flatMap((r) => r.splines)
-    D = inradius(spl, S) * S
-    if (inradiusCache.size > 256) inradiusCache.clear()
-    inradiusCache.set(key, D)
-  }
+  const k = Math.max(0, Math.min(1, num(layer.depth.inflate, 0)))
   const b = Math.min(Math.max(0, num(layer.depth.bevel, 0.045)), t / 2)
-  return Math.max(t, 2 * halfHeight(t, b, k, D))
+  const base = `${lg.layerId}:${lg.hash}:${r5(S)}`
+  const half = (spl: Spline[], key: string) => (k <= 0 ? t / 2 : halfHeight(t, b, k, cachedInradius(`${base}:${key}`, spl, S) * S))
+  const regions = lg.regions ?? []
+  if (layer.mode !== 'combined' && regions.length > 1) {
+    const pairs = layerRelations(lg, S).stack
+    if (pairs.length) {
+      const hs = regions.map((r, i) => half(r.splines ?? [], `r${i}`))
+      const sh = stackShifts(hs.length, pairs, hs, STACK_GAP)
+      let top = 0
+      let hmax = 0
+      hs.forEach((h, i) => {
+        top = Math.max(top, sh[i] + h)
+        hmax = Math.max(hmax, h)
+      })
+      return top + hmax
+    }
+  }
+  if (k <= 0) return t
+  const mr = lg.maxRadius
+  if (typeof mr === 'number' && Number.isFinite(mr) && mr > 0) return t + 2 * k * mr * S
+  const spl = lg.silhouette?.length ? lg.silhouette : regions.flatMap((r) => r.splines ?? [])
+  return Math.max(t, 2 * half(spl, 'sil'))
+}
+
+/**
+ * Part-index pairs of a layer's overlapping pieces (layerRelations.stack mapped onto layerBodyParts' order) — the
+ * pieces LayerBody stacks by their real heights. Empty for one-body (combined) layers.
+ */
+export function partStackPairs(parts: BodyPart[], lg: LayerGeometry, S: number): [number, number][] {
+  if ((lg.regions ?? []).length < 2) return []
+  const at = new Map<number, number>()
+  parts.forEach((p, k) => {
+    if (p.regionIndex !== null && !p.card) at.set(p.regionIndex, k)
+  })
+  if (at.size < 2) return []
+  const out: [number, number][] = []
+  for (const [i, j] of layerRelations(lg, S).stack) {
+    const a = at.get(i)
+    const c = at.get(j)
+    if (a !== undefined && c !== undefined) out.push([a, c])
+  }
+  return out
+}
+
+/** Local z shift of every part (worker scene._layer: heightfield.stack_shifts over the placed bodies). */
+export function partShifts(pairs: [number, number][], bodies: Body[], base: number[], S: number): Float64Array {
+  const n = bodies.length
+  if (!pairs.length) return new Float64Array(n)
+  const ok = pairs.filter(([i, j]) => bodies[i]?.half > 0 && bodies[j]?.half > 0)
+  return stackShifts(
+    n,
+    ok,
+    bodies.map((b) => b.half),
+    STACK_GAP / Math.max(S, 1e-9),
+    base,
+  )
 }
 
 // ------------------------------------------------------------------------------------------------ plate

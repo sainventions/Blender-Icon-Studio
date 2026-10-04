@@ -81,9 +81,33 @@ export function resolveRig(lighting: Lighting, presets: Presets | null | undefin
   }
 }
 
-/** Unit vector from the icon toward a light: (0,0,1)·cos e + (sin a, cos a, 0)·sin e. */
+/** Unit vector from the icon toward a light: (0,0,1)·cos e + (sin a, cos a, 0)·sin e — in the CAMERA's frame (x =
+ *  screen right, y = screen up, z = toward the viewer); viewLightDir turns it into world space. */
 export function lightDir(angleDeg: number, elevDeg: number, out = new THREE.Vector3()): THREE.Vector3 {
   const a = THREE.MathUtils.degToRad(angleDeg)
   const e = THREE.MathUtils.degToRad(elevDeg)
   return out.set(Math.sin(a) * Math.sin(e), Math.cos(a) * Math.sin(e), Math.cos(e)).normalize()
+}
+
+/**
+ * CAMERA-RELATIVE lighting (PLAN §11 round 7, worker lighting.py `view`): the key / fill rig and the studio world are
+ * laid out for the head-on view and turned with the camera's world rotation `view` (identity = head-on: camera on +Z
+ * looking −Z, +Y up — the same convention as Blender's camera), so the iso / orbit views light like the head-on one
+ * and `lighting.angle` is relative to the view (at iso 1 a world-fixed key sat 5° from the mirror direction of the flat
+ * tops: glyphs washed to white). World-space unit vector toward a light.
+ */
+export function viewLightDir(angleDeg: number, elevDeg: number, view: THREE.Quaternion, out = new THREE.Vector3()): THREE.Vector3 {
+  return lightDir(angleDeg, elevDeg, out).applyQuaternion(view)
+}
+
+const Z_AXIS = new THREE.Vector3(0, 0, 1)
+const _q = new THREE.Quaternion()
+/**
+ * scene.environmentRotation of the studio cube map (rendered for light angle 0 in the head-on frame): the light angle
+ * turns it about the view axis (0 = top, clockwise positive: Rz(−angle)), then the camera's rotation carries it into
+ * world space (view · Rz(−angle); three.js samples with its inverse).
+ */
+export function environmentRotation(angleDeg: number, view: THREE.Quaternion, out = new THREE.Euler()): THREE.Euler {
+  _q.setFromAxisAngle(Z_AXIS, -THREE.MathUtils.degToRad(angleDeg)).premultiply(view)
+  return out.setFromQuaternion(_q)
 }

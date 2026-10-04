@@ -447,14 +447,15 @@ def test_find_device_sweep_has_no_pinholes(import_icon):
         holes = [abs(Polygon(_ring(s)).area) for s in lg.silhouette if s.hole]
         assert not [a for a in holes if a < 2e-4], holes
         assert lg.safeRadius > 0.1
-        assert L.depth.bevel == pytest.approx(0.045)
+        assert L.depth.bevel == pytest.approx(L.depth.thickness / 2)
 
 
 @pytest.mark.parametrize("name,limit", [("Ti84", 0.041), ("Google Calendar", 0.03)])
-def test_combined_layers_with_small_parts_clamp_the_bevel(name, limit, import_icon):
+def test_combined_layers_with_small_parts_limit_the_safe_radius(name, limit, import_icon):
     """svg review round 4 #3: a 'combined' body's safe radius is limited by its smallest separate part
-    (Ti84's keypad face: keys 0.079 tall, was 0.326; Google Calendar's body: the "31" digits, was 0.456),
-    so the default bevel is clamped to what those parts take and no part's inset outline inverts."""
+    (Ti84's keypad face: keys 0.079 tall, was 0.326; Google Calendar's body: the "31" digits, was 0.456).
+    Round 7: the bevel is no longer clamped to it (height-field bodies taper thin parts; thickness/2 only), while
+    maxRadius - the stack height - is set by the LARGEST part."""
     res, project, pdir, bundle = _bundle(import_icon, name)
     combined = [L for L in project.layers if L.mode == "combined"]
     assert combined
@@ -470,7 +471,11 @@ def test_combined_layers_with_small_parts_clamp_the_bevel(name, limit, import_ic
                 break
             inr = r
         assert lg.safeRadius <= inr + 2e-3 and lg.safeRadius < limit, (L.id, lg.safeRadius, inr)
-        assert L.depth.bevel <= 0.9 * lg.safeRadius + 1e-5
+        assert L.depth.bevel == pytest.approx(L.depth.thickness / 2)
+        # maxRadius (holes respected) <= the largest part's inscribed radius with its holes ignored, and the
+        # largest part is far thicker than the smallest one that limits the safe radius
+        biggest = max(shapely.maximum_inscribed_circle(o, tolerance=1e-4).length for o in outers)
+        assert lg.safeRadius < lg.maxRadius <= biggest + 2e-3, (L.id, lg.maxRadius, biggest)
 
 
 def test_smoothing_keeps_the_few_curve_segments_exact():

@@ -15,7 +15,8 @@
 // No glow cards, overlays, milk / ice bodies or colour pre-compensation: three.js does the shading, Cycles the truth.
 // Inputs three.js has no counterpart for (Subsurface, Diffuse Roughness, Coat IOR / Tint) are read but not drawn.
 // The only rendering workaround is for glass seen through other glass (three.js, like EEVEE, has no transmission
-// through transmission): such a covered glass body is drawn opaque, coloured by its base × what lies behind it.
+// through transmission): such a covered glass body is drawn opaque, its transmitted share coloured by its base × what
+// lies behind it (the rest stays the lit base).
 import * as THREE from 'three'
 import type { Layer, MaterialSpec, Presets } from '../types'
 import { getFilmNoiseTexture, getGrainNormalMap, getRadialAnisotropyMap } from '../viewport/textures/procedural'
@@ -409,7 +410,10 @@ export function applyPrincipled(m: PrincipledMaterial, p: Principled, ctx: Shape
   if (covered) {
     m.transmission = 0
     u.bisBehind.value.copy(ctx.covered!)
-    u.bisCovered.value = 1
+    // only the TRANSMITTED share shows what lies behind; the rest stays the lit base (Principled: Transmission Weight
+    // mixes diffuse / subsurface and specular transmission). A partly transmissive covered body (the dark renditions'
+    // DARK_GLYPH: transmission 0.5) was drawn as base × the dark plate: Earth / Find Device / Weatherbug went black.
+    u.bisCovered.value = Math.max(0, Math.min(1, p.transmission))
   } else {
     m.transmission = Math.max(0, Math.min(1, p.transmission))
     u.bisBehind.value.copy(WHITE)

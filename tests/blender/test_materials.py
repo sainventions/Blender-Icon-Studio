@@ -116,6 +116,37 @@ def test_appearances_only_change_principled_inputs():
     assert A.resolve(_proj(layers), "tinted-dark", bundle)["project"]["canvas"]["plate"]["fill"]["type"] == "system-dark"
 
 
+def test_dark_renditions_keep_glyphs_lit():
+    """QA r8 #2: clear glass over the near-black dark plate only transmits that plate — glyphs vanished. Dark and
+    tinted-dark cap transmission (DARK_GLYPH) and let the art scatter (subsurface) as the base colour: Principled
+    inputs only, no emission; opaque shapes and a layer whose dark material the user set are left alone."""
+    layers = [{"id": "A", "material": {"preset": "liquid_glass", "params": {"roughness": 0.1}},
+               "elementMaterials": {"e": {"preset": "clear_glass"}, "m": {"preset": "chrome"}}},
+              {"id": "B", "material": {"preset": "satin"}},
+              {"id": "C", "material": {"preset": "clear_glass"}}]
+    proj = norm_project({"id": "p", "layers": layers, "appearances": {"dark": {"layers": {
+        "C": {"material": {"preset": "clear_glass", "params": {"transmission": 1.0}}}}}}})
+    bundle = {"layers": {"A": {"regions": [{"paint": {"type": "solid", "color": "#336699"}}]}}}
+    dark = A.resolve(proj, "dark", bundle)["project"]["layers"]
+    la = P.material_params(dark[0]["material"]["preset"], dark[0]["material"]["params"])
+    assert la["transmission"] == A.DARK_GLYPH["transmission"] and la["subsurfaceWeight"] >= 1.0
+    assert la["tint"] >= A.DARK_GLYPH["tintMin"] and la["roughness"] == pytest.approx(0.1)   # the rest is kept
+    ems = dark[0]["elementMaterials"]
+    e = P.resolve_material(dark[0]["material"], ems["e"])[1]
+    assert ems["e"]["preset"] == "clear_glass" and e["transmission"] == A.DARK_GLYPH["transmission"]
+    assert ems["m"] == {"preset": "chrome", "params": {}}                                      # opaque: untouched
+    assert P.material_params("satin", dark[1]["material"]["params"])["transmission"] == 0.0
+    assert P.material_params("clear_glass", dark[2]["material"]["params"])["transmission"] == 1.0   # explicit
+    light = A.resolve(proj, "light", bundle)["project"]["layers"]
+    assert P.material_params("liquid_glass", light[0]["material"]["params"])["transmission"] == 1.0
+    td = A.resolve(proj, "tinted-dark", bundle)
+    m = P.material_params("liquid_glass", td["project"]["layers"][0]["material"]["params"])
+    assert m["transmission"] == A.DARK_GLYPH["transmission"] and m["subsurfaceWeight"] >= 1.0
+    assert m["emissionStrength"] == 0.0 and m["paintMode"] == "base"                    # lit, not self-lit
+    assert td["env"]["mono"]["floor"] == A.MONO_FLOOR_DARK
+    assert A.resolve(proj, "tinted-light", bundle)["env"]["mono"]["floor"] == A.MONO_FLOOR
+
+
 def test_soft_clip_is_identity_below_the_knee_and_rolls_off_above():
     assert soft_clip((0.0, 0.5, BRAND_KNEE)) == (0.0, 0.5, BRAND_KNEE)
     hi = soft_clip((1.0, 1.3, 1.6))
@@ -334,6 +365,18 @@ def test_frosted_glass_carries_the_art_colour(worker, outdir):
     render(worker, disc_on_plate("frosted_glass", "#4466ff", "#ffffff", z=0.1), out, quality="preview")
     c = rgb_at(out, 0.0, 0.0)
     assert c[2] > c[0] + 50 and c[2] > 120, c.round()
+
+
+@needs_blender
+def test_dark_rendition_glyph_reads_over_the_dark_plate(worker, outdir):
+    """The dark rendition of a liquid-glass glyph: lit (subsurface) glass in the art colour, clearly brighter and
+    bluer than the system-dark plate (the clear glass of HEAD read (28, 31, 46) on a (42, 42, 44) plate)."""
+    out = outdir / "dark_glyph.png"
+    render(worker, disc_on_plate("liquid_glass", "#4466ff", "#ffffff", thickness=0.1), out, quality="preview",
+           appearance="dark")
+    glyph, plate = rgb_at(out, 0.0, 0.0), rgb_at(out, -0.75, 0.6)
+    assert plate.mean() < 90, plate.round()                                  # the plate is dark
+    assert glyph[2] > plate[2] + 60 and glyph[2] > glyph[0] + 40, (glyph.round(), plate.round())
 
 
 @needs_blender

@@ -215,6 +215,8 @@ class FakeSvg:
             layers[layer.id] = LayerGeometry(
                 layerId=layer.id, hash=h, silhouette=[self._rect_spline(ub)], regions=regions,
                 safeRadius=0.05, bbox=ub,
+                maxRadius=round(min(ub[2] - ub[0], ub[3] - ub[1]) / 2 if layer.mode == "combined"
+                                else max(min(b[2] - b[0], b[3] - b[1]) / 2 for b in boxes), 5),
                 texture=f"{url_prefix}/cache/{tex.name}", texturePath=str(tex),
                 svg=f"{url_prefix}/cache/{svg.name}",
             )

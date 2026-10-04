@@ -1,13 +1,19 @@
 // Height-field bodies (PLAN §11 Geometry) — the three.js twin of blender_worker/heightfield.py, used for EVERY piece,
 // silhouette, raster contour, card and the plate.
 //
-// A body is a watertight, smooth solid over a 2D outline whose height only depends on the inward distance d to that
-// outline, so thin parts simply taper and tips / corners can never fold over or self-intersect. The profile, the
-// sampling (graded offset rings along inward bisectors + medial points + the island apex), the chord passes, the
-// normals (softmin over FOOT POINTS, safe blend toward +Z, singular rim splits, creased flat-slab walls) and the
-// assembly follow heightfield.py step by step (see its module docstring, mirrored constants below). The only
-// difference is the triangulator: poly2tri (one constrained Delaunay triangulation per island: outer ring + its holes
-// + Steiner points) instead of mathutils.geometry.delaunay_2d_cdt.
+// A body is a watertight, smooth solid over a 2D outline: a round edge that only depends on the inward distance d to
+// that outline (thin parts simply taper, tips / corners never fold over or self-intersect) plus — with inflate — a
+// POISSON dome (PLAN §11 round 7): −∇²u = 4 on the triangulation, u = 0 on the outline, dome = inflate · D_P ·
+// √(u / max_P u) per connected part P (a disc becomes a hemisphere-like dome, thin parts round tapering tubes, no
+// medial-axis creases / fins). The profile, the sampling (graded offset rings along inward bisectors + medial points
+// + the island apex; inflated bodies: per-ray dome ROWS scaled to the local width), the chord passes, the Poisson
+// solve (cotangent Laplacian, Jacobi-preconditioned conjugate gradients on typed arrays), the normals (softmin over
+// FOOT POINTS + the dome's least-squares quadratic gradient, safe blend toward +Z, singular rim splits, creased
+// flat-slab walls) and the assembly follow heightfield.py step by step (see its module docstring, mirrored constants
+// below). The only difference is the triangulator: poly2tri (one constrained Delaunay triangulation per island: outer
+// ring + its holes + Steiner points, then Lawson flips to the Delaunay one) instead of mathutils' delaunay_2d_cdt.
+// The pieces of ONE layer meet like in scene.py (_relations): touching ones pull back INSET_GAP from each other,
+// overlapping ones stack by their real heights (ringsRelation / insetRings / stackShifts below).
 //
 // Units: everything is in the piece's LOCAL units (art units of its splines); tolerances are WORLD units divided by
 // `scale` (art scale × layer scale), exactly like the worker. The body is centred on its mid-plane z = 0.
@@ -41,6 +47,13 @@ export const NORMAL_MIN_DOT = 0.05
 export const APEX_CLEAR = 0.3
 export const MIN_THICKNESS = 1e-4
 export const CHORD_PASSES = 4
+/** Inflated bodies: bisection steps of each ray's medial distance (dome rows, SAMPLING 3b). */
+export const BISECT = 4
+/** −∇²u = POISSON_F: a disc of radius R gets u = R² − r² (u_max = R²). */
+export const POISSON_F = 4.0
+/** Conjugate-gradient stop: |residual| ≤ POISSON_TOL × |load|. */
+export const POISSON_TOL = 1e-5
+export const POISSON_MAX_ITER = 4000
 
 type Ring = Float64Array // flat x,y pairs, no repeated closing point
 
@@ -50,7 +63,9 @@ export function wallHalf(thickness: number, bevel: number): number {
   return Math.max(thickness / 2 - bevel, 0)
 }
 
-/** Top height z(d) = e + hb(d) + inflate·D·sqrt(1 − (1 − min(d/D, 1))²) (mirrored for the bottom). */
+/** Top height z(d) = e + hb(d) + inflate·D·sqrt(1 − (1 − min(d/D, 1))²) (mirrored for the bottom): the round edge plus
+ *  the DISC MODEL of the Poisson dome (exact for a disc of radius D; a body itself uses its solved u — buildBody).
+ *  Used for the round edge (inflate 0), sampling and the half-height bound. */
 export function profile(d: number, thickness: number, bevel: number, inflate: number, D: number): number {
   const dd = Math.max(d, 0)
   const b = Math.max(0, bevel)
@@ -915,7 +930,170 @@ function nearAny(P: number[], Q: number[], rad: number[]): boolean[] {
   return out
 }
 
-/** Graded ring points + medial points (SAMPLING 2–3 of heightfield.py). Flat x,y pairs. */
+/** heightfield._thin_grid: the first point per grid cell, per-point cell sizes rounded DOWN to powers of two (each size
+ *  class thinned on its own grid). */
+export function thinGrid(P: number[], cell: number[]): number[] {
+  const seen = new Set<string>()
+  const out: number[] = []
+  for (let i = 0; i < P.length >> 1; i++) {
+    const lc = Math.floor(Math.log2(Math.max(cell[i], 1e-12)))
+    const cs = 2 ** lc
+    const key = `${lc},${Math.floor(P[2 * i] / cs)},${Math.floor(P[2 * i + 1] / cs)}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(P[2 * i], P[2 * i + 1])
+  }
+  return out
+}
+
+/** heightfield._greedy_thin: drop each point closer than its `rad` to an earlier KEPT point (hash grid, cell = max rad). */
+export function greedyThin(P: number[], rad: number[]): number[] {
+  const n = P.length >> 1
+  if (n < 2) return P.slice()
+  let cell = 1e-12
+  for (const r of rad) cell = Math.max(cell, r)
+  const grid = new Map<string, number[]>()
+  const out: number[] = []
+  for (let i = 0; i < n; i++) {
+    const x = P[2 * i]
+    const y = P[2 * i + 1]
+    const cx = Math.floor(x / cell)
+    const cy = Math.floor(y / cell)
+    const r2 = rad[i] * rad[i]
+    let hit = false
+    for (let ddx = -1; ddx <= 1 && !hit; ddx++)
+      for (let ddy = -1; ddy <= 1 && !hit; ddy++) {
+        const l = grid.get(`${cx + ddx},${cy + ddy}`)
+        if (!l) continue
+        for (let m = 0; m < l.length; m += 2)
+          if ((l[m] - x) ** 2 + (l[m + 1] - y) ** 2 < r2) {
+            hit = true
+            break
+          }
+      }
+    if (hit) continue
+    const key = `${cx},${cy}`
+    let l = grid.get(key)
+    if (!l) grid.set(key, (l = []))
+    l.push(x, y)
+    out.push(x, y)
+  }
+  return out
+}
+
+/**
+ * Dome sampling of an inflated island (heightfield._dome_rows, SAMPLING 3b): per ray its MEDIAL distance t_m (BISECT
+ * bisection steps on "true distance ≥ (1 − RING_TOL) × distance along the ray", bracketed by its last valid / first
+ * failing round-edge ring) and rows at t_m·(1 − cos(jπ/2J)), j = 1..J−1, J = clamp(segments, 3, 12) — the disc model's
+ * dome rings scaled to the LOCAL width, so thin parts get as many rows across as discs (the Poisson dome is a round
+ * tube there) — plus the medial point at t_m. A row closer than 0.35 × its gap to a valid round-edge ring of the same
+ * ray is dropped; rows are thinned per size class on grids of cell max(0.45·min(gap, maxEdge), 0.8·s(x)), s the
+ * slope-based spacing of the disc model of radius t_m; medial points are dropped within 0.35·min(t_m − last row,
+ * maxEdge) of a kept point and thinned greedily. `sel` = the island's rays (indices into ox / oy / dx / dy / sc).
+ */
+function domeRows(
+  ol: OutlineQuery,
+  sel: number[],
+  ox: number[],
+  oy: number[],
+  dx: number[],
+  dy: number[],
+  sc: number[],
+  ds: number[],
+  firstBad: Int32Array,
+  D: number,
+  bevel: number,
+  inflate: number,
+  segments: number,
+  maxEdge: number,
+  tanMin: number,
+  scaleW: number,
+  kept: number[],
+): number[] {
+  const R = sel.length
+  if (!R || !(D > 0)) return []
+  const K = ds.length
+  const hiAll = (D / (1 - RING_TOL)) * 1.001
+  const lo = new Float64Array(R)
+  const hi = new Float64Array(R)
+  for (let a = 0; a < R; a++) {
+    const fb = firstBad[a]
+    lo[a] = fb > 0 && K ? ds[fb - 1] : 0
+    hi[a] = fb < K ? ds[Math.min(fb, K - 1)] : hiAll
+  }
+  const mid = new Float64Array(R)
+  const P = new Float64Array(2 * R)
+  for (let it = 0; it < BISECT; it++) {
+    for (let a = 0; a < R; a++) {
+      const ri = sel[a]
+      mid[a] = 0.5 * (lo[a] + hi[a])
+      P[2 * a] = ox[ri] + dx[ri] * sc[ri] * mid[a]
+      P[2 * a + 1] = oy[ri] + dy[ri] * sc[ri] * mid[a]
+    }
+    const dm = nearest(P, ol.shape).d // shape rings: ample for a bracket
+    for (let a = 0; a < R; a++) {
+      if (dm[a] >= (1 - RING_TOL) * mid[a]) lo[a] = mid[a]
+      else hi[a] = mid[a]
+    }
+  }
+  const tm = lo
+  const J = Math.max(3, Math.min(12, Math.trunc(segments)))
+  const fr: number[] = []
+  for (let j = 1; j < J; j++) fr.push(1 - Math.cos((j * Math.PI) / (2 * J)))
+  const rows: number[] = []
+  for (let j = 0; j < J - 1; j++) {
+    const pts: number[] = []
+    const cells: number[] = []
+    const frPrev = j ? fr[j - 1] : 0
+    for (let a = 0; a < R; a++) {
+      const t = tm[a]
+      const X = t * fr[j]
+      if (!(t > 0) || !(X > 0)) continue
+      const gap = t * (fr[j] - frPrev)
+      let close = false
+      for (let r = 0; r < K && r < firstBad[a]; r++)
+        if (Math.abs(X - ds[r]) < 0.35 * gap) {
+          close = true
+          break
+        }
+      if (close) continue
+      const sl = slope(X, bevel, inflate, Math.max(t, 1e-12))
+      const tan = Math.min(Math.max((TAN_K * scaleW) / Math.sqrt(Math.max(sl, 1e-6)), tanMin), TAN_MAX * scaleW)
+      const ri = sel[a]
+      pts.push(ox[ri] + dx[ri] * sc[ri] * X, oy[ri] + dy[ri] * sc[ri] * X)
+      cells.push(Math.max(0.45 * Math.min(gap, maxEdge), 0.8 * tan))
+    }
+    for (const v of thinGrid(pts, cells)) rows.push(v)
+  }
+  // medial points (the spine of thin parts, the apex of round ones)
+  let med: number[] = []
+  let rad: number[] = []
+  const lastFr = fr[fr.length - 1]
+  for (let a = 0; a < R; a++) {
+    const t = tm[a]
+    if (!(t > 1e-9)) continue
+    const ri = sel[a]
+    med.push(ox[ri] + dx[ri] * sc[ri] * t, oy[ri] + dy[ri] * sc[ri] * t)
+    rad.push(0.35 * Math.min(t * (1 - lastFr), maxEdge))
+  }
+  const allk = kept.concat(rows)
+  if (med.length && allk.length) {
+    const hit = nearAny(med, allk, rad)
+    const m2: number[] = []
+    const r2: number[] = []
+    for (let i = 0; i < rad.length; i++)
+      if (!hit[i]) {
+        m2.push(med[2 * i], med[2 * i + 1])
+        r2.push(rad[i])
+      }
+    med = m2
+    rad = r2
+  }
+  if (med.length) med = greedyThin(med, rad)
+  return rows.concat(med)
+}
+
+/** Graded ring points + medial points (SAMPLING 2–3 of heightfield.py; inflated islands: dome rows, 3b). Flat x,y pairs. */
 export function steinerPoints(
   ol: OutlineQuery,
   Dr: Float64Array,
@@ -992,13 +1170,16 @@ export function steinerPoints(
   })
   const out: number[] = []
   const islands = [...new Set(isl)].sort((a, b) => a - b)
+  const dome = inflate > 0
   for (const I of islands) {
     const sel: number[] = []
     isl.forEach((v, i) => v === I && sel.push(i))
     const D = Dr[I]
-    const ds = ringDistances(bevel, inflate, D, segments)
+    // inflated bodies: global rings for the round edge only; the dome gets per-ray rows (SAMPLING 3b, domeRows)
+    const kRing = dome ? 0 : inflate
+    const ds = ringDistances(bevel, kRing, D, segments)
     const K = ds.length
-    if (!K) continue
+    if (!K && !dome) continue
     const Rn = sel.length
     const P = new Float64Array(Rn * K * 2)
     sel.forEach((ri, a) => {
@@ -1008,7 +1189,7 @@ export function steinerPoints(
         P[(a * K + j) * 2 + 1] = oy[ri] + dy[ri] * t
       }
     })
-    const dtrue = ol.query(P).d
+    const dtrue = K ? ol.query(P).d : new Float64Array(0)
     const firstBad = new Int32Array(Rn)
     for (let a = 0; a < Rn; a++) {
       let j = 0
@@ -1018,13 +1199,19 @@ export function steinerPoints(
     const gaps = ds.map((x, i) => x - (i ? ds[i - 1] : 0))
     const kept: number[] = []
     for (let j = 0; j < K; j++) {
-      const sl = slope(ds[j], bevel, inflate, D)
+      const sl = slope(ds[j], bevel, kRing, D)
       const tan = Math.min(Math.max((TAN_K * scaleW) / Math.sqrt(Math.max(sl, 1e-6)), tanMin), TAN_MAX * scaleW)
       const q: number[] = []
       for (let a = 0; a < Rn; a++) if (firstBad[a] > j) q.push(P[(a * K + j) * 2], P[(a * K + j) * 2 + 1])
       if (!q.length) continue
       const cellr = Math.max(0.45 * Math.min(gaps[j], maxEdge), 0.8 * tan)
       for (const i of firstPerCell(q, cellr)) kept.push(q[2 * i], q[2 * i + 1])
+    }
+    if (dome) {
+      const rows = domeRows(ol, sel, ox, oy, dx, dy, sc, ds, firstBad, D, bevel, inflate, segments, maxEdge, tanMin, scaleW, kept)
+      for (const v of kept) out.push(v)
+      for (const v of rows) out.push(v)
+      continue
     }
     // medial points: halfway between the last valid ring point (or the outline vertex) and the first failure
     let med: number[] = []
@@ -1641,6 +1828,356 @@ function earcut(data: number[], holeIndices: number[]): number[] {
   return tris
 }
 
+// ================================================================================================ Poisson inflation
+export interface PoissonInfo {
+  iterations: number
+  /** |residual| / |load| at the stop. */
+  residual: number
+  /** Free (interior) vertices. */
+  free: number
+}
+
+/**
+ * heightfield.poisson: solve −∇²u = f on the triangulated region (V flat x,y; CCW triangles T), u = 0 at the `fixed`
+ * vertices. Cotangent Laplacian with the circumcentric dual area: K u = b with K_ij = −w_ij, K_ii = Σ_j w_ij, edge weight
+ * w_ij = ½(cot α_ij + cot β_ij) (the angles opposite edge ij in its one or two triangles, summed per undirected edge and
+ * clamped to ≥ 0) and load b_i = f·Σ_j w_ij·|x_j − x_i|²/4 (quadratics — a disc's R² − r² — come out exact at the
+ * vertices). Jacobi-preconditioned conjugate gradients from u = 0 until |r| ≤ tol·|b|; u clamped to ≥ 0.
+ */
+export function poisson(
+  V: ArrayLike<number>,
+  T: ArrayLike<number>,
+  fixed: ArrayLike<number>,
+  f = POISSON_F,
+  tol = POISSON_TOL,
+  maxIter = POISSON_MAX_ITER,
+): { u: Float64Array; info: PoissonInfo } {
+  const n = V.length >> 1
+  const u = new Float64Array(n)
+  let nFree = 0
+  for (let i = 0; i < n; i++) if (!fixed[i]) nFree++
+  const info: PoissonInfo = { iterations: 0, residual: 0, free: nFree }
+  const nt = (T.length / 3) | 0
+  if (!nt || !nFree) return { u, info }
+  // undirected edges with their summed cotangent weights
+  const index = new Map<number, number>()
+  const ea: number[] = []
+  const eb: number[] = []
+  const ew: number[] = []
+  const addEdge = (a: number, b: number, w: number) => {
+    const lo = a < b ? a : b
+    const hi = a < b ? b : a
+    const key = lo * n + hi
+    const k = index.get(key)
+    if (k === undefined) {
+      index.set(key, ea.length)
+      ea.push(lo)
+      eb.push(hi)
+      ew.push(w)
+    } else ew[k] += w
+  }
+  for (let t = 0; t < nt; t++) {
+    const i0 = T[3 * t]
+    const i1 = T[3 * t + 1]
+    const i2 = T[3 * t + 2]
+    const x0 = V[2 * i0]
+    const y0 = V[2 * i0 + 1]
+    const x1 = V[2 * i1]
+    const y1 = V[2 * i1 + 1]
+    const x2 = V[2 * i2]
+    const y2 = V[2 * i2 + 1]
+    const a2 = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0) // 2 × signed area
+    const a2s = Math.abs(a2) > 1e-300 ? a2 : 1e-300
+    // cot of the angle at each corner = (its two edge vectors' dot) / (2 × area); weight of the OPPOSITE edge
+    const c0 = ((x1 - x0) * (x2 - x0) + (y1 - y0) * (y2 - y0)) / a2s
+    const c1 = ((x2 - x1) * (x0 - x1) + (y2 - y1) * (y0 - y1)) / a2s
+    const c2 = ((x0 - x2) * (x1 - x2) + (y0 - y2) * (y1 - y2)) / a2s
+    addEdge(i1, i2, 0.5 * c0)
+    addEdge(i2, i0, 0.5 * c1)
+    addEdge(i0, i1, 0.5 * c2)
+  }
+  const E = ea.length
+  const A = Int32Array.from(ea)
+  const B = Int32Array.from(eb)
+  const W = new Float64Array(E)
+  const diag = new Float64Array(n)
+  const b = new Float64Array(n)
+  for (let e = 0; e < E; e++) {
+    const w = Math.max(ew[e], 0)
+    W[e] = w
+    const i = A[e]
+    const j = B[e]
+    diag[i] += w
+    diag[j] += w
+    const L2 = (V[2 * j] - V[2 * i]) ** 2 + (V[2 * j + 1] - V[2 * i + 1]) ** 2
+    b[i] += (f / 4) * w * L2
+    b[j] += (f / 4) * w * L2
+  }
+  const ok = new Uint8Array(n)
+  const dinv = new Float64Array(n)
+  for (let i = 0; i < n; i++) {
+    ok[i] = !fixed[i] && diag[i] > 1e-300 ? 1 : 0
+    if (!ok[i]) b[i] = 0
+    else dinv[i] = 1 / diag[i]
+  }
+  // K x for x zero at every fixed vertex (p stays zero there: r, z, p start from b)
+  const q = new Float64Array(n)
+  const K = (x: Float64Array) => {
+    for (let i = 0; i < n; i++) q[i] = diag[i] * x[i]
+    for (let e = 0; e < E; e++) {
+      const i = A[e]
+      const j = B[e]
+      const w = W[e]
+      q[i] -= w * x[j]
+      q[j] -= w * x[i]
+    }
+    for (let i = 0; i < n; i++) if (!ok[i]) q[i] = 0
+  }
+  let bn = 0
+  for (let i = 0; i < n; i++) bn += b[i] * b[i]
+  bn = Math.sqrt(bn)
+  if (!(bn > 0)) return { u, info }
+  const r = Float64Array.from(b)
+  const z = new Float64Array(n)
+  const p = new Float64Array(n)
+  let rz = 0
+  for (let i = 0; i < n; i++) {
+    z[i] = dinv[i] * r[i]
+    p[i] = z[i]
+    rz += r[i] * z[i]
+  }
+  let it = 0
+  let rn = bn
+  for (it = 1; it <= maxIter; it++) {
+    K(p)
+    let pq = 0
+    for (let i = 0; i < n; i++) pq += p[i] * q[i]
+    if (!(pq > 0)) break
+    const alpha = rz / pq
+    let rr = 0
+    for (let i = 0; i < n; i++) {
+      u[i] += alpha * p[i]
+      r[i] -= alpha * q[i]
+      rr += r[i] * r[i]
+    }
+    rn = Math.sqrt(rr)
+    if (rn <= tol * bn) break
+    let rzNew = 0
+    for (let i = 0; i < n; i++) {
+      z[i] = dinv[i] * r[i]
+      rzNew += r[i] * z[i]
+    }
+    const beta = rzNew / rz
+    for (let i = 0; i < n; i++) p[i] = z[i] + beta * p[i]
+    rz = rzNew
+  }
+  info.iterations = Math.min(it, maxIter)
+  info.residual = rn / bn
+  for (let i = 0; i < n; i++) if (u[i] < 0) u[i] = 0
+  return { u, info }
+}
+
+/**
+ * heightfield.components: connected component id per vertex over the triangle edges whose both ends are NOT `cut` (the
+ * free vertices of the Poisson problem — separate islands, and parts joined only through the outline, are solved and
+ * normalised apart). Ids follow the smallest vertex index of each component; cut vertices get −1.
+ */
+export function components(n: number, T: ArrayLike<number>, cut: ArrayLike<number>): { comp: Int32Array; count: number } {
+  const parent = new Int32Array(n)
+  for (let i = 0; i < n; i++) parent[i] = i
+  const find = (x: number) => {
+    while (parent[x] !== x) {
+      parent[x] = parent[parent[x]]
+      x = parent[x]
+    }
+    return x
+  }
+  for (let t = 0; t < T.length; t += 3)
+    for (let c = 0; c < 3; c++) {
+      const a = T[t + c]
+      const b = T[t + ((c + 1) % 3)]
+      if (cut[a] || cut[b]) continue
+      const ra = find(a)
+      const rb = find(b)
+      if (ra !== rb) parent[ra < rb ? rb : ra] = ra < rb ? ra : rb
+    }
+  const comp = new Int32Array(n).fill(-1)
+  const id = new Map<number, number>()
+  for (let i = 0; i < n; i++) {
+    if (cut[i]) continue
+    const r = find(i)
+    let k = id.get(r)
+    if (k === undefined) id.set(r, (k = id.size))
+    comp[i] = k
+  }
+  return { comp, count: id.size }
+}
+
+/** heightfield._triangle_gradient: ∇u at the vertices of a P1 field — the area-weighted mean of the adjacent triangles'
+ *  constant gradients (∇φ_k = left normal of the edge opposite corner k / (2·area)). Flat gx, gy pairs. */
+export function triangleGradient(V: ArrayLike<number>, T: ArrayLike<number>, u: ArrayLike<number>): Float64Array {
+  const n = V.length >> 1
+  const g = new Float64Array(2 * n)
+  const wsum = new Float64Array(n)
+  for (let t = 0; t < T.length; t += 3) {
+    const i = [T[t], T[t + 1], T[t + 2]]
+    const a2 =
+      (V[2 * i[1]] - V[2 * i[0]]) * (V[2 * i[2] + 1] - V[2 * i[0] + 1]) -
+      (V[2 * i[2]] - V[2 * i[0]]) * (V[2 * i[1] + 1] - V[2 * i[0] + 1])
+    const a2s = Math.abs(a2) > 1e-300 ? a2 : 1e-300
+    let gx = 0
+    let gy = 0
+    for (let k = 0; k < 3; k++) {
+      const pa = i[(k + 1) % 3]
+      const pb = i[(k + 2) % 3]
+      const ex = V[2 * pb] - V[2 * pa]
+      const ey = V[2 * pb + 1] - V[2 * pa + 1]
+      gx += u[i[k]] * -ey
+      gy += u[i[k]] * ex
+    }
+    gx /= a2s
+    gy /= a2s
+    const wa = Math.abs(a2)
+    for (const v of i) {
+      g[2 * v] += gx * wa
+      g[2 * v + 1] += gy * wa
+      wsum[v] += wa
+    }
+  }
+  for (let v = 0; v < n; v++) {
+    const w = Math.max(wsum[v], 1e-300)
+    g[2 * v] /= w
+    g[2 * v + 1] /= w
+  }
+  return g
+}
+
+/** Solve the m × m system A x = y in place (Gaussian elimination, partial pivoting) -> determinant (0: singular). */
+function solveDense(A: Float64Array, y: Float64Array, m: number): number {
+  let det = 1
+  for (let c = 0; c < m; c++) {
+    let piv = c
+    for (let r = c + 1; r < m; r++) if (Math.abs(A[r * m + c]) > Math.abs(A[piv * m + c])) piv = r
+    const pv = A[piv * m + c]
+    if (pv === 0) return 0
+    if (piv !== c) {
+      for (let k = 0; k < m; k++) {
+        const t = A[c * m + k]
+        A[c * m + k] = A[piv * m + k]
+        A[piv * m + k] = t
+      }
+      const t = y[c]
+      y[c] = y[piv]
+      y[piv] = t
+      det = -det
+    }
+    det *= pv
+    for (let r = c + 1; r < m; r++) {
+      const f = A[r * m + c] / pv
+      if (f === 0) continue
+      for (let k = c; k < m; k++) A[r * m + k] -= f * A[c * m + k]
+      y[r] -= f * y[c]
+    }
+  }
+  for (let c = m - 1; c >= 0; c--) {
+    let s = y[c]
+    for (let k = c + 1; k < m; k++) s -= A[c * m + k] * y[k]
+    y[c] = s / A[c * m + c]
+  }
+  return det
+}
+
+/**
+ * heightfield.vertex_gradient: ∇u at the vertices (only `where`, when given; the rest stay 0) — a least-squares QUADRATIC
+ * fit of u over each vertex's one-ring (u_j − u_i ≈ g·δ + ½δᵀHδ, δ = x_j − x_i scaled by the ring's mean edge length;
+ * exact for quadratics, so a disc's dome normals are exact on any mesh). Five unknowns at valence ≥ 5 when the normal
+ * matrix is well conditioned (det > 1e-8 × the product of its diagonal); else (valence 3–4 too) isotropic curvature
+ * H = c·I; otherwise the area-weighted mean of the adjacent triangles' constant gradients. Flat gx, gy pairs.
+ */
+export function vertexGradient(
+  V: ArrayLike<number>,
+  T: ArrayLike<number>,
+  u: ArrayLike<number>,
+  where?: ArrayLike<number | boolean>,
+): Float64Array {
+  const n = V.length >> 1
+  const out = triangleGradient(V, T, u)
+  const want = (i: number) => (where ? !!where[i] : true)
+  for (let i = 0; i < n; i++)
+    if (!want(i)) {
+      out[2 * i] = 0
+      out[2 * i + 1] = 0
+    }
+  // one-ring adjacency (unique undirected edges)
+  const seen = new Set<number>()
+  const deg = new Int32Array(n + 1)
+  const pairs: number[] = []
+  for (let t = 0; t < T.length; t += 3)
+    for (let c = 0; c < 3; c++) {
+      const a = T[t + c]
+      const b = T[t + ((c + 1) % 3)]
+      const lo = a < b ? a : b
+      const hi = a < b ? b : a
+      const key = lo * n + hi
+      if (seen.has(key)) continue
+      seen.add(key)
+      pairs.push(lo, hi)
+      deg[lo + 1]++
+      deg[hi + 1]++
+    }
+  for (let i = 0; i < n; i++) deg[i + 1] += deg[i]
+  const adj = new Int32Array(deg[n])
+  const fill = deg.slice(0, n)
+  for (let e = 0; e < pairs.length; e += 2) {
+    adj[fill[pairs[e]]++] = pairs[e + 1]
+    adj[fill[pairs[e + 1]]++] = pairs[e]
+  }
+  const A5 = new Float64Array(25)
+  const y5 = new Float64Array(5)
+  const A3 = new Float64Array(9)
+  const y3 = new Float64Array(3)
+  const row = new Float64Array(5)
+  const fit = (i: number, m: number, A: Float64Array, y: Float64Array, h: number): boolean => {
+    A.fill(0)
+    y.fill(0)
+    for (let s = deg[i]; s < deg[i + 1]; s++) {
+      const j = adj[s]
+      const dxn = (V[2 * j] - V[2 * i]) / h
+      const dyn = (V[2 * j + 1] - V[2 * i + 1]) / h
+      const du = u[j] - u[i]
+      row[0] = dxn
+      row[1] = dyn
+      if (m === 5) {
+        row[2] = 0.5 * dxn * dxn
+        row[3] = dxn * dyn
+        row[4] = 0.5 * dyn * dyn
+      } else row[2] = 0.5 * (dxn * dxn + dyn * dyn)
+      for (let r = 0; r < m; r++) {
+        y[r] += row[r] * du
+        for (let c = 0; c < m; c++) A[r * m + c] += row[r] * row[c]
+      }
+    }
+    let had = 1
+    for (let r = 0; r < m; r++) had *= Math.max(A[r * m + r], 1e-300)
+    const det = solveDense(A, y, m)
+    if (!(det > 1e-8 * had)) return false
+    out[2 * i] = y[0] / h
+    out[2 * i + 1] = y[1] / h
+    return true
+  }
+  for (let i = 0; i < n; i++) {
+    if (!want(i)) continue
+    const cnt = deg[i + 1] - deg[i]
+    if (cnt < 3) continue
+    let h = 0
+    for (let s = deg[i]; s < deg[i + 1]; s++) h += Math.hypot(V[2 * adj[s]] - V[2 * i], V[2 * adj[s] + 1] - V[2 * i + 1])
+    h = Math.max(h / cnt, 1e-300)
+    if (cnt >= 5 && fit(i, 5, A5, y5, h)) continue
+    fit(i, 3, A3, y3, h)
+  }
+  return out
+}
+
 // ================================================================================================ build
 export interface BodyArrays {
   /** Non-indexed triangle soup: positions (x, y, z per corner), per-corner normals, art-square UVs. */
@@ -1662,6 +2199,8 @@ export interface BodyArrays {
     singular: number
     fallbacks: number
     ms: number
+    /** Inflated bodies: the Poisson solve (CG iterations, relative residual, free vertices, parts, ms). */
+    poisson: (PoissonInfo & { components: number; ms: number }) | null
   }
 }
 
@@ -1868,21 +2407,59 @@ export function buildBody(
   const z = new Float64Array(nv)
   const nt = new Float64Array(nv * 3)
   const vertical = new Uint8Array(nv)
+  // the round-edge rim e + hb(d) and its gradient hb'(d)·g (g = the unit gradient of d)
+  const grad = new Float64Array(nv * 2)
   for (let i = 0; i < nv; i++) {
-    z[i] = profile(d[i], th, b, k, Dv[i])
-    const s = slope(d[i], b, k, Dv[i])
+    z[i] = profile(d[i], th, b, 0, Dv[i])
+    const s = slope(d[i], b, 0, Dv[i])
+    const ss = Number.isFinite(s) ? s : 0
+    grad[2 * i] = ss * g[2 * i]
+    grad[2 * i + 1] = ss * g[2 * i + 1]
+    // vertical tangent at the rim (round edge or dome): horizontal normals
+    vertical[i] = onB[i] && !loose[i] && (b > 0 || k > 0) ? 1 : 0
+  }
+  let pinfo: (PoissonInfo & { components: number; ms: number }) | null = null
+  if (k > 0) {
+    // Poisson dome (PLAN §11 round 7): −∇²u = 4, u = 0 on the outline, per connected part normalised to its max
+    const t1 = now()
+    const { u, info } = poisson(V2, T, onB)
+    const { comp, count } = components(nv, T, onB)
+    if (count) {
+      const umax = new Float64Array(count)
+      const members: number[][] = Array.from({ length: count }, () => [])
+      for (let i = 0; i < nv; i++) {
+        const c = comp[i]
+        if (c < 0) continue
+        if (u[i] > umax[c]) umax[c] = u[i]
+        members[c].push(Dv[i])
+      }
+      // D_P = the median island inradius over the part's vertices
+      const Dc = members.map((m) => median(m))
+      const gu = vertexGradient(V2, T, u, comp.map((c) => (c >= 0 ? 1 : 0)))
+      for (let i = 0; i < nv; i++) {
+        const c = comp[i]
+        if (c < 0) continue
+        const q = Math.min(Math.max(u[i] / Math.max(umax[c], 1e-300), 0), 1)
+        const sq = Math.sqrt(Math.max(q, 1e-12))
+        z[i] += k * Dc[c] * Math.sqrt(q)
+        const dslope = (k * Dc[c]) / (2 * Math.max(umax[c], 1e-300) * sq)
+        grad[2 * i] += dslope * gu[2 * i]
+        grad[2 * i + 1] += dslope * gu[2 * i + 1]
+      }
+    }
+    pinfo = { ...info, components: count, ms: Math.round((now() - t1) * 100) / 100 }
+  }
+  for (let i = 0; i < nv; i++) {
     let nx: number
     let ny: number
     let nz: number
-    if (!Number.isFinite(s) && !loose[i]) {
-      vertical[i] = 1
+    if (vertical[i]) {
       nx = -g[2 * i]
       ny = -g[2 * i + 1]
       nz = 0
     } else {
-      const ss = Number.isFinite(s) ? s : 0
-      nx = -ss * g[2 * i]
-      ny = -ss * g[2 * i + 1]
+      nx = -grad[2 * i]
+      ny = -grad[2 * i + 1]
       nz = 1
     }
     const l = Math.max(Math.hypot(nx, ny, nz), 1e-300)
@@ -2145,6 +2722,7 @@ export function buildBody(
       singular: nSing,
       fallbacks: tri!.fallbacks,
       ms: Math.round((now() - t0) * 100) / 100,
+      poisson: pinfo,
     },
   }
 }
@@ -2157,6 +2735,165 @@ export function inradius(splines: Spline[], scale = 1): number {
   let D = 0
   for (const v of islandInradius(new OutlineQuery(o, 0))) D = Math.max(D, v)
   return D
+}
+
+// ================================================================================================ pieces of one layer
+/** heightfield.piece_rings: the sample rings (local units) of a piece's outline — outline() at the body tolerances. */
+export function pieceRings(splines: Spline[], scale = 1): Ring[] {
+  const sc = Math.max(scale, 1e-9)
+  return outline(splines, CHORD_TOL / sc, MAX_EDGE / sc, MERGE_EPS / sc).rings
+}
+
+/** Even-odd inside test of (x, y) against a piece's rings. */
+function insideRings(x: number, y: number, rings: Ring[]): boolean {
+  let m = false
+  for (const r of rings) if (pointInRing(x, y, r)) m = !m
+  return m
+}
+
+/** heightfield._interior_probes: points `depth` inside a piece along each outline vertex's inward bisector (rings
+ *  oriented material on the left), kept only where they really lie inside, at least depth/2 from the outline. */
+export function interiorProbes(rings: Ring[], depth: number): number[] {
+  const P: number[] = []
+  for (const r of rings) {
+    const n = r.length >> 1
+    if (n < 3) continue
+    for (let i = 0; i < n; i++) {
+      const p = (i - 1 + n) % n
+      const q = (i + 1) % n
+      let tix = r[2 * i] - r[2 * p]
+      let tiy = r[2 * i + 1] - r[2 * p + 1]
+      let l = Math.max(Math.hypot(tix, tiy), 1e-300)
+      tix /= l
+      tiy /= l
+      let tox = r[2 * q] - r[2 * i]
+      let toy = r[2 * q + 1] - r[2 * i + 1]
+      l = Math.max(Math.hypot(tox, toy), 1e-300)
+      tox /= l
+      toy /= l
+      let nx = -tiy - toy
+      let ny = tix + tox
+      l = Math.max(Math.hypot(nx, ny), 1e-300)
+      nx /= l
+      ny /= l
+      P.push(r[2 * i] + nx * depth, r[2 * i + 1] + ny * depth)
+    }
+  }
+  if (!P.length) return P
+  const d = nearest(P, new SegmentSet(rings)).d
+  const out: number[] = []
+  for (let i = 0; i < d.length; i++) if (d[i] >= 0.5 * depth && insideRings(P[2 * i], P[2 * i + 1], rings)) out.push(P[2 * i], P[2 * i + 1])
+  return out
+}
+
+/**
+ * heightfield.rings_relation — how two pieces (lists of rings) meet: 0 apart, 1 TOUCH (outlines within `tol` of each
+ * other — a shared edge — but the interiors do not overlap), 2 OVERLAP (some vertex of one lies inside the other,
+ * farther than `tol` from its outline: a translucent piece over another — or the outlines (nearly) COINCIDE: caught by
+ * interior probes 4·tol inside each piece).
+ */
+export function ringsRelation(ra: Ring[], rb: Ring[], tol: number): 0 | 1 | 2 {
+  if (!ra.length || !rb.length) return 0
+  const box = (rs: Ring[]) => {
+    let x0 = Infinity
+    let y0 = Infinity
+    let x1 = -Infinity
+    let y1 = -Infinity
+    for (const r of rs) {
+      const b = ringBox(r)
+      x0 = Math.min(x0, b[0])
+      y0 = Math.min(y0, b[1])
+      x1 = Math.max(x1, b[2])
+      y1 = Math.max(y1, b[3])
+    }
+    return [x0, y0, x1, y1]
+  }
+  const [ax0, ay0, ax1, ay1] = box(ra)
+  const [bx0, by0, bx1, by1] = box(rb)
+  if (ax0 > bx1 + tol || bx0 > ax1 + tol || ay0 > by1 + tol || by0 > ay1 + tol) return 0
+  const flat = (rs: Ring[]) => {
+    const out: number[] = []
+    for (const r of rs) for (const v of r) out.push(v)
+    return out
+  }
+  const A = flat(ra)
+  const B = flat(rb)
+  const sa = new SegmentSet(ra)
+  const sb = new SegmentSet(rb)
+  const da = nearest(A, sb).d // A's vertices to B's outline
+  const db = nearest(B, sa).d
+  for (let i = 0; i < da.length; i++) if (da[i] > tol && insideRings(A[2 * i], A[2 * i + 1], rb)) return 2
+  for (let i = 0; i < db.length; i++) if (db[i] > tol && insideRings(B[2 * i], B[2 * i + 1], ra)) return 2
+  if (!da.some((v) => v <= tol) && !db.some((v) => v <= tol)) return 0
+  // the outlines meet: a shared edge (TOUCH) — or (nearly) the same outline, interiors on the same side (OVERLAP)
+  for (const [r1, r2, s2] of [
+    [ra, rb, sb],
+    [rb, ra, sa],
+  ] as const) {
+    const Q = interiorProbes(r1, 4 * tol)
+    if (!Q.length) continue
+    const dq = nearest(Q, s2).d
+    for (let i = 0; i < dq.length; i++) if (dq[i] > tol && insideRings(Q[2 * i], Q[2 * i + 1], r2)) return 2
+  }
+  return 1
+}
+
+/**
+ * heightfield.inset_rings: piece A's rings pulled back from piece B (they touch along a shared edge) — every vertex of A
+ * inside B or closer than `gap` to B's outline moves to B's outline + `gap` along B's outward normal there (into A).
+ */
+export function insetRings(ra: Ring[], rb: Ring[], gap: number): Ring[] {
+  if (!ra.length || !rb.length) return ra
+  const sb = new SegmentSet(rb)
+  return ra.map((r) => {
+    const { d, seg, g } = nearest(r, sb)
+    let q: Float64Array | null = null
+    for (let i = 0; i < d.length; i++) {
+      if (!(d[i] < gap) && !insideRings(r[2 * i], r[2 * i + 1], rb)) continue
+      q ??= Float64Array.from(r)
+      const fx = r[2 * i] - g[2 * i] * d[i]
+      const fy = r[2 * i + 1] - g[2 * i + 1] * d[i]
+      const k = seg[i]
+      const ex = sb.bx[k] - sb.ax[k]
+      const ey = sb.by[k] - sb.ay[k]
+      const l = Math.max(Math.hypot(ex, ey), 1e-300)
+      // B's outward normal (material on the left → outward = right normal)
+      q[2 * i] = fx + (ey / l) * gap
+      q[2 * i + 1] = fy + (-ex / l) * gap
+    }
+    return q ?? r
+  })
+}
+
+/** heightfield.rings_to_splines: polyline rings → closed straight-segment splines (the builder's input). */
+export function ringsToSplines(rings: Ring[]): Spline[] {
+  return rings.map((r) => {
+    const points = []
+    for (let i = 0; i < r.length; i += 2) {
+      const co: [number, number] = [r[i], r[i + 1]]
+      points.push({ co, hl: co, hr: co })
+    }
+    return { closed: true, hole: false, parent: -1, depth: 0, points }
+  })
+}
+
+/**
+ * heightfield.stack_shifts — real-height stacking INSIDE one layer (paint order): every body is centred at base[j] +
+ * shift; a body that touches / overlaps an earlier one (`pairs` = [i, j], i < j) is lifted until its lowest point clears
+ * that body's top by `gap`: shift_j = max(0, max_i (base_i + shift_i + h_i + gap + h_j) − base_j).
+ */
+export function stackShifts(n: number, pairs: readonly (readonly [number, number])[], halves: ArrayLike<number>, gap: number, base?: ArrayLike<number>): Float64Array {
+  const s = new Float64Array(n)
+  const below = new Map<number, number[]>()
+  for (const [i, j] of pairs) {
+    let l = below.get(j)
+    if (!l) below.set(j, (l = []))
+    l.push(i)
+  }
+  const b0 = (k: number) => (base ? base[k] : 0)
+  for (let j = 0; j < n; j++)
+    for (const i of below.get(j) ?? []) s[j] = Math.max(s[j], b0(i) + s[i] + halves[i] + gap + halves[j] - b0(j))
+  return s
 }
 
 // ================================================================================================ checks

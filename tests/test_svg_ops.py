@@ -30,6 +30,21 @@ def ids_of(layers):
     return [list(L.elementIds) for L in layers]
 
 
+def assert_real_stack(pdir, project, layers, gap=None):
+    """`layers` form the real-height stack (PLAN 11 round 7) for the max radii the geometry bundle reports."""
+    from bis import stacking
+
+    p = project.model_copy(deep=True)
+    p.layers = layers
+    bundle = svg.build_geometry(pdir, p, "/files/projects/p", texture_size=64)
+    radii = {lid: lg.maxRadius for lid, lg in bundle.layers.items()}
+    rules = stacking.geometry_rules()
+    assert layers[0].depth.z == pytest.approx(rules["stackLift"], abs=1e-5)
+    gaps = stacking.stack_gaps(layers, radii, project.canvas.art.scale)
+    want = rules["stackGap"] if gap is None else gap
+    assert gaps == pytest.approx([want] * len(gaps), abs=2e-4), gaps
+
+
 def test_resplit_strategies_exclude_plate(import_icon):
     res, project, pdir = import_icon(CORPUS_DIR / "Maps.svg")
     plate_ids = {e.id for e in res.elements} - {i for L in res.layers for i in L.elementIds}
@@ -50,7 +65,7 @@ def test_merge_legal_keeps_bottom_layer_identity(import_icon):
     merged = next(L for L in layers if L.id == L1.id)
     assert set(merged.elementIds) == set(L1.elementIds) | set(L3.elementIds)
     assert merged.material.preset == "jelly"
-    assert [L.depth.z for L in layers] == pytest.approx([i * 0.13 for i in range(len(layers))])
+    assert_real_stack(pdir, project, layers)                          # the default stack is re-stacked
     assert all(L.id != L3.id for L in layers)
 
 
@@ -96,7 +111,7 @@ def test_split_layer_elements_mode(import_icon):
     layers = svg.split_layer(pdir, project, project.layers[0].id, "elements")
     assert len(layers) == 4
     assert layers[0].id == project.layers[0].id
-    assert [L.depth.z for L in layers] == pytest.approx([0.0, 0.13, 0.26, 0.39])
+    assert_real_stack(pdir, project, layers)
     # stacking respects paint order where things overlap
     order = [L.elementIds[0] for L in layers]
     ids = {e.origId: e.id for e in res.elements}

@@ -1,6 +1,7 @@
 """Geometry export: pathops paths -> cubic Bezier splines in art space, occlusion-cut regions,
-silhouettes, safe bevel radius, corner-preserving polyline smoothing, layer SVGs + textures, and
-the hash-cached :class:`GeometryBundle`.
+silhouettes, safe bevel radius, max inscribed radius of the layer's bodies (``LayerGeometry.maxRadius``,
+real-height stacking), corner-preserving polyline smoothing, layer SVGs + textures, and the hash-cached
+:class:`GeometryBundle`.
 
 Exported splines are fills: always closed, clipped to the plate outline when there is a plate
 (art flush with the plate edge snapped onto it), and cleaned by :mod:`.hygiene` (no micro debris,
@@ -44,6 +45,8 @@ SAFE_RADIUS_AREA_TOL = 0.02   # morphological opening may remove <= 2 % of a par
 SAFE_RADIUS_CAP = 0.5         # art units
 SAFE_RADIUS_MIN = 0.004       # art units (hygiene.MICRO, ~1 px): separate slivers thinner than this that hold
                               # <= SAFE_RADIUS_AREA_TOL of the layer's area do not limit its radius
+MAX_RADIUS_TOL = 5e-4         # art units: outline simplification + GEOS tolerance of the max inscribed radius
+MAX_RADIUS_CLOSE = 1e-3       # art units: morphological closing before the max inscribed radius (cracks / spikes)
 REGION_Z_STEP = 0.001         # zSub per translucent overlap level
 TEXTURE_SIZE = 2048
 TEXTURE_BUDGET = ((8, 2048), (24, 1024))  # (max layers, max texture px); more layers -> 512 px
@@ -391,6 +394,110 @@ def safe_radius(geoms: Sequence, area_tol: float = SAFE_RADIUS_AREA_TOL, cap: fl
 
 
 # ----------------------------------------------------------------------------------------------
+# max inscribed radius (round 7: real-height stacking)
+# ----------------------------------------------------------------------------------------------
+def max_radius(geoms: Sequence, tol: float = MAX_RADIUS_TOL, close: Optional[float] = None) -> float:
+    """Largest inscribed-circle radius over every polygon (island) of `geoms` (art units): the D of the
+    layer's largest body - a body's Poisson dome rises inflate x D (PLAN §11 round 7). GEOS maximum inscribed
+    circle on the outlines simplified by `tol` (the result is within ~`tol` of the exact radius), after a
+    morphological CLOSING by `close` (default MAX_RADIUS_CLOSE): union silhouettes of touching pieces keep
+    zero-width cracks and needle spikes along the shared edges (Maps, Wallet, Earth) that the exported splines /
+    the worker's outline cleaning drop - measured with them, D came out up to 40 % low, so a 'combined' body rose
+    above the stack height H into the next layer."""
+    arr = np.array([g for g in geoms if g is not None and not g.is_empty and g.area > 0], dtype=object)
+    if len(arr) == 0:
+        return 0.0
+    c = MAX_RADIUS_CLOSE if close is None else max(0.0, float(close))
+    try:
+        arr = shapely.make_valid(shapely.simplify(arr, tol))
+        parts = shapely.get_parts(arr[~shapely.is_empty(arr)])
+        parts = shapely.get_parts(parts[np.isin(shapely.get_type_id(parts), (3, 6))])   # Polygons only
+        parts = parts[shapely.area(parts) > 0] if len(parts) else parts
+        if len(parts) == 0:
+            return 0.0
+        if c > 0:   # close each island on its own (pieces of different islands are never fused)
+            parts = shapely.buffer(shapely.buffer(parts, c, join_style="mitre"), -c, join_style="mitre")
+            parts = shapely.get_parts(parts[~shapely.is_empty(parts)])
+            parts = parts[shapely.area(parts) > 0] if len(parts) else parts
+            if len(parts) == 0:
+                return 0.0
+        r = shapely.length(shapely.maximum_inscribed_circle(parts, tolerance=tol))
+    except shapely.errors.GEOSException:   # numerically nasty outline: the √(area/π) bound of each part
+        parts = shapely.get_parts(arr[~shapely.is_empty(arr)])
+        r = np.sqrt(shapely.area(parts) / math.pi) if len(parts) else np.zeros(1)
+    return round(float(np.max(r)), 5) if len(r) else 0.0
+
+
+def touching_opaque(store: ElementStore, members: Sequence[Elem], regions: Sequence[Tuple[Elem, pathops.Path]],
+                    sil: Optional[pathops.Path], levels: Optional[Sequence[int]] = None) -> bool:
+    """Port of the worker's ``scene.touching_opaque``: an 'individual' layer whose pieces share edges (the union
+    silhouette has fewer outer contours than the regions together) and are all opaque vector paint renders as ONE
+    silhouette body. `levels` = the regions' translucent-overlap levels (zSub); computed when needed. (The worker
+    also keeps pieces with their own per-shape material apart: their D is then at most the silhouette's.)"""
+    if len(regions) < 2 or sil is None or is_empty(sil):
+        return False
+    if any(m.image for m in members):
+        return False
+    if any(m.total_opacity < 0.999 or not m.paint.get("opaque", True) for m, _p in regions):
+        return False
+    if any(float(s.get("opacity", 1.0)) < 0.999 for m, _p in regions for s in m.paint.get("stops") or []):
+        return False
+    if levels is None:
+        levels = _region_levels(list(regions), store.art.area * 1e-6)
+    if any(levels):
+        return False
+
+    def outers(p: pathops.Path) -> int:
+        g = shapely_from_path(p, store.tolerance)
+        return 0 if g.is_empty else len(shapely.get_parts(g))
+
+    sil_outer = outers(sil)
+    return 0 < sil_outer < sum(outers(p) for _m, p in regions)
+
+
+def body_paths(store: ElementStore, members: Sequence[Elem], mode: str,
+               regions: Sequence[Tuple[Elem, pathops.Path]], sil: Optional[pathops.Path] = None,
+               levels: Optional[Sequence[int]] = None) -> List[pathops.Path]:
+    """The outlines the worker builds bodies from (SVG units): the clipped silhouette for a 'combined' layer and
+    for touching opaque pieces (:func:`touching_opaque`), else every occlusion-cut region."""
+    if mode != "combined" and len(regions) < 2:
+        return [p for _m, p in regions]
+    if sil is None:
+        sil = clip_to_plate([silhouette_path(store, members)], *plate_clip(store))[0]
+    if mode == "combined" or touching_opaque(store, members, regions, sil, levels):
+        return [sil]
+    return [p for _m, p in regions]
+
+
+_MAX_R_CACHE: Dict[tuple, float] = {}
+_MAX_R_GUARD = threading.Lock()
+
+
+def layer_max_radius(store: ElementStore, element_ids: Sequence[str], mode: str = "individual",
+                     regions: Optional[Sequence[Tuple[Elem, pathops.Path]]] = None) -> float:
+    """``LayerGeometry.maxRadius`` of a layer holding `element_ids` built as `mode` (art units), without building
+    its geometry: the same outlines (:func:`body_paths`) and measure (:func:`max_radius`) as the bundle. Cached
+    per (store, members, mode) - structural edits ask for every layer's radius."""
+    members = members_of(store, element_ids)
+    if not members:
+        return 0.0
+    key = (store.hash, PIPELINE_VERSION, tuple(m.id for m in members), mode)
+    with _MAX_R_GUARD:
+        hit = _MAX_R_CACHE.get(key)
+    if hit is not None:
+        return hit
+    if regions is None:
+        regions = layer_regions(store, members)
+    paths = body_paths(store, members, mode, regions)
+    r = max_radius([_art_scale_geom(shapely_from_path(p, store.tolerance), store.art.k) for p in paths])
+    with _MAX_R_GUARD:
+        _MAX_R_CACHE[key] = r
+        while len(_MAX_R_CACHE) > 4096:
+            _MAX_R_CACHE.pop(next(iter(_MAX_R_CACHE)))
+    return r
+
+
+# ----------------------------------------------------------------------------------------------
 # per-layer geometry
 # ----------------------------------------------------------------------------------------------
 def members_of(store: ElementStore, element_ids: Sequence[str]) -> List[Elem]:
@@ -601,7 +708,8 @@ def layer_hash(store: ElementStore, layer: Layer, texture_size: int) -> str:
                 [store.gradients.get(g, "") for g in grads], layer.mode, SMOOTH_POLYLINES,
                 SMOOTH_MIN_SEGMENTS, SMOOTH_STRAIGHT_FRAC, SMOOTH_CORNER_DEG, SMOOTH_MAX_BULGE, SAFE_RADIUS_AREA_TOL,
                 SMOOTH_TRACED_MIN_SEGMENTS, SMOOTH_TRACED_CORNER_DEG,
-                hygiene.MICRO, hygiene.MIN_AREA, clip, FUSE_GAP, SNAP_MIN_WIDTH, texture_size)[:20]
+                hygiene.MICRO, hygiene.MIN_AREA, clip, FUSE_GAP, SNAP_MIN_WIDTH, MAX_RADIUS_TOL, MAX_RADIUS_CLOSE,
+                texture_size)[:20]
 
 
 def _build_layer_entry(store: ElementStore, layer: Layer, h: str, cache: Path, project_dir: Path,
@@ -633,6 +741,8 @@ def _build_layer_entry(store: ElementStore, layer: Layer, h: str, cache: Path, p
     else:
         sr_paths = [p for _m, p in regions]
     sr = safe_radius([_art_scale_geom(shapely_from_path(p, tol), art.k) for p in sr_paths])
+    mr = max_radius([_art_scale_geom(shapely_from_path(p, tol), art.k)
+                     for p in body_paths(store, members, layer.mode, regions, sil, levels)])
     bb = art.bbox(bounds(sil)) if not is_empty(sil) else (0.0, 0.0, 0.0, 0.0)
 
     # standalone layer SVG (source viewBox) + texture (art square)
@@ -655,7 +765,7 @@ def _build_layer_entry(store: ElementStore, layer: Layer, h: str, cache: Path, p
                            "height": m.image["height"],
                            "matrix": [round(v, 9) for v in (to_art.a, to_art.b, to_art.c, to_art.d, to_art.e, to_art.f)],
                            "opaque": bool(m.image.get("opaque"))})
-    entry = {"hash": h, "silhouette": sil_spl, "regions": region_out, "safeRadius": sr,
+    entry = {"hash": h, "silhouette": sil_spl, "regions": region_out, "safeRadius": sr, "maxRadius": mr,
              "bbox": [round(v, 6) for v in bb], "svg": svg_name, "texture": tex_name, "images": images}
     atomic_write_text(cache / f"lg-{h}.json", json.dumps(entry, separators=(",", ":")))
     return entry
@@ -672,7 +782,7 @@ def _layer_geometry(entry: dict, layer_id: str, cache: Path, project_dir: Path, 
         silhouette=to_model_splines(entry["silhouette"]),
         regions=[Region(elementId=r["elementId"], paint=r["paint"], opacity=r["opacity"], zSub=r["zSub"],
                         splines=to_model_splines(r["splines"])) for r in entry["regions"]],
-        safeRadius=entry["safeRadius"], bbox=tuple(entry["bbox"]),
+        safeRadius=entry["safeRadius"], maxRadius=entry.get("maxRadius", 0.0), bbox=tuple(entry["bbox"]),
         texture=f"{prefix}/{CACHE_DIR}/{entry['texture']}",
         texturePath=str((cache / entry["texture"]).resolve()),
         svg=f"{prefix}/{CACHE_DIR}/{entry['svg']}",

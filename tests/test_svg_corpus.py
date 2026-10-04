@@ -12,6 +12,7 @@ import pytest
 from conftest import CORPUS_DIR, SVGTESTS_DIR
 
 import bis.svg as svg
+from bis import stacking
 from bis.models import GeometryBundle, Project
 from bis.svg import raster
 
@@ -50,7 +51,12 @@ def test_icon(path, import_icon):
         lg = bundle.layers[L.id]
         assert lg.silhouette and lg.regions and lg.safeRadius >= 0
         assert Path(lg.texturePath).exists()
-        assert 0 <= L.depth.bevel <= 0.045 + 1e-9
+        assert 0 <= L.depth.bevel <= L.depth.thickness / 2 + 1e-9
+        assert lg.maxRadius > 0
+    # round 7: the import stack is the real-height stack for the bundle's max radii (no interpenetration)
+    gaps = stacking.stack_gaps(project.layers, {k: v.maxRadius for k, v in bundle.layers.items()},
+                               project.canvas.art.scale)
+    assert gaps == pytest.approx([stacking.geometry_rules()["stackGap"]] * len(gaps), abs=2e-4)
     vb = res.source.viewBox
     w = 160
     h = max(1, int(round(w * vb[3] / vb[2])))

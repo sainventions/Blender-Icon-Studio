@@ -187,3 +187,171 @@ open({out!r}, "w").write(json.dumps(out))
         slab = r["slab"]
         assert slab["minNormalDot"] > 0.999
         assert slab["sharp"] == 2 * slab["outline"] + 4
+
+    _POISSON_EXPR = """
+import sys, json, math, time
+import numpy as np
+sys.path.insert(0, {repo!r})
+from blender_worker import geometry as G, heightfield as H
+
+def top(arr):
+    V, L, S = arr["verts"], arr["loops"], arr["starts"]
+    sizes = np.diff(np.append(S, len(L)))
+    tri = np.nonzero(sizes == 3)[0]
+    T = L[S[tri[:len(tri) // 2]][:, None] + np.arange(3)]
+    return V, T
+
+def crease(arr):
+    # largest angle between adjacent top faces in the upper dome (all corners above 45 % of the half height)
+    V, T = top(arr)
+    P = V[T]
+    fn = np.cross(P[:, 1] - P[:, 0], P[:, 2] - P[:, 0])
+    fn /= np.linalg.norm(fn, axis=1)[:, None]
+    e = np.concatenate([T[:, [0, 1]], T[:, [1, 2]], T[:, [2, 0]]])
+    f = np.tile(np.arange(len(T)), 3)
+    k = np.minimum(e[:, 0], e[:, 1]) * len(V) + np.maximum(e[:, 0], e[:, 1])
+    o = np.argsort(k, kind="stable")
+    k, f = k[o], f[o]
+    same = k[1:] == k[:-1]
+    fa, fb = f[:-1][same], f[1:][same]
+    zt = P[:, :, 2].min(1)
+    m = (zt[fa] > 0.45 * V[:, 2].max()) & (zt[fb] > 0.45 * V[:, 2].max())
+    return float(np.degrees(np.arccos(np.clip((fn[fa] * fn[fb]).sum(1), -1, 1)))[m].max())
+
+out = {{}}
+# ellipse x²/a² + y²/b² <= 1: u = c(1 − x²/a² − y²/b²) -> dome = k·D·sqrt(u / c)
+a, b, k = 0.5, 0.12, 1.0
+pts = [(a * math.cos(2 * math.pi * i / 96), b * math.sin(2 * math.pi * i / 96)) for i in range(96)]
+arr = H.build([G.poly_spline(pts)], 0.1, 0.03, k, 6, 1.0)
+V, T = top(arr)
+inner = np.unique(T)
+P = V[inner]
+rings = H.piece_rings([G.poly_spline(pts)])
+A_, B_, _ = H._segments(rings)
+d = H.nearest(P[:, :2], A_, B_)[0]
+u = np.clip(1 - (P[:, 0] / a) ** 2 - (P[:, 1] / b) ** 2, 0, 1)
+dome = P[:, 2] - H.profile(d, 0.1, 0.03, 0.0, 1.0)
+D = arr["info"]["D"]
+out["ellipse"] = dict(meanErr=float(np.abs(dome - k * D * np.sqrt(u)).mean()), D=D, half=arr["info"]["half"],
+                      **H.check_arrays(arr))
+# a long stadium of half width w (b = 0, wall e = t/2): u = 2(w² − y²) mid-length -> dome = k·w·sqrt(1 − y²/w²), a round tube
+w = 0.04
+st = [(x, -w) for x in np.linspace(-0.4, 0.4, 9)] + [(0.4 + w * math.sin(t), -w * math.cos(t)) for t in np.linspace(0.3, math.pi - 0.3, 6)] \\
+     + [(x, w) for x in np.linspace(0.4, -0.4, 9)] + [(-0.4 - w * math.sin(t), w * math.cos(t)) for t in np.linspace(0.3, math.pi - 0.3, 6)]
+arr = H.build([G.poly_spline(st)], 0.02, 0.0, 1.0, 6, 1.0)
+V, T = top(arr)
+mid = V[(np.abs(V[:, 0]) < 0.15) & (V[:, 2] > 0)]
+rel = (mid[:, 2] - 0.01) / max(float(mid[:, 2].max()) - 0.01, 1e-9)       # minus the wall half height e = t/2
+shape = np.sqrt(np.clip(1 - (mid[:, 1] / w) ** 2, 0, 1))
+out["tube"] = dict(err=float(np.abs((rel - shape) * (np.abs(mid[:, 1]) < 0.9 * w)).max()),
+                   ridge=float(mid[:, 2].max()), **H.check_arrays(arr))
+# corpus shapes at inflate 1: no fins / creases on the dome, fast
+for name, spl, t, bev in json.loads(open({shapes!r}).read()):
+    t0 = time.perf_counter()
+    arr = H.build(spl, t, bev, 1.0, 6, 1.0)
+    ms = (time.perf_counter() - t0) * 1000
+    out[name] = dict(crease=crease(arr), ms=ms, iterations=arr["info"]["poisson"]["iterations"], **H.check_arrays(arr))
+open({out!r}, "w").write(json.dumps(out))
+"""
+
+    def test_poisson_dome_is_round_and_creaseless(corpus_index, tmp_path):
+        """PLAN §11 round 7: the inflate dome is k·D·sqrt(u/u_max) with −∇²u = 4 (u = 0 on the outline). An ellipse
+        matches the analytic solution, a thin stadium becomes a ROUND tube (semicircular cross-section), and the
+        corpus shapes that grew creased fins with the distance dome (Gemini's tips, iMessage's tail, Gmail's legs)
+        stay smooth: adjacent top faces of the upper dome meet at < 30° (the distance dome: 66–92°)."""
+        index_path, _names = corpus_index
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+        shapes = []
+        for name in ("Gemini", "iMessage", "Gmail"):
+            proj = json.loads(Path(index[name]["project"]).read_text(encoding="utf-8"))
+            bundle = json.loads(Path(index[name]["geometryPath"]).read_text(encoding="utf-8"))
+            L = proj["layers"][0]
+            g = bundle["layers"][L["id"]]
+            spl = g["silhouette"] if L.get("mode") == "combined" else g["regions"][0]["splines"]
+            sa = float(proj["canvas"]["art"].get("scale", 1.0))
+            shapes.append([name, spl, L["depth"]["thickness"] / sa, min(L["depth"]["bevel"], L["depth"]["thickness"] / 2) / sa])
+        sp = tmp_path / "shapes.json"
+        sp.write_text(json.dumps(shapes), encoding="utf-8")
+        out = tmp_path / "poisson.json"
+        expr = _POISSON_EXPR.format(repo=str(REPO), out=str(out), shapes=str(sp))
+        p = subprocess.run([str(wc.BLENDER), "-b", "--factory-startup", "--python-expr", expr],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+        assert out.is_file(), p.stdout[-3000:] + p.stderr[-3000:]
+        r = json.loads(out.read_text(encoding="utf-8"))
+        for v in r.values():
+            assert v["nonManifold"] == 0 and v["misoriented"] == 0 and v["invertedNormals"] == 0 and v["volume"] > 0
+        e = r["ellipse"]
+        assert e["half"] == pytest.approx(0.05 + e["D"], rel=1e-6)       # q = 1 at the apex: H = t + 2·k·D
+        assert e["meanErr"] < 0.01 * e["D"], e
+        assert r["tube"]["err"] < 0.08, r["tube"]                         # semicircular cross-section
+        for name in ("Gemini", "iMessage", "Gmail"):
+            assert r[name]["crease"] < 30.0 if name != "Gmail" else r[name]["crease"] < 45.0, (name, r[name])
+            assert r[name]["ms"] < 200 and r[name]["iterations"] < 400, (name, r[name])
+
+    _SCENE_EXPR = """
+import sys, json
+sys.path.insert(0, {repo!r})
+import bpy
+from mathutils.bvhtree import BVHTree
+from blender_worker import presets as P, appearance as AP
+from blender_worker.defaults import norm_bundle, norm_project
+from blender_worker.scene import SceneBuilder
+P.set_root({repo!r})
+cases = json.loads(open({cases!r}).read())
+sb = SceneBuilder()
+sb.reset()
+
+def overlaps(prefix):
+    obs = sorted((o for o in bpy.data.objects if o.name.startswith(prefix) and o.type == "MESH"), key=lambda o: o.name)
+    trees = [BVHTree.FromPolygons([o.matrix_world @ v.co for v in o.data.vertices],
+                                  [list(p.vertices) for p in o.data.polygons]) for o in obs]
+    return sum(len(trees[i].overlap(trees[j])) for i in range(len(obs)) for j in range(i + 1, len(obs)))
+
+out = {{}}
+for name, (proj, bundle) in cases.items():
+    info = sb.build(proj, bundle, "light")
+    bpy.context.view_layer.update()                  # world matrices (a render evaluates the depsgraph itself)
+    lid = proj["layers"][0]["id"]
+    obs = sorted((o for o in bpy.data.objects if o.name.startswith(f"BIS {{lid}} r")), key=lambda o: o.name)
+    eff = AP.resolve(norm_project(proj), "light", norm_bundle(bundle))["project"]
+    hulls = sb.subject_hulls(eff, norm_bundle(bundle))
+    out[name] = dict(stats=info["stats"], overlap=overlaps(f"BIS {{lid}} r"),
+                     lo=[min((o.matrix_world @ v.co).z for v in o.data.vertices) for o in obs],
+                     hi=[max((o.matrix_world @ v.co).z for v in o.data.vertices) for o in obs],
+                     span=[h[2] - h[1] for h in hulls if h[3] == lid][0])
+open({out!r}, "w").write(json.dumps(out))
+"""
+
+    def test_pieces_of_one_layer_never_interpenetrate(corpus_index, tmp_path):
+        """QA r8 #6: pieces of one layer that TOUCH (Secure Folder's translucent tab and opaque folder share an edge)
+        pull back from each other; a piece that OVERLAPS an earlier one (a translucent disc over a square) is stacked on
+        it by their real heights. Framing uses the real layer height: thickness + 2·inflate·maxRadius."""
+        import test_worker_quality as T
+        index_path, _names = corpus_index
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+        sf = index["Secure Folder"]
+        cases = {"sf": [json.loads(Path(sf["project"]).read_text(encoding="utf-8")),
+                        json.loads(Path(sf["geometryPath"]).read_text(encoding="utf-8"))]}
+        lay = T.layer("A", z=0.0)
+        g = T.geo([("sq", [T.square(0.4)], "#3366ff", 1.0), ("disc", [T.circle(0.25, 0.2, 0.1)], "#ffffff", 0.6)])
+        cases["stack"] = list(T.scene([lay], {"A": g}))
+        lay = T.layer("A", z=0.0)
+        lay["depth"]["inflate"] = 0.5
+        g = T.geo([("d", [T.circle(0.3)], "#3366ff", 1.0)])
+        g["maxRadius"] = 0.4                                   # the contract value wins over the worker's estimate
+        cases["maxr"] = list(T.scene([lay], {"A": g}))
+        cp = tmp_path / "cases.json"
+        cp.write_text(json.dumps(cases), encoding="utf-8")
+        out = tmp_path / "scene.json"
+        expr = _SCENE_EXPR.format(repo=str(REPO), cases=str(cp), out=str(out))
+        p = subprocess.run([str(wc.BLENDER), "-b", "--factory-startup", "--python-expr", expr],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+        assert out.is_file(), p.stdout[-3000:] + p.stderr[-3000:]
+        r = json.loads(out.read_text(encoding="utf-8"))
+        assert r["sf"]["stats"].get("insetPieces") == 1 and r["sf"]["overlap"] == 0, r["sf"]
+        assert not r["sf"]["stats"].get("stackedPieces")       # touching only: nothing changes height
+        st = r["stack"]
+        assert st["stats"].get("stackedPieces") == 1 and st["overlap"] == 0, st
+        assert st["lo"][1] >= st["hi"][0] + 0.001, st          # the disc rests on the square
+        assert st["span"] == pytest.approx(st["hi"][1] - st["lo"][0], abs=0.01), st
+        assert r["maxr"]["span"] == pytest.approx(0.1 + 2 * 0.5 * 0.4, rel=1e-6), r["maxr"]

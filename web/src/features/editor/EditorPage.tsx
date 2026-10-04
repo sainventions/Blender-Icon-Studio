@@ -17,6 +17,10 @@ import { useEditorShortcuts } from './shortcuts'
 import { ExportDialog } from '../dialogs/ExportDialog'
 import { AnimateDialog } from '../dialogs/AnimateDialog'
 import { useFileDrop } from '../home/useFileDrop'
+import { installStackKeeper } from './stacking'
+
+// a real-height layer stack stays one across client-side edits (PLAN §11 round 7; features/editor/stacking)
+installStackKeeper()
 
 export default function EditorPage({ projectId }: { projectId: string }) {
   const status = useEditor((s) => s.status)

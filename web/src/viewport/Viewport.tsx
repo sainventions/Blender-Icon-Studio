@@ -114,7 +114,7 @@ export function Viewport(p: ViewportProps): JSX.Element {
     },
     [store],
   )
-  const effective = useMemo(() => resolveAppearance(p.project, p.appearance), [p.project, p.appearance])
+  const effective = useMemo(() => resolveAppearance(p.project, p.appearance, p.presets), [p.project, p.appearance, p.presets])
   const geoLayers = p.geometry?.layers
   const mono = useMemo(() => appearanceMono(p.project, p.appearance, geoLayers), [p.project, p.appearance, geoLayers])
   // watchOS ignores appearances (always light) — keep the backdrop consistent with resolveAppearance.

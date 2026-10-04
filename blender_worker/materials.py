@@ -163,12 +163,15 @@ def _settings(mat: bpy.types.Material, spec: dict) -> None:
     16 TAA samples); everything else is dithered. Cycles ignores these."""
     pr = spec["params"]
     transmissive = is_transmissive(pr)
-    translucent = spec.get("opacity", 1.0) * _num(pr, "alpha", 1.0) < 0.999 or bool(spec["paint"].get("has_alpha"))
-    blended = translucent and not transmissive
+    translucent = spec.get("opacity", 1.0) * _num(pr, "alpha", 1.0) < 0.999
+    # translucent shapes (piece opacity / alpha < 1) are alpha-BLENDED — dithered alpha speckled at 16 TAA samples, also
+    # on translucent glass (Calculator's 44 % ÷, Files' 33 % tab; QA r8 #9): those lose EEVEE's raytraced refraction
+    # (blended surfaces cannot trace), a draft-only compromise; art alpha alone (texture coverage) stays dithered
+    blended = translucent or (bool(spec["paint"].get("has_alpha")) and not transmissive)
     _set_if(mat, "surface_render_method", "BLENDED" if blended else "DITHERED")
     if blended:
         _set_if(mat, "use_transparency_overlap", True)
-    _set_if(mat, "use_raytrace_refraction", transmissive)
+    _set_if(mat, "use_raytrace_refraction", transmissive and not blended)
     _set_if(mat, "thickness_mode", "SLAB")
     _set_if(mat, "use_transparent_shadow", True)
     _set_if(mat, "use_backface_culling", False)

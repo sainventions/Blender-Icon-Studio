@@ -17,7 +17,19 @@ import {
   shapeMaterial,
   updateElementMaterials,
 } from './principled.ts'
-import { bevelLimit, restack, roundnessOf, STACK_MIN_STEP, withRoundness, withThickness } from './depth.ts'
+import {
+  bevelLimit,
+  DEFAULT_STACK_RULES,
+  keepStack,
+  restack,
+  roundnessOf,
+  ruleHeight,
+  stackAffected,
+  stackGapOf,
+  stackRules,
+  withRoundness,
+  withThickness,
+} from './depth.ts'
 
 const WEB = new URL('../../../../', import.meta.url)
 const read = (p) => readFileSync(new URL(p, WEB), 'utf8')
@@ -140,26 +152,89 @@ test('changing thickness keeps the roundness', () => {
   assert.equal(withThickness(l, 0.1), l)
 })
 
-test('re-stack leaves room for each body (its measured height) and keeps locked layers', () => {
+test('the stacking rule is presets.json "geometry" + server bis.stacking: H = thickness + 2·inflate·maxRadius·S', () => {
+  // the same numbers as the server / worker (shared/presets.json "geometry")
+  assert.deepEqual(stackRules(presets), { stackLift: presets.geometry.stackLift, stackGap: presets.geometry.stackGap })
+  assert.deepEqual(stackRules(null), DEFAULT_STACK_RULES)
+  assert.deepEqual(stackRules({ geometry: { stackGap: -1, stackLift: Number.NaN } }), { stackLift: 0, stackGap: 0 })
+  const stacking = read('../server/bis/stacking.py')
+  assert.match(stacking, /DEFAULT_RULES: dict\[str, float\] = \{"stackLift": 0\.0, "stackGap": 0\.03\}/)
+  assert.equal(DEFAULT_STACK_RULES.stackGap, 0.03)
+  const l = layer({ depth: { z: 0, thickness: 0.16, bevel: 0.08, bevelSegments: 8, inflate: 0.25 } })
+  // server stacking.body_height: t + 2·k·maxRadius·S (S = art.scale × layer.scale); inflate clamped to 0..1
+  assert.ok(Math.abs(ruleHeight(l, 0.34141, 1.0729) - (0.16 + 2 * 0.25 * 0.34141 * 1.0729)) < 1e-12)
+  assert.equal(ruleHeight(layer({ depth: { ...l.depth, inflate: 3 } }), 0.2, 1), 0.16 + 2 * 0.2)
+  assert.equal(ruleHeight(l, undefined, 1), 0.16, 'no maxRadius: the thickness')
+})
+
+test('Re-stack: z0 = stackLift, z(i+1) = z(i) + H(i) + stackGap; locked layers keep their z', () => {
   const a = layer({ id: 'L1', depth: { z: 0.5, thickness: 0.2, bevel: 0.05, bevelSegments: 6, inflate: 0.5 } })
   const b = layer({ id: 'L2', depth: { z: 0.0, thickness: 0.1, bevel: 0.05, bevelSegments: 6, inflate: 0 } })
-  // the editor measures inflated domes like blender_worker scene._body_height (viewport layerBodyHeight)
   const height = (l) => (l.id === 'L1' ? 0.3 : l.depth.thickness)
   const [a2, b2] = restack([a, b], height)
   assert.equal(a2.depth.z, 0)
   assert.ok(Math.abs(b2.depth.z - 0.33) < 1e-9, `${b2.depth.z}`)
-  const [, c2] = restack([layer(), layer({ id: 'L2' })])
-  assert.equal(c2.depth.z, STACK_MIN_STEP, 'never tighter than the import default')
+  // the presets' gap and lift; no 0.13 floor any more (round 7: real heights, one clearance)
+  const [c1, c2] = restack([layer(), layer({ id: 'L2' })], undefined, { stackLift: 0.01, stackGap: 0.02 })
+  assert.equal(c1.depth.z, 0.01)
+  assert.ok(Math.abs(c2.depth.z - (0.01 + 0.1 + 0.02)) < 1e-9, `${c2.depth.z}`)
   const same = [layer({ depth: { ...layer().depth, z: 0 } })]
   assert.equal(restack(same), same)
   const locked = layer({ id: 'L1', locked: true, depth: { ...layer().depth, z: 0.6 } })
   const [l2, n2] = restack([locked, layer({ id: 'L2' })])
   assert.equal(l2, locked)
   assert.ok(Math.abs(n2.depth.z - 0.73) < 1e-9)
-  // the Depth section's Re-stack button measures bodies with the viewport's mirror of the worker
+  // the running z is not rounded (server stacking.stack_z): Photos' import stack (H = 0.25024641327) is a no-op —
+  // accumulating the 5-decimal values gave 0.5605 / 0.84075 instead of the server's 0.56049 / 0.84074
+  const photos = [0, 0.28025, 0.56049, 0.84074].map((z, i) => layer({ id: `P${i}`, depth: { ...layer().depth, z } }))
+  assert.equal(restack(photos, () => 0.25024641327), photos)
+  // the Depth section's Re-stack button uses the shared rule with the bundle's maxRadius (features/editor/stacking.ts)
   const inspector = read('src/features/editor/inspector/LayerInspector.tsx')
-  assert.match(inspector, /restack\(p\.layers, height\)/)
-  assert.match(inspector, /layerBodyHeight\(l, lg, layerScale\(p\.canvas\.art\.scale, l\.transform\.scale\)\)/)
+  assert.match(inspector, /restackProject\(p, geometry, presets\)/)
+  const stacking = read('src/features/editor/stacking.ts')
+  assert.match(stacking, /ruleHeight\(l, lg\?\.maxRadius, S\)/)
+  assert.match(stacking, /layerScale\(p\.canvas\.art\.scale, l\.transform\.scale\)/)
+})
+
+test('a recognised real-height stack is kept across edits (server stack_gap); custom stacks are left alone', () => {
+  const H = (l) => l.depth.thickness + 2 * l.depth.inflate * 0.2
+  const mk = (zs, extra = {}) => zs.map((z, i) => layer({ id: `L${i + 1}`, depth: { z, thickness: 0.16, bevel: 0.08, bevelSegments: 8, inflate: 0.25 }, ...extra }))
+  // 0.16 + 2·0.25·0.2 = 0.26 tall, 0.03 apart
+  const stack = restack(mk([0, 0, 0]), H)
+  assert.deepEqual(stack.map((l) => l.depth.z), [0, 0.29, 0.58])
+  assert.equal(stackGapOf(stack, H), 0.03)
+  assert.equal(stackGapOf(mk([0, 0.13, 0.26]), H), DEFAULT_STACK_RULES.stackGap, 'the legacy 0.13 stack converts')
+  assert.equal(stackGapOf(mk([0, 0.4, 0.6]), H), null, 'hand-placed')
+  assert.equal(stackGapOf(mk([0.05, 0.34, 0.63]), H), null, 'not starting at stackLift')
+  assert.equal(stackGapOf(mk([0, 0.2, 0.5]), H), null, 'interpenetrating')
+  const loose = restack(mk([0, 0, 0]), H, DEFAULT_STACK_RULES, 0.1) // a look's wider gap is recognised as such
+  assert.equal(stackGapOf(loose, H), 0.1)
+  // thicker middle layer: the layer above moves, the gap stays
+  const after = stack.map((l, i) => (i === 1 ? { ...l, depth: { ...l.depth, thickness: 0.3 } } : l))
+  const kept = keepStack(stack, after, H, H)
+  assert.deepEqual(kept.map((l) => l.depth.z), [0, 0.29, 0.29 + 0.4 + 0.03])
+  // reorder / delete keep the stack too; a custom stack is returned untouched
+  const del = keepStack(stack, [stack[0], stack[2]], H, H)
+  assert.deepEqual(del.map((l) => l.depth.z), [0, 0.29])
+  const custom = mk([0, 0.4, 0.6])
+  const edited = custom.map((l) => ({ ...l, depth: { ...l.depth, inflate: 1 } }))
+  assert.equal(keepStack(custom, edited, H, H), edited)
+  // which edits can move the stack: heights, order, layer set, scale — never a plain z drag
+  assert.equal(stackAffected(stack, stack, 1, 1), false)
+  assert.equal(stackAffected(stack, after, 1, 1), true)
+  assert.equal(stackAffected(stack, [stack[1], stack[0], stack[2]], 1, 1), true)
+  assert.equal(stackAffected(stack, stack, 1, 1.2), true)
+  const zOnly = stack.map((l, i) => (i === 2 ? { ...l, depth: { ...l.depth, z: 0.9 } } : l))
+  assert.equal(stackAffected(stack, zOnly, 1, 1), false)
+  // the editor keeps the stack on every commit: the editor page installs keepProjectStack as the store's commit
+  // transform (injected, so the store — loaded by the home page too — does not bundle the 3D geometry code)
+  const store = read('src/store/editor.ts')
+  assert.match(store, /raw !== s\.project && commitTransform \? commitTransform\(s\.project, raw, s\.geometry\) : raw/)
+  const imports = store.split(/\r?\n/).filter((l) => l.startsWith('import')).join(' ')
+  assert.ok(!/viewport|stacking/.test(imports), 'no 3D imports in the store')
+  const stacking = read('src/features/editor/stacking.ts')
+  assert.match(stacking, /setCommitTransform\(\(before, after, geometry\) => keepProjectStack\(before, after, geometry, useAppStore\.getState\(\)\.presets\.data\)\)/)
+  assert.match(read('src/features/editor/EditorPage.tsx'), /^installStackKeeper\(\)$/m)
 })
 
 // ------------------------------------------------------------------------------------------ retired UI stays gone

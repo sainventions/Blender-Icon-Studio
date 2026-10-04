@@ -88,6 +88,17 @@ const SAVE_DEBOUNCE_MS = 500
 
 let lastCommit: { key: string | null; at: number } = { key: null, at: 0 }
 
+/**
+ * Post-processing of every commit's result, installed by the editor page (features/editor/stacking: a real-height
+ * layer stack stays one — PLAN §11 round 7). Injected rather than imported so this store, which the home page loads
+ * too, does not pull the 3D geometry code (three.js) into the main bundle.
+ */
+export type CommitTransform = (before: Project, after: Project, geometry: GeometryBundle | null) => Project
+let commitTransform: CommitTransform | null = null
+export function setCommitTransform(fn: CommitTransform | null): void {
+  commitTransform = fn
+}
+
 // Pointer gestures (slider drags, label scrubs, dial turns, gradient stops): all same-key commits between
 // pointerdown and pointerup form ONE undo step however long the user pauses mid-drag, and releasing ends the
 // step (the next drag is a new one). Outside gestures (keyboard, typing) the 1 s COALESCE_MS window applies.
@@ -319,7 +330,10 @@ export const useEditor = create<EditorState>((set, get) => {
       if (!s.project) return
       // A server-side structural op is replacing the project; edits made now would be lost.
       if (s.busy && opts.history !== false) return
-      const next = fn(s.project)
+      const raw = fn(s.project)
+      // e.g. a real-height layer stack (PLAN §11 round 7) stays one: a thicker / inflated / rescaled / reordered /
+      // deleted layer moves the layers above it (the server does the same for its structural edits; PUT stores as sent)
+      const next = raw !== s.project && commitTransform ? commitTransform(s.project, raw, s.geometry) : raw
       if (next === s.project) return
       const { coalesce, history = true, render = true } = opts
       const now = performance.now()

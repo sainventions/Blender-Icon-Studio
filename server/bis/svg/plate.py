@@ -390,6 +390,28 @@ def art_transform_for(plate: Optional[dict]) -> ArtTransform:
     return ArtTransform(scale=rnd(s, 6), x=rnd(-cx * s, 6), y=rnd(-cy * s, 6))
 
 
+PAD_STOP_EPS = 1e-6
+
+
+def trim_pad_stops(fill):
+    """A plate gradient without hard stops AT its ends: a stop that shares offset 1 with the stop before it (or
+    offset 0 with the stop after it) paints only the PAD region beyond the gradient's span - Illustrator exports
+    such a stray end stop (Twitter's plate: ``... 1 #1a6ed4, 1 #bd4012``). In the flat SVG the plate never
+    reaches that region, but the 3D plate's bevel and side walls (and the canvas outside the source plate) do:
+    a red sliver along one edge in every iso view. The stop the gradient actually ends on is kept."""
+    stops = getattr(fill, "stops", None)
+    if not stops or len(stops) < 2:
+        return fill
+    out = list(stops)
+    while len(out) >= 2 and out[-1].offset >= 1.0 - PAD_STOP_EPS and out[-2].offset >= 1.0 - PAD_STOP_EPS:
+        out.pop()
+    while len(out) >= 2 and out[0].offset <= PAD_STOP_EPS and out[1].offset <= PAD_STOP_EPS:
+        out.pop(0)
+    if len(out) == len(stops):
+        return fill
+    return fill.model_copy(update={"stops": out})
+
+
 def make_canvas(plate: Optional[dict], elems_by_id: Dict[str, Elem], art: ArtSpace) -> Canvas:
     """Canvas for a project: detected plate -> parametric plate with the source fill in CANVAS
     coordinates; no plate -> visible System Light plate with the art scaled to 0.78."""
@@ -404,7 +426,7 @@ def make_canvas(plate: Optional[dict], elems_by_id: Dict[str, Elem], art: ArtSpa
     elif src is None:
         fill = FillSystem(type="system-light")
     else:
-        fill = model_paint(src.paint, art, src.total_opacity, post=post)
+        fill = trim_pad_stops(model_paint(src.paint, art, src.total_opacity, post=post))
     shape = plate["shape"]
     return Canvas(shape=shape, cornerRadius=plate.get("cornerRadius") or 0.225,
                   plate=Plate(visible=True, fill=fill), art=at)

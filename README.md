@@ -9,8 +9,8 @@ every platform.
 
 <img src="docs/img/hero-grid.png" width="860" alt="Twelve real app icons from the sample corpus rendered as layered glass icons by Cycles + OptiX">
 
-<sub>Twelve icons from the 68-icon sample corpus, imported as-is, given the Liquid Glass look and rendered by
-Cycles + OptiX (preview tier, 256 px each).</sub>
+<sub>Twelve icons from the 68-icon sample corpus, imported as-is with the import defaults (Liquid Glass, a full
+round edge and a Poisson dome) and rendered by Cycles + OptiX (preview tier, 256 px each).</sub>
 
 [Quick start](#quick-start) · [Tour](#a-tour-of-the-app) · [Materials](#materials-one-principled-bsdf-per-shape) ·
 [3D bodies](#3d-bodies) · [Features](#features) · [GPU notes](#gpu-and-optix-notes) · [Architecture](#architecture) ·
@@ -21,9 +21,9 @@ Cycles + OptiX (preview tier, 256 px each).</sub>
 ---
 
 Blender Icon Studio works like Apple's Icon Composer, with Blender doing the rendering. Drop in an SVG and the
-app splits it into depth layers. Every shape becomes a watertight 3D body with a round edge (and, if you want,
-a domed top), and every shape gets its own material: **one Principled BSDF, nothing faked**. Cycles does the
-physics: refraction, reflections, real shadows and light passing through glass. A three.js view updates
+app splits it into depth layers. Every shape becomes a watertight 3D body with a round edge and a domed top, the
+layers stack at their real heights, and every shape gets its own material: **one Principled BSDF, nothing
+faked**. Cycles does the physics: refraction, reflections, real shadows and light passing through glass. A three.js view updates
 instantly, EEVEE renders a draft in a fraction of a second, and Cycles with OptiX renders the physical result.
 One click exports a ready-to-ship icon set for iOS, macOS, watchOS, Android, Windows and the web.
 
@@ -92,23 +92,28 @@ version and the OptiX GPU.
     orthographic / perspective), colour mode and render settings.
 - **Status bar**: worker state, OptiX GPU, VRAM, utilisation, the GPU queue and the last render time.
 
-The shot above is the *Contacts* sample in Clear Glass (Roughness 0, IOR 1.6, Transmission 1) at view angle 0.45:
-the head is a glass sphere, the body a glass pebble, and the orange plate refracts through both.
+The shot above is the *Contacts* sample in Clear Glass (Roughness 0, IOR 1.6, Transmission 1) at view angle 0.45
+with the light at +45°: the head is a glass sphere, the body a domed glass pebble (Inflate 0.5), and the orange
+plate refracts through both. Both rest on the plate: their Z is set by hand, and edits leave a hand-placed Z alone.
 
 ### CAD view — head-on to isometric
 
-<img src="docs/img/ui-iso.png" width="100%" alt="Maps split into four layers in the live view, turned toward isometric, with the Depth inspector">
+<img src="docs/img/ui-iso.png" width="100%" alt="Earth's four layers stacked at their real heights in the live view at view angle 0.7, with the Depth inspector">
 
 Press <kbd>X</kbd> (or click **Front** / **Iso**, or drag the view-angle slider in the stage toolbar) to turn the
 orthographic camera from head-on toward a true isometric view (pitch 35.264°, yaw 45°), like a CAD program.
 Nothing is spread apart: the layers sit at their **real** Z positions, so the depth you see is the depth you
 render. The live view and every Blender render share the same camera (`camera.iso`, 0 – 1) and its auto-framing;
 the Matrix renditions and the export masters stay head-on. **Animate → Iso sweep** renders head-on → isometric →
-head-on.
+head-on. The key, rim and fill lights and the studio environment turn with the camera (`lighting.angle` is
+relative to the view), so an iso, perspective or animated view is lit like the head-on one instead of catching a
+mirror glare on every flat top. The shot shows *Earth* as imported: four Liquid Glass layers stacked by their real
+heights (see *Real-height stacking* under [3D bodies](#3d-bodies)); the Depth inspector shows Blue 2 at Z 0.338.
 
-<img src="docs/img/hero-iso.png" width="420" alt="Maps at full isometric view, four Frosted Glass layers at their real heights, rendered by Cycles">
+<img src="docs/img/hero-iso.png" width="420" alt="Maps at full isometric view, imported as-is: one domed Liquid Glass body on the plate, rendered by Cycles">
 
-<sub>*Maps* split into four colour layers (Frosted look, layers 0.12 apart) at full isometric, Cycles preview, 512 px.</sub>
+<sub>*Maps* as imported (one combined Liquid Glass body, Inflate 0.25) at full isometric with the default light
+(−45°), Cycles preview, 512 px.</sub>
 
 ### Six appearances
 
@@ -116,9 +121,12 @@ head-on.
 
 Icon Composer's six renditions — **Default**, **Dark**, **Clear Light**, **Clear Dark**, **Tinted Light** and
 **Tinted Dark** — rendered in one go (<kbd>Shift</kbd>+<kbd>M</kbd>). Appearances change only Principled inputs and
-the plate: *Dark* swaps in a dark plate fill; *Clear* turns every shape into white transmissive glass (roughness
-0.22) over a frosted plate and a wallpaper; *Tinted* uses the art's luminance × the tint colour as the glass
-colour. Dark and mono variants can override fills, opacity, blend mode and materials per layer.
+the plate: *Dark* swaps in a dark plate fill and keeps glass glyphs readable — a glyph that lets more than half the
+light through is capped at Transmission 0.5 with Subsurface 1, so it scatters light in its own colour instead of
+showing the near-black plate (a layer whose dark material you set is left alone); *Clear* turns every shape into
+white transmissive glass (roughness 0.22) over a frosted plate and a wallpaper; *Tinted* uses the art's luminance ×
+the tint colour as the glass colour, and *Tinted Dark* is lit like Dark (never self-lit). Dark and mono variants can
+override fills, opacity, blend mode and materials per layer.
 
 <img src="docs/img/renditions-photos.png" width="100%" alt="The six renditions of the Photos icon">
 
@@ -138,9 +146,10 @@ with a contact sheet and — optionally — every platform export packed into on
 </tr>
 <tr>
 <td><sub><b>Clear Glass</b> — Roughness 0, IOR 1.6, Transmission 1. The head is as thick as it is wide with
-Roundness 100 %, so it is a sphere; the body has a full round edge and Inflate 0.3. View angle 0.45.</sub></td>
-<td><sub><b>Frosted Glass</b> — Roughness 0.267, IOR 1.6, Transmission 1, Base Color = the SVG gradient. Inflate 0.3;
-the star tips taper cleanly. Head-on.</sub></td>
+Roundness 100 %, so it is a sphere; the body has a full round edge and Inflate 0.5. View angle 0.45, light at
++45°.</sub></td>
+<td><sub><b>Frosted Glass</b> — Roughness 0.267, IOR 1.6, Transmission 1, Base Color = the SVG gradient. Inflate 0.4:
+the Poisson dome turns the star tips into round, tapering tubes. Head-on.</sub></td>
 </tr>
 </table>
 
@@ -171,21 +180,37 @@ the star tips taper cleanly. Head-on.</sub></td>
 ## 3D bodies
 
 - **Height-field bodies for every shape.** Each piece (individual mode) or silhouette (combined mode) becomes one
-  watertight body over its 2D outline. Its height follows the inward distance *d* from the outline: a flat
-  middle, a round edge of radius *bevel*, and an optional dome on top —
-  `top z(d) = e + hb(d) + inflate · D · √(1 − (1 − min(d/D, 1))²)`, with `hb(d) = √(b² − (b − min(d, b))²)`,
-  `e = max(thickness/2 − b, 0)` and *D* the piece's inradius; the bottom mirrors the top.
-- **Thin parts taper instead of breaking.** Because the height is limited by the distance to the edge, star
+  watertight body over its 2D outline: a flat middle, a round edge of radius *bevel* that follows the inward
+  distance *d* from the outline, and a dome on top —
+  `top z = e + hb(d) + inflate · D · √(u / u_max)`, with `hb(d) = √(b² − (b − min(d, b))²)`,
+  `e = max(thickness/2 − b, 0)` and *D* the body's largest inscribed radius; the bottom mirrors the top.
+- **Poisson inflation.** *u* solves ∇²u = −4 inside each connected part of the outline (u = 0 on the outline),
+  with a conjugate-gradient solver in plain numpy (Blender) and on typed arrays (live view). At Inflate 1 a disc
+  becomes a sphere-like dome; thin parts become round tubes that taper toward their tips, without the creases
+  ("fins") a distance-based dome leaves along the middle of a star or a stroke. Thin parts get several rows of
+  sample points across their width, so they stay round.
+- **Thin parts taper instead of breaking.** Because the round edge is limited by the distance to the outline, star
   tips, thin strokes and sharp corners simply get thinner — no inverted bevels and no self-intersecting edges.
   Across the 68-icon corpus at default, maximum roundness and full inflate: zero self-intersections, zero
   non-manifold edges.
+- **Pieces inside one layer.** Pieces that only touch pull back 0.003 from each other; a piece that overlaps an
+  earlier one is stacked on top of it by its real height, so bodies in one layer never cut through each other.
+- **Real-height stacking.** A layer's body height is `H = thickness + 2 · inflate · maxRadius · scale`, where
+  `maxRadius` (the largest inscribed radius of the outlines the bodies are built from) comes with the geometry
+  bundle. Layers stack bottom to top: `z0 = stackLift`, `z(i+1) = z(i) + H(i) + stackGap` (0 and 0.03, from the
+  `geometry` section of `shared/presets.json`; a look's or pasted style's `zGap` replaces the gap). Imports,
+  looks, pasted styles, the Icon Pack, merge / split / move and **Re-stack** all use this rule. Once the layers
+  form such a stack, changing a thickness, inflate or scale, reordering or deleting a layer keeps them stacked.
+  A Z you set by hand is left alone; a merge, split or move then only lifts layers that would intersect.
+- **Import defaults.** New imports start as Liquid Glass with Thickness 0.16, Roundness 100 % (bevel 0.08),
+  Inflate 0.25, 8 segments and physical shadows, stacked by real height.
 - **Depth controls.** *Z position*, *Thickness*, *Roundness* (the edge radius as a share of half the thickness:
   100 % is a full pill edge, and a round shape as thick as it is wide becomes a sphere), *Inflate* (the dome),
-  *Segments* and *Bodies* (individual pieces or one combined silhouette). **Re-stack** spaces the layers so
-  their bodies don't touch.
+  *Segments* and *Bodies* (individual pieces or one combined silhouette). **Re-stack** applies the real-height
+  rule.
 - **How it's built.** In Blender with `mathutils.geometry.delaunay_2d_cdt` (dense, graded boundary rings plus
-  interior points, hole-aware) and smooth custom normals, cached per layer and depth settings; the live view
-  runs a port of the same algorithm with poly2tri.
+  interior points, hole-aware), the Poisson solve per body and smooth custom normals, cached per layer and depth
+  settings; the live view runs a port of the same algorithm with poly2tri.
 - **Physical shadows and light.** *Physical* (the default) is Cycles' true shadow: the body really blocks the
   light, so glass casts a lighter, tinted shadow. *None* turns the object's shadow off. Cycles' refractive and
   reflective caustics are on in every Cycles tier, so light passes through glass instead of leaving a black
@@ -203,20 +228,21 @@ the star tips taper cleanly. Head-on.</sub></td>
 
 **Light**
 - **Lighting rigs**: an angle + elevation dial with Icon Composer's −45° default; presets Studio, Soft,
-  Dramatic, Top Light, Dark Field, Golden, Neon Night and Flat.
+  Dramatic, Top Light, Dark Field, Golden, Neon Night and Flat. The rig (key, rim, fill) and the studio world are
+  placed relative to the camera, so an angle means the same thing head-on, at iso and in perspective.
 
 **Looks and styles**
 - **Looks** restyle the whole icon in one click — Liquid Glass, Crystal, Frosted, Prism, Candy, Clay, Chrome,
   Neon, Iridescent and Soft 3D. A look sets every layer's material, depth (thickness, roundness, inflate) and
-  shadow, restacks the layers (`z = i × zGap`) and sets the plate material plus, when it defines them, lighting,
-  camera, colour mode and tint. Applying a look clears per-shape materials so it shows on every shape. Look
-  bevels are clamped to 0.9 × each layer's safe radius. The icon's own plate colour and shape are kept unless
-  the look sets them (Neon switches the plate to System Dark).
+  shadow, restacks the layers by real height (the look's `zGap` is the clearance between bodies) and sets the
+  plate material plus, when it defines them, lighting, camera, colour mode and tint. Applying a look clears
+  per-shape materials so it shows on every shape. Bevels are clamped to half the thickness only. The icon's own
+  plate colour and shape are kept unless the look sets them (Neon switches the plate to System Dark).
 - **Copy / paste style** between icons (<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>C</kbd> / <kbd>V</kbd>): the dominant
-  layer material, depth and shadow, each layer's material by stack position, the median layer gap, the plate
-  material, lighting, camera, colour mode and tint. A plate *fill* only travels when it's a deliberate System
-  Light / System Dark / None fill (`?plateFill=true&shape=true` copies fill and shape anyway). Per-shape
-  materials never travel (shape ids belong to one icon).
+  layer material, depth and shadow, each layer's material by stack position, the median clearance between stacked
+  bodies, the plate material, lighting, camera, colour mode and tint. A plate *fill* only travels when it's a
+  deliberate System Light / System Dark / None fill (`?plateFill=true&shape=true` copies fill and shape
+  anyway). Per-shape materials never travel (shape ids belong to one icon).
 
 **Rendering** — all Cycles work runs on the OptiX device:
 
@@ -227,7 +253,8 @@ the star tips taper cleanly. Head-on.</sub></td>
 | Preview | Cycles + OptiX denoiser, 512 px, 48 spp | ~0.6–1 s | automatic ~1.2 s after edits settle |
 | Final / Ultra | Cycles, 1024 / 2048 px | seconds | exports and hero shots (one-shot process) |
 
-EEVEE is a layout draft: it can't show glass through glass. The Cycles preview is the first physical view.
+EEVEE is a layout draft: it can't show glass through glass (translucent glass is alpha-blended there, so it reads a
+little darker than in Cycles, without speckle). The Cycles preview is the first physical view.
 
 **Export** (one zip):
 
@@ -256,8 +283,8 @@ shape's material is an ordinary Principled BSDF you can keep editing there.
 
 | | | |
 |---|---|---|
-| <img src="docs/img/hero-photos-liquid-glass.png" width="260" alt="Photos, Liquid Glass look"> | <img src="docs/img/hero-maps-dark.png" width="260" alt="Maps, Candy look, Dark appearance"> | <img src="docs/img/hero-discord-clear-dark.png" width="260" alt="Discord, Clear Dark appearance"> |
-| *Photos* — Liquid Glass look | *Maps* — Candy look, Dark appearance | *Discord* — Clear Dark appearance |
+| <img src="docs/img/hero-photos-liquid-glass.png" width="260" alt="Photos as imported, Liquid Glass"> | <img src="docs/img/hero-maps-dark.png" width="260" alt="Maps as imported, Dark appearance"> | <img src="docs/img/hero-discord-clear-dark.png" width="260" alt="Discord as imported, Clear Dark appearance"> |
+| *Photos* — as imported (Liquid Glass) | *Maps* — as imported, Dark appearance | *Discord* — as imported, Clear Dark appearance |
 
 </details>
 
@@ -334,7 +361,8 @@ flowchart TB
   persistent worker is marked cancelled at once and its result discarded. Progress streams over `/ws`.
 - **Process model (decision D8):** drafts and previews use the warm persistent worker (~0.26 s for a warm
   128 px draft); everything heavy runs in a short-lived Blender process.
-- **Data contract:** `server/bis/models.py` ⇄ `web/src/types.ts` (camelCase JSON) and `shared/presets.json`.
+- **Data contract:** `server/bis/models.py` ⇄ `web/src/types.ts` (camelCase JSON) and `shared/presets.json`
+  (materials, looks, the Principled schema and the `geometry` stacking constants).
 - The full plan is in [`docs/PLAN.md`](docs/PLAN.md) (§11 describes the physical-rendering design); the research
   is in [`docs/research/`](docs/research/).
 
@@ -394,20 +422,22 @@ Or step by step:
 .venv\Scripts\python.exe -m pytest -q tests --ignore=tests/blender       # SVG pipeline, API (fake bridge), exports, styles, batch
 .venv\Scripts\python.exe -m pytest -q tests/blender                      # real Blender 5.0 worker
 $env:BIS_REAL_BLENDER = '1'; .venv\Scripts\python.exe -m pytest -q tests/test_api_integration.py tests/test_batch.py   # import → draft → export, Icon Pack
-node --test web/src/viewport/tests/*.test.mjs web/src/features/editor/inspector/*.test.mjs   # live view ⇄ worker parity, inspector, UI polish
+node --test web/src/viewport/tests/*.test.mjs web/src/features/editor/inspector/*.test.mjs web/src/features/editor/stage/*.test.mjs   # live view ⇄ worker parity, inspector, view controls, UI polish
 cd web; npx tsc -b --noEmit; npx vite build                              # type check + production build
 ```
 
 | Suite | What it covers |
 |---|---|
-| `tests/test_svg_*.py` | the SVG pipeline over the 68-icon corpus: import, split, geometry, units, ops |
+| `tests/test_svg_*.py` | the SVG pipeline over the 68-icon corpus: import, split, geometry, units, ops, `maxRadius` and stacks kept through edits |
+| `tests/test_stacking.py` | the real-height stacking rule: body height, gaps, telling real-height, old and hand-placed stacks apart |
 | `tests/test_api.py` | REST, WebSocket, the job queue, coalescing, cancel and auto preview, material cleaning of old projects, per-shape materials, with a FakeBridge |
 | `tests/test_api_bridge.py` | the real `BlenderBridge` against a stand-in process: handshake, progress, restart, one-shot kill |
 | `tests/test_export.py`, `test_style.py`, `test_batch.py` | every export target, the marketing heroes and the `.icon` writer · looks and style transfer · Icon Pack |
 | `tests/test_api_integration.py` | the real SVG pipeline, plus opt-in real Blender runs (`BIS_REAL_BLENDER=1`) |
-| `tests/blender/` | the worker inside Blender 5.0 (≤ 256 px): one Principled BSDF per shape (graph rules, parameter mapping, glass / shadow physics), height-field bodies (watertight, no self-intersections, corpus), the iso camera and framing, every preset in draft + preview |
-| `web/src/viewport/tests/` | the live view against the worker: Principled → three.js material mapping, the height-field port, iso framing, plus the UI polish checks |
-| `web/src/features/editor/inspector/` | the Principled inspector: group order and open groups, the per-shape merge rule, Roundness and re-stack |
+| `tests/blender/` | the worker inside Blender 5.0 (≤ 256 px): one Principled BSDF per shape (graph rules, parameter mapping, glass / shadow physics), height-field bodies (Poisson dome, watertight, no self-intersections, touching / overlapping pieces, corpus), the iso camera and framing, the camera-relative light rig, the dark renditions, every preset in draft + preview |
+| `web/src/viewport/tests/` | the live view against the worker: Principled → three.js material mapping, the height-field and Poisson port, iso framing, camera-relative lighting, the dark rule, plus the UI polish checks |
+| `web/src/features/editor/inspector/` | the Principled inspector: group order and open groups, the per-shape merge rule, Roundness, re-stack and keeping a stack through edits |
+| `web/src/features/editor/stage/` | the CAD view controls: Fit, wheel zoom at the cursor, middle-drag pan, one shared view for Live / Render / Compare, <kbd>X</kbd> as one undo step |
 
 | Environment variable | Meaning |
 |---|---|
@@ -426,6 +456,7 @@ cd web; npx tsc -b --noEmit; npx vite build                              # type 
 | Worker state **error** / renders fail | The status bar shows the last Blender message. Full output: `GET /api/system/logs` or `workspace/logs/blender.log`. Click the worker state → *Restart worker*. |
 | First render is slow | NVIDIA shader-cache compile after a driver update (one time). |
 | Out of VRAM (OptiX error) | Close other GPU-heavy apps, lower the size or tier, or render Ultra only when needed. |
+| Layers float in the iso view | Layers stack by real height in order, even where they don't overlap in the plane. Drag a layer's Z down (a hand-placed Z is kept) or merge the layers. |
 | Stacked glass looks wrong in the draft | EEVEE drafts are layout previews and can't show glass through glass. The Cycles preview follows about 1.2 s after edits settle (or press <kbd>R</kbd>). |
 | "Web UI not built" page | Run `Blender Icon Studio.cmd -Rebuild`, or `cd web; npm run build`. |
 | Port 8420 is busy | `Blender Icon Studio.cmd -Port 8430` |

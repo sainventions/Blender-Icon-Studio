@@ -9,7 +9,7 @@
       -> split          z-order-consistent layer split; tiles of one shape share a layer
                         built as one 'combined' body                (split.py, ops.py, tiling.py)
       -> geometry       splines (art space; flush art snapped onto the plate outline), regions,
-                        silhouettes, safe radius, layer SVGs and
+                        silhouettes, safe radius, max inscribed radius (real-height stacking), layer SVGs and
                         edge-padded 2048 px textures, hash-cached GeometryBundle (geometry.py)
 
 Public API (PLAN.md §4 A): :func:`import_svg`, :func:`split_layers`, :func:`merge_layers`,
@@ -159,8 +159,8 @@ def import_svg(svg_bytes: bytes, filename: str, project_dir: Path, strategy: Spl
     atomic_write_text(project_dir / NORMALIZED_FILE,
                       textures.layer_svg(elems, ex.gradients, vb, project_dir))
 
-    layers, _info = fresh_layers(store, strategy)
     canvas = make_canvas(plate, {e.id: e for e in elems}, art)
+    layers, _info = fresh_layers(store, strategy, art_scale=canvas.art.scale)
     if not elems:
         warnings = dedupe(warnings + ["no paintable shapes found"])
     full_bleed = bool(plate and plate.get("fullBleed"))
@@ -179,8 +179,10 @@ def read_store(project_dir: Path) -> ElementStore:
 # layer operations
 # ----------------------------------------------------------------------------------------------
 def split_layers(project_dir: Path, project: Project, strategy: SplitStrategy) -> List[Layer]:
-    """Fresh default layers for all non-plate elements of `project` with `strategy`."""
-    layers, _info = fresh_layers(read_store(project_dir), strategy, active=[e.id for e in project.elements])
+    """Fresh default layers for all non-plate elements of `project` with `strategy` (default depth, stacked at
+    their real heights)."""
+    layers, _info = fresh_layers(read_store(project_dir), strategy, active=[e.id for e in project.elements],
+                                 art_scale=project.canvas.art.scale)
     return layers
 
 

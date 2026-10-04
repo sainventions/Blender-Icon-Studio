@@ -215,3 +215,50 @@ test('live key shadow blur follows the tallest caster (soft Cycles penumbra unde
   assert.ok(s[1].height > 0.5, `inflated height ${s[1].height}`)
   assert.ok(rig.shadowGap(Math.max(...s.map((e) => e.height))) > 0.25)
 })
+
+test('camera-relative lighting (round 7): rig + environment turn with the camera; head-on is unchanged', async () => {
+  const THREE = await import('three')
+  const id = new THREE.Quaternion()
+  // head-on: exactly the round-6 placement (light angle about the view axis, environment Rz(−angle))
+  for (const a of [-45, 0, 30, 135]) {
+    const d = rig.viewLightDir(a, 50, id)
+    const r = rig.lightDir(a, 50)
+    near(d.distanceTo(r), 0, 1e-12, `angle ${a}`)
+    const e = rig.environmentRotation(a, id)
+    near(e.x, 0, 1e-12)
+    near(e.y, 0, 1e-12)
+    near(e.z, -THREE.MathUtils.degToRad(a), 1e-9, `env angle ${a}`)
+  }
+  // any view: the light keeps its place on the SCREEN (camera frame), and the environment's key spot (rendered for
+  // angle 0 at lightDir(0, elevation)) lands on the key light — the cube map and the lights stay one rig
+  for (const t of [0.35, 0.6, 1]) {
+    const q = iso.isoQuaternion(t)
+    const { x, y, z } = iso.isoBasis(t)
+    for (const a of [-45, 20]) {
+      const d = rig.viewLightDir(a, 50, q)
+      const head = rig.lightDir(a, 50)
+      near(d.dot(x), head.x, 1e-12, 'screen x')
+      near(d.dot(y), head.y, 1e-12, 'screen y')
+      near(d.dot(z), head.z, 1e-12, 'toward the viewer')
+      const env = new THREE.Quaternion().setFromEuler(rig.environmentRotation(a, q))
+      near(rig.lightDir(0, 50).applyQuaternion(env).distanceTo(d), 0, 1e-9, `env key spot at iso ${t}`)
+    }
+  }
+  // at iso 1 the old world-fixed key (−45°, elevation 50°) sat ~5° from the mirror direction of the flat tops (washed
+  // out to white); camera-relative, the mirror direction of a flat top (reflect the view about +Z) stays far from it
+  const q1 = iso.isoQuaternion(1)
+  const view = iso.isoBasis(1).z
+  const mirror = new THREE.Vector3(-view.x, -view.y, view.z)
+  const ang = (u) => deg(Math.acos(Math.max(-1, Math.min(1, u.dot(mirror)))))
+  assert.ok(ang(rig.lightDir(-45, 50)) < 10, `world-fixed key ${ang(rig.lightDir(-45, 50)).toFixed(1)}° from the glare`)
+  assert.ok(ang(rig.viewLightDir(-45, 50, q1)) > 40, `camera-relative key ${ang(rig.viewLightDir(-45, 50, q1)).toFixed(1)}°`)
+  // the worker turns its rig and world with the camera too (lighting.py `view`), and the live view applies it per frame
+  const src = read('blender_worker/lighting.py')
+  assert.match(src, /ob\.matrix_world = V4 @ Matrix\.Translation\(d \* dist\) @ _look_rotation\(d\)/)
+  assert.match(src, /fwd = tuple\(R @ Vector\(\(0\.0, 0\.0, 1\.0\)\)\)/)
+  const live = read('web/src/viewport/scene/StudioLighting.tsx')
+  assert.match(live, /environmentRotation\(rig\.angle, q, scene\.environmentRotation\)/)
+  assert.match(live, /viewLightDir\(rig\.angle, rig\.elevation, q, L\.dir\)\)\.multiplyScalar\(KEY_DISTANCE\)/)
+  assert.match(live, /viewLightDir\(rig\.angle \+ 160, 55, q, L\.dir\)\)\.multiplyScalar\(FILL_DISTANCE\)/)
+  assert.ok(!/position=\{\[keyDir/.test(live), 'no world-fixed key position left')
+})

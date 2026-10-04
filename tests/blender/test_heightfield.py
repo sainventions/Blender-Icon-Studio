@@ -266,3 +266,121 @@ def test_dome_and_bevelled_sphere_get_an_apex():
     D = H.island_inradius(ol, centres=centres)
     apex = H._with_apices(none, centres, D, 0.05, 0.5, 6)
     assert sorted(np.round(apex[:, 0], 1).tolist()) == [-0.5, 0.5]
+
+
+# ------------------------------------------------------------------------------------------------ Poisson dome (round 7)
+def _delaunay(P):
+    """CCW triangles of a point set (scipy here; the worker uses mathutils' CDT)."""
+    sp = pytest.importorskip("scipy.spatial")
+    T = sp.Delaunay(P).simplices.astype(np.int64)
+    p = P[T]
+    ar = (p[:, 1, 0] - p[:, 0, 0]) * (p[:, 2, 1] - p[:, 0, 1]) - (p[:, 2, 0] - p[:, 0, 0]) * (p[:, 1, 1] - p[:, 0, 1])
+    return np.where((ar < 0)[:, None], T[:, [0, 2, 1]], T)
+
+
+def _disc_mesh(R=0.3, n=72, seed=3):
+    rng = np.random.default_rng(seed)
+    a = np.linspace(0, 2 * np.pi, n, endpoint=False)
+    rim = np.column_stack([R * np.cos(a), R * np.sin(a)])
+    r = R * np.sqrt(rng.uniform(0.0, 0.85, 220))
+    t = rng.uniform(0, 2 * np.pi, 220)
+    P = np.vstack([rim, np.column_stack([r * np.cos(t), r * np.sin(t)])])
+    return P, _delaunay(P), np.arange(len(P)) < n
+
+
+def test_poisson_reproduces_the_disc_exactly():
+    """−∇²u = 4, u = 0 on the rim: a disc of radius R has u = R² − r². The cotangent Laplacian with the circumcentric
+    load reproduces quadratics, so the solution is exact at every vertex of an IRREGULAR Delaunay mesh."""
+    P, T, rim = _disc_mesh()
+    u, info = H.poisson(P, T, rim, tol=1e-10)
+    exact = 0.3 ** 2 - (P ** 2).sum(1)
+    exact[rim] = 0.0
+    assert np.abs(u - exact).max() < 1e-7 * 0.09, np.abs(u - exact).max()
+    u5, info = H.poisson(P, T, rim)                                    # the default stop: ample for a height field
+    assert np.abs(u5 - exact).max() < 1e-3 * 0.09, np.abs(u5 - exact).max()
+    assert info["residual"] <= H.POISSON_TOL and 0 < info["iterations"] < 300
+    # the vertex gradient of a P1 field: exact for linear fields, ≈ −2r for the disc
+    g = H.vertex_gradient(P, T, 2.0 * P[:, 0] - 0.5 * P[:, 1])
+    assert np.allclose(g, [2.0, -0.5], atol=1e-9)
+    gu = H.vertex_gradient(P, T, u)
+    inner = (~rim) & (np.hypot(P[:, 0], P[:, 1]) < 0.2)
+    assert np.abs(gu[inner] + 2.0 * P[inner]).max() < 1e-6                 # quadratic fit: exact for the disc
+
+
+def test_poisson_ellipse_and_separate_parts():
+    """An ellipse x²/a² + y²/b² ≤ 1 has u = c(1 − x²/a² − y²/b²), c = 2/(1/a² + 1/b²); two islands are separate parts."""
+    a, b = 0.5, 0.15
+    rng = np.random.default_rng(7)
+    m = 96
+    t = np.linspace(0, 2 * np.pi, m, endpoint=False)
+    rim = np.column_stack([a * np.cos(t), b * np.sin(t)])
+    q = rng.uniform(-1, 1, (900, 2))
+    q = q[(q ** 2).sum(1) < 0.8]
+    P = np.vstack([rim, q * [a, b]])
+    T = _delaunay(P)
+    u, _ = H.poisson(P, T, np.arange(len(P)) < m)
+    c = 2.0 / (1 / a ** 2 + 1 / b ** 2)
+    exact = np.maximum(c * (1 - (P[:, 0] / a) ** 2 - (P[:, 1] / b) ** 2), 0.0)
+    assert np.abs(u - exact).max() < 0.03 * c                       # the 96-gon rim cuts the ellipse a little
+    # two discs side by side, triangulated apart: two parts, each normalised on its own
+    P1, T1, f1 = _disc_mesh(0.2, 48, 1)
+    P2, T2, f2 = _disc_mesh(0.1, 48, 2)
+    P2 = P2 + [0.6, 0.0]
+    PP, TT, ff = np.vstack([P1, P2]), np.vstack([T1, T2 + len(P1)]), np.concatenate([f1, f2])
+    comp = H.components(len(PP), TT, ff)
+    assert (comp[ff] == -1).all() and len(np.unique(comp[~ff])) == 2
+    assert len(np.unique(comp[:len(P1)][~f1])) == 1
+
+
+def test_dome_rows_sample_thin_parts_across():
+    """Inflated bodies get per-ray rows scaled to the LOCAL width: a thin strip gets several rows across (the Poisson
+    dome is a round tube there), not one medial line; every point stays inside."""
+    strip = _poly([(-0.4, -0.03), (0.4, -0.03), (0.4, 0.03), (-0.4, 0.03)])
+    ol, D = _outline([strip], 0.01)
+    pts = H.steiner_points(ol, D, 0.01, 1.0, 6, H.MAX_EDGE, H.TAN_MIN, 1.0)
+    assert H._point_in_ring(pts, ol.rings[0]).all()
+    mid = pts[np.abs(pts[:, 0]) < 0.2]
+    rows = np.unique(np.round(np.abs(mid[:, 1]), 4))
+    assert len(rows) >= 5, rows                                      # spine + ≥ 4 distances from it
+    assert np.isclose(rows.min(), 0.0, atol=1e-3)                    # the spine (medial points)
+    flat = H.steiner_points(ol, D, 0.01, 0.0, 6, H.MAX_EDGE, H.TAN_MIN, 1.0)     # no inflate: unchanged sampling
+    assert len(np.unique(np.round(np.abs(flat[np.abs(flat[:, 0]) < 0.2][:, 1]), 4))) < len(rows)
+
+
+# ------------------------------------------------------------------------------------------------ pieces of one layer
+def test_touching_pieces_inset_and_overlapping_pieces_stack():
+    a = H.piece_rings([G.rect_spline(-0.4, -0.2, 0.0, 0.2)])
+    b = H.piece_rings([G.rect_spline(0.0, -0.3, 0.5, 0.3)])          # shares the edge x = 0 with a
+    c = H.piece_rings([G.rect_spline(-0.2, -0.1, 0.3, 0.1)])         # overlaps both
+    d = H.piece_rings([G.rect_spline(0.7, -0.1, 0.9, 0.1)])          # apart
+    tol = 3 * H.CHORD_TOL
+    assert H.rings_relation(a, b, tol) == 1 and H.rings_relation(a, c, tol) == 2 and H.rings_relation(a, d, tol) == 0
+    ai = H.inset_rings(a, b, 0.003)
+    assert np.vstack(ai)[:, 0].max() == pytest.approx(-0.003)       # pulled back from the shared edge ...
+    assert np.vstack(ai)[:, 0].min() == pytest.approx(-0.4)         # ... the rest unchanged
+    assert H.rings_relation(ai, b, tol) == 0
+    sp = H.rings_to_splines(ai)
+    assert sp[0]["closed"] and len(sp[0]["points"]) == len(ai[0])
+    # real-height stacking: c (half 0.05) on a (half 0.05) on nothing; b only touches -> no shift
+    s = H.stack_shifts(3, [(0, 2)], [0.05, 0.05, 0.05], 0.002)
+    assert s.tolist() == pytest.approx([0.0, 0.0, 0.102])
+
+
+def test_coincident_outlines_overlap_not_touch():
+    """A translucent overlay with (nearly) the base's own outline has every vertex within tol of the other outline:
+    it OVERLAPS (stacks), it does not TOUCH — pulled back as a 'touch', the base grew outward around the overlay
+    (0.399 -> 0.403) and the two bodies interpenetrated (538-751 intersecting face pairs in the scene)."""
+    tol = 3 * H.CHORD_TOL
+    sq = H.piece_rings([G.rect_spline(-0.4, -0.4, 0.4, 0.4)])
+    for other in (G.rect_spline(-0.4, -0.4, 0.4, 0.4), G.rect_spline(-0.399, -0.399, 0.399, 0.399),
+                  G.rect_spline(-0.4005, -0.4, 0.4, 0.4005)):
+        o = H.piece_rings([other])
+        assert H.rings_relation(sq, o, tol) == 2 and H.rings_relation(o, sq, tol) == 2
+    disc = H.piece_rings([G.circle_spline(0.0, 0.0, 0.3)])
+    assert H.rings_relation(disc, H.piece_rings([G.circle_spline(0.0, 0.0, 0.3)]), tol) == 2
+    # still a TOUCH: a shared edge, a slight seam overlap (< tol), a disc filling the other's hole exactly
+    left = H.piece_rings([G.rect_spline(-0.4, -0.2, 0.0005, 0.2)])
+    right = H.piece_rings([G.rect_spline(0.0, -0.3, 0.5, 0.3)])
+    assert H.rings_relation(left, right, tol) == 1 and H.rings_relation(right, left, tol) == 1
+    ring = H.piece_rings([G.circle_spline(0.0, 0.0, 0.3), G.circle_spline(0.0, 0.0, 0.15)])
+    assert H.rings_relation(ring, H.piece_rings([G.circle_spline(0.0, 0.0, 0.15)]), tol) == 1

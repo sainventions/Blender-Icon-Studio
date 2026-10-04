@@ -172,23 +172,33 @@ def test_plate_only_and_no_plate(import_icon):
 
 
 def test_default_layer_stack(import_icon):
+    """Round 7 import defaults: thick, fully rounded Liquid Glass bodies with a gentle dome, physical shadows,
+    stacked at their REAL heights: z(i+1) = z(i) + thickness + 2 x inflate x maxRadius x art.scale + stackGap."""
+    from bis import stacking
+
     res, project, pdir = import_icon(corpus("Photos"))
     bundle = svg.build_geometry(pdir, project, "/files/projects/p", texture_size=128)
+    rules = stacking.geometry_rules()
+    z = rules["stackLift"]
     for i, L in enumerate(res.layers):
-        assert L.depth.z == pytest.approx(i * 0.13)
-        assert L.depth.thickness == pytest.approx(0.10)
-        assert L.material.preset == "liquid_glass" and L.mode == "individual"
-        sr = bundle.layers[L.id].safeRadius
-        assert L.depth.bevel == pytest.approx(min(0.045, 0.9 * sr), abs=2e-4)
+        assert L.depth.z == pytest.approx(z, abs=1e-5)
+        assert (L.depth.thickness, L.depth.bevel, L.depth.inflate, L.depth.bevelSegments) == (0.16, 0.08, 0.25, 8)
+        assert L.material.preset == "liquid_glass" and L.mode == "individual" and L.shadow.kind == "physical"
+        r = bundle.layers[L.id].maxRadius
+        assert r == pytest.approx(0.168, abs=2e-3)                       # each petal's inscribed circle
+        z += 0.16 + 2 * 0.25 * r * res.canvas.art.scale + rules["stackGap"]
     assert res.canvas.plate.material.preset == "satin"
     assert res.canvas.plate.thickness == pytest.approx(0.16) and res.canvas.plate.bevel == pytest.approx(0.04)
 
 
-def test_thin_features_clamp_bevel(import_icon):
+def test_thin_features_keep_the_full_bevel(import_icon):
+    """Round 7 (QA defect 7): height-field bodies taper thin parts, so the bevel is clamped to thickness/2 only -
+    Ti84's thin keys / text no longer shrink the round edge. The safe radius is still measured (and reported)."""
     res, project, pdir = import_icon(corpus("Ti84"))
     bundle = svg.build_geometry(pdir, project, "/files/projects/p", texture_size=128)
-    for L in res.layers:   # every default bevel fits its layer's (mode-dependent) safe radius
-        assert L.depth.bevel <= 0.9 * bundle.layers[L.id].safeRadius + 1e-4
+    for L in res.layers:
+        assert L.depth.bevel == pytest.approx(L.depth.thickness / 2)
+    assert min(lg.safeRadius for lg in bundle.layers.values()) < 0.05
     # built piece by piece, the thin display text / graph lines clamp the bevel hard ('combined'
     # layers - Ti84's tiled screen + keypad face since round 4 - are built from their silhouette)
     for L in project.layers:

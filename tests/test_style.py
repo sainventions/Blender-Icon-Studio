@@ -1,7 +1,7 @@
 """Looks, style extraction and style transfer (PLAN §10) — pure functions + the REST endpoints.
 
 Unit tests need nothing; the API tests use the FakeBridge and the real ``bis.svg`` pipeline (corpus icons) so the
-bevel clamp is checked against real safe radii.
+real-height stack (PLAN §11 round 7) is checked against real ``LayerGeometry.maxRadius`` values.
 """
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from bis.blender import FakeBridge  # noqa: E402
 from bis.main import create_app  # noqa: E402
 from bis.models import (  # noqa: E402
     CameraSpec,
+    Element,
     FillSolid,
     FillSystem,
     Layer,
@@ -46,10 +47,13 @@ from bis.style import (  # noqa: E402
     resolve_style_request,
 )
 from bis.models import StyleRequest  # noqa: E402
+from bis import stacking  # noqa: E402
 from bis.testing import make_test_settings  # noqa: E402
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 PRESETS = json.loads((ROOT / "shared" / "presets.json").read_text(encoding="utf-8"))
+GAP = stacking.geometry_rules(PRESETS)["stackGap"]
+LIFT = stacking.geometry_rules(PRESETS)["stackLift"]
 
 
 def _real_svg() -> bool:
@@ -123,16 +127,19 @@ def test_apply_style_rules():
         "colorMode": "agx",
         "tint": {"color": "#ff0000", "strength": 0.5},
     })
-    out = apply_style(p, style, {"l0": 0.01, "l1": 0.5})
+    out = apply_style(p, style, {"l0": 0.01, "l1": 0.5}, presets=PRESETS)
     assert p.layers[0].material.preset == "liquid_glass" and p.layers[0].depth.z == 0.0  # input untouched
     assert [l.material.preset for l in out.layers] == ["candy"] * 3
     assert out.layers[0].material.params == {"tint": 0.4}
-    assert [l.depth.z for l in out.layers] == [0.0, 0.15, 0.3]
-    assert out.layers[0].depth.bevel == pytest.approx(0.009)        # 0.9 × safeRadius 0.01
-    assert out.layers[1].depth.bevel == 0.05                         # safe radius large enough
-    assert out.layers[2].depth.bevel == 0.05                         # unknown radius → requested
+    # PLAN 11 round 7: real-height stack, H = thickness + 2 x inflate x maxRadius, gap = zGap (0.15); l2 has no
+    # radius and no elements (bbox bound 0)
+    h0, h1 = 0.11 + 2 * 0.2 * 0.01, 0.11 + 2 * 0.2 * 0.5
+    assert [l.depth.z for l in out.layers] == pytest.approx([LIFT, LIFT + h0 + 0.15, LIFT + h0 + h1 + 0.30])
+    assert all(l.depth.bevel == 0.05 for l in out.layers)            # <= thickness/2: no safe-radius clamp
     assert all(l.depth.thickness == 0.11 and l.depth.bevelSegments == 8 and l.depth.inflate == 0.2
                for l in out.layers)
+    pill = StyleSpec.model_validate({"layerDefaults": {"depth": {"thickness": 0.11, "bevel": 0.09}}})
+    assert {l.depth.bevel for l in apply_style(p, pill).layers} == {0.055}   # clamped to thickness/2 only
     # PLAN 11: only real shadows - the legacy art-directed 'chromatic' kind is applied as 'physical'
     assert all(l.shadow.kind == "physical" and l.shadow.opacity == 0.6 and l.mode == "combined"
                for l in out.layers)
@@ -149,8 +156,10 @@ def test_apply_style_rules():
     ov = out.appearances.dark.layers["l1"]
     assert ov.material is None and ov.opacity == 0.5                 # the look shows in every appearance
 
-    keep = apply_style(p, StyleSpec(zGap=None, plate={"fill": {"type": "system-dark"}, "shape": "circle"}))
-    assert [l.depth.z for l in keep.layers] == [0.0, 0.2, 0.4]       # zGap None → keep z
+    keep = apply_style(p, StyleSpec(zGap=None, plate={"fill": {"type": "system-dark"}, "shape": "circle"}),
+                       presets=PRESETS)
+    # zGap None → the presets' stackGap (StyleSpec default depth: thickness 0.10, inflate 0)
+    assert [l.depth.z for l in keep.layers] == pytest.approx([LIFT + i * (0.10 + GAP) for i in range(3)])
     assert keep.canvas.plate.fill == FillSystem(type="system-dark") and keep.canvas.shape == "circle"
     assert keep.lighting == p.lighting and keep.camera == p.camera and keep.render.colorMode == p.render.colorMode
 
@@ -203,10 +212,39 @@ def test_layer_materials_by_index_clamped():
 
 
 def test_clamp_bevel():
+    """Round 7 (QA defect 7): the bevel is clamped to thickness/2 only - no safe-radius clamp."""
     assert clamp_bevel(0.045, 0.1) == 0.045
-    assert clamp_bevel(0.045, 0.02) == 0.018
+    assert clamp_bevel(0.07, 0.14) == 0.07                            # a full pill edge stays a pill
+    assert clamp_bevel(0.045, 0.02) == 0.01
     assert clamp_bevel(0.045, 0.0) == 0.0
-    assert clamp_bevel(0.05, 0.02403) == 0.02162 <= 0.9 * 0.02403   # rounded down, never above the limit
+    assert clamp_bevel(-0.01, 0.1) == 0.0
+    assert clamp_bevel(0.05, 0.04807) == 0.02403 <= 0.04807 / 2      # rounded down, never above the limit
+
+
+def test_real_height_stack_formula():
+    """H = thickness + 2 x inflate x maxRadius x S (S = canvas.art.scale x layer.transform.scale);
+    z0 = stackLift, z(i+1) = z(i) + H(i) + gap (zGap, else the presets' stackGap)."""
+    p = _project(3)
+    p.canvas.art.scale = 1.25
+    p.layers[1].transform.scale = 0.5
+    style = StyleSpec.model_validate({"layerDefaults": {"depth": {"thickness": 0.16, "bevel": 0.08, "inflate": 0.25}},
+                                      "zGap": None})
+    presets = {"geometry": {"stackLift": 0.01, "stackGap": 0.05}}
+    out = apply_style(p, style, {"l0": 0.4, "l1": 0.2, "l2": 0.1}, presets=presets)
+    h0 = 0.16 + 2 * 0.25 * 0.4 * 1.25
+    h1 = 0.16 + 2 * 0.25 * 0.2 * 1.25 * 0.5
+    assert [l.depth.z for l in out.layers] == pytest.approx([0.01, 0.01 + h0 + 0.05, 0.01 + h0 + h1 + 0.10])
+    assert stacking.stack_gaps(out.layers, {"l0": 0.4, "l1": 0.2, "l2": 0.1}, 1.25) == pytest.approx([0.05, 0.05])
+    assert stacking.stack_gap(out.layers, {"l0": 0.4, "l1": 0.2, "l2": 0.1}, art_scale=1.25,
+                              presets=presets) == pytest.approx(0.05)
+    # zGap given overrides stackGap; missing radii fall back to a bbox bound (never under-estimated)
+    p.elements = [Element(id=f"e{i}", name=f"e{i}", paint=FillSolid(), bbox=(-0.3, -0.2, 0.3, 0.2), area=0.06)
+                  for i in range(3)]
+    out = apply_style(p, style.model_copy(update={"zGap": 0.0}), presets=presets)
+    hb = 0.16 + 2 * 0.25 * 0.2 * 1.25                                  # bbox bound: half the smaller side 0.4
+    assert out.layers[1].depth.z == pytest.approx(0.01 + hb)
+    assert stacking.geometry_rules({}) == {"stackLift": 0.0, "stackGap": 0.03}     # defaults without a section
+    assert stacking.geometry_rules(PRESETS) == {"stackLift": LIFT, "stackGap": GAP}
 
 
 # ---------------------------------------------------------------------------------------------- extract
@@ -224,20 +262,24 @@ def test_extract_style_roundtrip():
     src.canvas.plate.fill = FillSolid(color="#ff00ff")
     s = extract_style(src)
     assert s.layerDefaults.material == MaterialSpec(preset="candy", params={"tint": 0.3})
+    # zGap = the median clearance between real body heights: 0.15 - 0.08 and 0.30 - (0.15 + 0.12 + 2 x 0.2 x 0.05)
+    assert extract_style(src, max_radii={"l2": 0.05}).zGap == pytest.approx(0.07)
+    assert extract_style(src, max_radii={"l0": 0.0, "l1": 0.5, "l2": 0.0}).zGap == pytest.approx(0.07)
     assert s.layerDefaults.depth.bevel == 0.05 and s.layerDefaults.depth.thickness == 0.12  # largest bevel
     assert s.layerDefaults.depth.inflate == 0.2 and s.layerDefaults.depth.z == 0.0
     assert [m.preset for m in s.layerMaterials] == ["satin", "candy", "candy"]
-    assert s.zGap == 0.15
+    assert s.zGap == pytest.approx(0.07)                               # the median clearance [0.03, 0.07]
     assert s.plate.fill is None and s.plate.shape is None            # the icon's own colour stays its own
     assert s.lighting.preset == "soft" and s.camera.zoom == 1.1 and s.colorMode == "standard"
     assert extract_style(src, plate_fill=True, plate_shape=True).plate.fill == FillSolid(color="#ff00ff")
     src.canvas.plate.fill = FillSystem(type="system-dark")
     assert extract_style(src).plate.fill == FillSystem(type="system-dark")   # deliberate fills travel
 
-    dst = apply_style(_project(5), s, {"l3": 0.02})
+    dst = apply_style(_project(5), s, {"l3": 0.02}, presets=PRESETS)
     assert [l.material.preset for l in dst.layers] == ["satin", "candy", "candy", "candy", "candy"]
-    assert [l.depth.z for l in dst.layers] == [0.0, 0.15, 0.3, 0.45, 0.6]
-    assert dst.layers[3].depth.bevel == 0.018 and dst.layers[4].depth.bevel == 0.05
+    hs = [0.12, 0.12, 0.12, 0.12 + 2 * 0.2 * 0.02, 0.12]
+    assert [l.depth.z for l in dst.layers] == pytest.approx([LIFT + sum(hs[:i]) + i * 0.07 for i in range(5)])
+    assert all(l.depth.bevel == 0.05 for l in dst.layers)             # no safe-radius clamp (thickness/2 = 0.06)
     assert dst.lighting == src.lighting and dst.render.colorMode == "standard"
 
     uniform = extract_style(_project(1))
@@ -302,7 +344,8 @@ def test_extract_style_ignores_per_shape_materials():
 def test_resolve_style_request_rules():
     loader = {"src": _project(2)}.__getitem__
     assert resolve_style_request(StyleRequest(look="clay"), PRESETS, loader).layerDefaults.material.preset == "matte_clay"
-    assert resolve_style_request(StyleRequest(fromProject="src"), PRESETS, loader).zGap == 0.2
+    # the copied zGap is the clearance between the real body heights: z 0 / 0.2, thickness 0.08
+    assert resolve_style_request(StyleRequest(fromProject="src"), PRESETS, loader).zGap == pytest.approx(0.12)
     assert resolve_style_request(StyleRequest(style=StyleSpec(zGap=0.3)), PRESETS, loader).zGap == 0.3
     for bad in (StyleRequest(), StyleRequest(look="clay", fromProject="src")):
         with pytest.raises(StyleError):
@@ -359,13 +402,12 @@ def test_style_endpoints_with_real_geometry(client):
     assert c.get(f"/api/projects/{pid}").json() == p                 # saved
     assert p["updatedAt"] > maps["updatedAt"]
     assert all(l["material"]["preset"] == "clear_glass" for l in p["layers"])
-    assert [l["depth"]["z"] for l in p["layers"]] == [round(i * 0.15, 5) for i in range(len(p["layers"]))]
     assert p["lighting"]["preset"] == "darkfield" and p["canvas"]["plate"]["fill"] == maps["canvas"]["plate"]["fill"]
     geo = c.get(f"/api/projects/{pid}/geometry").json()
-    for l in p["layers"]:
-        sr = geo["layers"][l["id"]]["safeRadius"]
-        want = PRESETS["looks"]["crystal"]["style"]["layerDefaults"]["depth"]["bevel"]
-        assert l["depth"]["bevel"] <= 0.9 * sr + 1e-9 and l["depth"]["bevel"] == pytest.approx(min(want, 0.9 * sr), abs=1e-5)
+    _assert_real_stack(p, geo, PRESETS["looks"]["crystal"]["style"]["zGap"])
+    want = PRESETS["looks"]["crystal"]["style"]["layerDefaults"]["depth"]
+    for l in p["layers"]:   # round 7: bevel clamped to thickness/2 only (QA defect 7: no safe-radius clamp)
+        assert l["depth"]["bevel"] == pytest.approx(min(want["bevel"], want["thickness"] / 2), abs=1e-5)
 
     # copy / paste: the style of Maps onto Find Device (by project id and as a pasted StyleSpec)
     r = c.post(f"/api/projects/{oid}/style", json={"fromProject": pid})
@@ -407,8 +449,9 @@ def test_looks_and_copied_styles_keep_tiling_combined_layers(client):
         stored = c.get(f"/api/projects/{p['id']}")
         assert stored.status_code == 200 and [l["mode"] for l in stored.json()["layers"]] == ["combined"]
         geo = c.get(f"/api/projects/{p['id']}/geometry").json()
-        for l in stored.json()["layers"]:   # the bevel was clamped against the combined body's safe radius
-            assert l["depth"]["bevel"] <= 0.9 * geo["layers"][l["id"]]["safeRadius"] + 1e-9
+        for l in stored.json()["layers"]:   # round 7: thickness/2 is the only bevel clamp
+            assert l["depth"]["bevel"] <= l["depth"]["thickness"] / 2 + 1e-9
+            assert geo["layers"][l["id"]]["maxRadius"] > 0
 
     # copy style: Calculator's modes are its own art's -> not copied; pasting it keeps Maps combined
     s = c.get(f"/api/projects/{calc['id']}/style").json()
@@ -440,7 +483,40 @@ def test_looks_and_copied_styles_keep_tiling_combined_layers(client):
     r = c.post(f"/api/projects/{other['id']}/style", json={"fromProject": calc["id"]}).json()
     assert {l["mode"] for l in r["layers"]} == {"combined"}
     geo = c.get(f"/api/projects/{other['id']}/geometry").json()
-    assert all(l["depth"]["bevel"] <= 0.9 * geo["layers"][l["id"]]["safeRadius"] + 1e-9 for l in r["layers"])
+    assert all(l["depth"]["bevel"] <= l["depth"]["thickness"] / 2 + 1e-9 for l in r["layers"])
+    _assert_real_stack(r, geo, s2["zGap"])          # stacked with the max radii of the COMBINED bodies
+
+
+def _assert_real_stack(project: dict, geo: dict, gap, tol: float = 2e-4) -> None:
+    """The layers form the real-height stack (PLAN 11 round 7) for the bundle's max radii: z0 = stackLift and
+    z(i+1) - (z(i) + H(i)) == gap (None = the presets' stackGap) - neighbouring bodies never interpenetrate."""
+    proj = Project.model_validate(project)
+    radii = {lid: lg["maxRadius"] for lid, lg in geo["layers"].items()}
+    assert proj.layers[0].depth.z == pytest.approx(LIFT, abs=tol)
+    want = GAP if gap is None else gap
+    gaps = stacking.stack_gaps(proj.layers, radii, proj.canvas.art.scale)
+    assert gaps == pytest.approx([want] * len(gaps), abs=tol), (proj.name, gaps)
+
+
+@pytest.mark.skipif(not _real_svg(), reason="bis.svg not importable")
+@pytest.mark.parametrize("sample", ["Ti84", "Find Device", "Photos"])
+def test_every_look_stacks_without_interpenetration(client, sample):
+    """QA defect 4: under looks, layers passed through each other (thickness / dome taller than the look's z step).
+    Every look now stacks at REAL body heights: the clearance between neighbours is the look's zGap, never < 0."""
+    c = client
+    src = c.post("/api/projects", json={"sample": sample}).json()
+    assert len(src["layers"]) >= 2
+    geo0 = c.get(f"/api/projects/{src['id']}/geometry").json()
+    _assert_real_stack(src, geo0, None)                                # the import default stack too
+    for look in sorted(PRESETS["looks"]):
+        r = c.post(f"/api/projects/{src['id']}/style", json={"look": look})
+        assert r.status_code == 200, r.text
+        p = r.json()
+        geo = c.get(f"/api/projects/{src['id']}/geometry").json()
+        _assert_real_stack(p, geo, PRESETS["looks"][look]["style"].get("zGap", StyleSpec().zGap))
+        depth = PRESETS["looks"][look]["style"]["layerDefaults"]["depth"]
+        assert all(l["depth"]["bevel"] == pytest.approx(min(depth["bevel"], depth["thickness"] / 2), abs=1e-5)
+                   for l in p["layers"]), look
 
 
 @pytest.mark.skipif(not _real_svg(), reason="bis.svg not importable")

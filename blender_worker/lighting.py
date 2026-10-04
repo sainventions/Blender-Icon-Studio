@@ -4,6 +4,11 @@ One light angle drives everything (glass doc §6.2):  key softbox disk, a grazin
 a weaker opposite rim strip, a front fill and the world's gradient/softbox. ``light_dir(a, e)`` =
 (0,0,1)·cos e + (sin a, cos a, 0)·sin e  — angle 0 = from the top (+Y), +90 = from the right (+X).
 No HDRI files are used.
+
+CAMERA-RELATIVE (PLAN §11 round 7): those axes are the CAMERA's (x = screen right, y = screen up, z = toward the
+viewer). The rig and the world are laid out for the head-on view and turned with the camera's world rotation, so
+``lighting.angle`` is relative to the view and the CAD iso / perspective views and every animation are lit like the
+head-on view (at iso 1 a world-fixed key sat 5° from the mirror direction of the flat tops: glyphs washed to white).
 """
 from __future__ import annotations
 
@@ -84,13 +89,26 @@ def engine_cal(engine: Optional[str]) -> float:
     return ENGINE_CAL.get(str(engine or "CYCLES"), 1.0)
 
 
+def _view4(view) -> "Matrix":
+    """4×4 rotation of the camera frame (columns = camera x, y, z in world space); identity = head-on."""
+    if view is None:
+        return Matrix.Identity(4)
+    return Matrix(view).to_3x3().normalized().to_4x4()
+
+
 def update_lights(scene: bpy.types.Scene, collection: bpy.types.Collection, rig: dict,
-                  engine: Optional[str] = None) -> list:
+                  engine: Optional[str] = None, view=None) -> list:
     """Create / update the 4-light rig (in place: no datablock churn while dragging the angle dial).
-    ``engine`` (render engine id) selects the per-engine exposure calibration (ENGINE_CAL)."""
+    ``engine`` (render engine id) selects the per-engine exposure calibration (ENGINE_CAL).
+
+    CAMERA-RELATIVE (PLAN §11 round 7): the rig is laid out for the head-on view (camera on +Z, angle 0 = screen up)
+    and then turned with the camera — ``view`` is the camera's world rotation (3×3, columns = its x, y, z axes; None
+    = head-on). Every view (iso, perspective, tilt / turntable / iso animations) is lit like the head-on view: the key
+    stays up-left of the SCREEN, never behind the camera at the mirror direction of the tilted flat tops."""
     objs = []
     soft = 0.3 + 1.4 * rig["softness"]
     cal = engine_cal(engine)
+    V4 = _view4(view)
     for i, (name, d_angle, elev, dist, shape, size, size_y, efac) in enumerate(RIG):
         e = rig["elevation"] if elev is None else elev
         d = Vector(light_dir(rig["angle"] + d_angle, e))
@@ -128,7 +146,7 @@ def update_lights(scene: bpy.types.Scene, collection: bpy.types.Collection, rig:
             ld.use_soft_falloff = True
         except AttributeError:
             pass
-        ob.matrix_world = Matrix.Translation(d * dist) @ _look_rotation(d)
+        ob.matrix_world = V4 @ Matrix.Translation(d * dist) @ _look_rotation(d)
         ob.hide_render = energy <= 0.0
         objs.append(ob)
     return objs
@@ -141,16 +159,20 @@ GRADIENT = [(0.00, (0.02, 0.02, 0.025), 1.0), (0.55, (0.18, 0.18, 0.20), 1.0),
             (0.80, (0.60, 0.60, 0.62), 1.0), (1.00, (1.0, 1.0, 1.0), 1.0)]
 
 
-def _world_graph(g: Graph, rig: dict, backdrop: tuple, strength_scale: float = 1.0) -> None:
+def _world_graph(g: Graph, rig: dict, backdrop: tuple, strength_scale: float = 1.0, view=None) -> None:
+    """Studio world: a gradient along the light's screen direction, a soft key spot and a front glow — all three axes
+    in the CAMERA frame (``view``: the camera's world rotation, None = head-on), turned into world space."""
     a = math.radians(rig["angle"])
-    up = (math.sin(a), math.cos(a), 0.0)
-    L = light_dir(rig["angle"], 50.0)
+    R = _view4(view).to_3x3()
+    up = tuple(R @ Vector((math.sin(a), math.cos(a), 0.0)))
+    L = tuple(R @ Vector(light_dir(rig["angle"], 50.0)))
+    fwd = tuple(R @ Vector((0.0, 0.0, 1.0)))
     tc = g.node("ShaderNodeTexCoord")
     d = g.vmath("NORMALIZE", tc.outputs["Generated"])
     gy = g.vmath("DOT_PRODUCT", d, up)
     grad = g.ramp(g.map_range(gy, -1.0, 1.0, 0.0, 1.0), GRADIENT)
     soft = g.map_range(g.vmath("DOT_PRODUCT", d, L), 0.90, 0.97, 0.0, 6.0 * max(0.2, rig["key"]), interp="SMOOTHSTEP")
-    front = g.map_range(g.vmath("DOT_PRODUCT", d, (0.0, 0.0, 1.0)), 0.0, 1.0, 0.0, 0.5 * max(0.3, rig["fill"]))
+    front = g.map_range(g.vmath("DOT_PRODUCT", d, fwd), 0.0, 1.0, 0.0, 0.5 * max(0.3, rig["fill"]))
     add = g.math("ADD", soft, front)
     col = g.mix_rgb(1.0, grad.outputs["Color"], add, blend="ADD")
     tint = lerp((1.0, 1.0, 1.0), lerp(WARM, (1, 1, 1), 0.5), rig["warmth"] * 0.6)
@@ -168,9 +190,10 @@ def _world_graph(g: Graph, rig: dict, backdrop: tuple, strength_scale: float = 1
 
 
 def update_world(scene: bpy.types.Scene, rig: dict, backdrop_rgb: tuple = (0.05, 0.05, 0.06),
-                 engine: Optional[str] = None) -> bpy.types.World:
+                 engine: Optional[str] = None, view=None) -> bpy.types.World:
     """Procedural studio world. Not engine-calibrated (``engine`` is accepted for symmetry): a world change
-    makes EEVEE re-bake its probes, ~50 ms on every draft <-> preview switch; the lights carry ENGINE_CAL."""
+    makes EEVEE re-bake its probes, ~50 ms on every draft <-> preview switch; the lights carry ENGINE_CAL.
+    ``view``: the camera's world rotation — the world turns with the camera like the light rig."""
     world = bpy.data.worlds.get("BIS World")
     fresh = world is None
     if fresh:
@@ -179,12 +202,12 @@ def update_world(scene: bpy.types.Scene, rig: dict, backdrop_rgb: tuple = (0.05,
     nt = world.node_tree
     if not fresh and world.get("bis_key") == "v1":
         try:
-            _world_graph(Graph(nt, update=True), rig, backdrop_rgb)
+            _world_graph(Graph(nt, update=True), rig, backdrop_rgb, view=view)
             return world
         except TopologyMismatch:
             pass
     nt.nodes.clear()
-    _world_graph(Graph(nt), rig, backdrop_rgb)
+    _world_graph(Graph(nt), rig, backdrop_rgb, view=view)
     world["bis_key"] = "v1"
     layout(nt)
     return world

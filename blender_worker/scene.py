@@ -9,8 +9,10 @@ Layout (PLAN §3, D1): icon in the XY plane, camera on +Z looking −Z, 1 BU = 1
                                       + z = depth.z + ε (REAL distances; camera.explode is legacy, ignored)
           BIS <id> r<i> / sil / img<k>  height-field body meshes (heightfield.piece_mesh); object coords == art
                                       coords, mid-plane at z + thickness/2 (+ lift: an inflated layer's lowest
-                                      point stays on z)
-    BIS Rig (collection)              camera (front / CAD iso orthographic / perspective), lights, wallpaper
+                                      point stays on z). Pieces of one layer never interpenetrate: touching ones
+                                      pull back INSET_GAP, overlapping ones stack by real height (_relations)
+    BIS Rig (collection)              camera (front / CAD iso orthographic / perspective), then the light rig and
+                                      the world turned with the camera (camera-relative lighting, round 7), wallpaper
 
 Everything is updated in place between renders: objects/empties are reused by name, piece meshes come from
 heightfield's cache (layer hash + depth params), materials update their node values in place.
@@ -35,6 +37,9 @@ LAYER_EPS = 0.002          # layer back face above the plate front face
 REGION_DZ = 0.001          # zSub step (zSub is interpreted as a sub-layer index)
 CARD_THICKNESS = 0.004
 PLATE_WALLPAPER_GAP = 0.9  # wallpaper plane below the plate's back face
+STACK_GAP = 0.002          # overlapping pieces of one layer are stacked by their real heights, this far apart
+INSET_GAP = 0.003          # touching pieces of one layer: the lower one pulls back this far from the upper one
+TOUCH_TOL = 0.0018         # world: pieces closer than this (3 x heightfield.CHORD_TOL) touch
 
 
 def _collection(name: str, parent: Optional[bpy.types.Collection] = None) -> bpy.types.Collection:
@@ -240,6 +245,7 @@ class SceneBuilder:
         self.editable = False
         self._hidden: set = set()
         self._cover_cache: dict = {}
+        self._touch_cache: dict = {}
         self._shape_names: set = set()
 
     # -------------------------------------------------------------------------- setup
@@ -289,8 +295,6 @@ class SceneBuilder:
         self._specs = []
         self._shape_names = set()
         rig = lighting.resolve(lighting_spec, env["envScale"], env["keyScale"], overrides.get("lightAngle"))
-        lighting.update_lights(scene, rig_col, rig, engine)
-        lighting.update_world(scene, rig, (*hex_to_linear(backdrop_color), 1.0), engine)
         # CAD iso (orthographic) and perspective views are auto-framed on the subject (framing.py); animations
         # pass one shared plan for the whole clip
         fplan = None
@@ -307,7 +311,12 @@ class SceneBuilder:
             if fplan is None:
                 pts = self.subject_points(self.subject_hulls(eff, bnd), overrides.get("layerZ") or {}, canvas=True)
                 fplan = framing.ortho_plan([(pts, cam["iso"])], zoom)
-        self._camera(rig_col, cam, full_bleed, fplan)
+        cam_ob = self._camera(rig_col, cam, full_bleed, fplan)
+        # camera-relative studio (PLAN §11 round 7): the key / rim / fill rig and the world are defined in the camera's
+        # frame (lighting.angle is relative to the view), so iso / perspective / animated views light like head-on
+        view = cam_ob.matrix_world.to_3x3().normalized()
+        lighting.update_lights(scene, rig_col, rig, engine, view)
+        lighting.update_world(scene, rig, (*hex_to_linear(backdrop_color), 1.0), engine, view)
 
         canvas = eff["canvas"]
         shape = "square" if full_bleed else canvas["shape"]
@@ -387,7 +396,8 @@ class SceneBuilder:
         return self.info
 
     # -------------------------------------------------------------------------- camera
-    def _camera(self, col: bpy.types.Collection, cam: dict, full_bleed: bool, fplan: Optional[dict] = None) -> None:
+    def _camera(self, col: bpy.types.Collection, cam: dict, full_bleed: bool,
+                fplan: Optional[dict] = None) -> bpy.types.Object:
         ob = bpy.data.objects.get("BIS Camera")
         if ob is None:
             ob = bpy.data.objects.new("BIS Camera", bpy.data.cameras.new("BIS Camera"))
@@ -427,6 +437,7 @@ class SceneBuilder:
             # near clip well in front of the subject's nearest point (plan['near'], depth along the view axis)
             cd.clip_start = max(0.001, min(dist * 0.05, 0.5 * float(fplan.get("near", dist))))
         self.scene.camera = ob
+        return ob
 
     # -------------------------------------------------------------------------- framing subject
     def subject_hulls(self, eff: dict, bnd: dict, full_bleed: bool = False) -> list:
@@ -470,19 +481,73 @@ class SceneBuilder:
             out.append((framing.hull2d(pts), z0, z0 + self._body_height(Lr, g, sa * sl), Lr["id"]))
         return out
 
-    @staticmethod
-    def _body_height(Lr: dict, g: dict, S: float) -> float:
-        """World height of a layer's bodies: its thickness, or twice the half height of an inflated body (the
-        silhouette's inradius bounds every piece's)."""
+    def _body_height(self, Lr: dict, g: dict, S: float) -> float:
+        """World height of a layer's bodies (PLAN §11 round 7, presets.json "geometry"): H = thickness +
+        2 × inflate × maxRadius (LayerGeometry.maxRadius; the worker's own inradius of the silhouette when the bundle
+        has none) — plus the real-height stacking of overlapping pieces inside the layer (:meth:`_relations`)."""
         dp = Lr["depth"]
         th = max(0.0, float(dp.get("thickness", 0.1)))
-        k = max(0.0, float(dp.get("inflate", 0.0) or 0.0))
+        k = max(0.0, min(1.0, float(dp.get("inflate", 0.0) or 0.0)))
+        b = min(max(0.0, float(dp.get("bevel", 0.045))), th / 2.0)
+
+        def half(spl, key):
+            if k <= 0.0:
+                return th / 2.0
+            return heightfield.half_height(th, b, k, heightfield.inradius(spl, S, key) * S)
+
+        regions = g.get("regions") or []
+        if Lr.get("mode") != "combined" and len(regions) > 1:
+            pids = [f"r{i}" for i in range(len(regions))]
+            pairs = self._relations(g, Lr["id"], pids, S)["stack"]
+            if pairs:
+                hk = "D-" + geo_key(g, Lr["id"])
+                hs = [half(r.get("splines") or [], f"{hk}-r{i}") for i, r in enumerate(regions)]
+                sh = heightfield.stack_shifts(len(hs), pairs, hs, STACK_GAP)
+                return float(max(s + h for s, h in zip(sh, hs)) + max(hs))
         if k <= 0.0:
             return th
-        spl = g.get("silhouette") or [s for r in g.get("regions") or [] for s in r.get("splines") or []]
-        D = heightfield.inradius(spl, S, "D-" + geo_key(g, Lr["id"])) * S
-        b = min(max(0.0, float(dp.get("bevel", 0.045))), th / 2.0)
-        return max(th, 2.0 * heightfield.half_height(th, b, k, D))
+        mr = g.get("maxRadius")
+        if isinstance(mr, (int, float)) and mr > 0:
+            return th + 2.0 * k * float(mr) * S
+        spl = g.get("silhouette") or [s for r in regions for s in r.get("splines") or []]
+        return max(th, 2.0 * half(spl, "D-" + geo_key(g, Lr["id"])))
+
+    def _relations(self, g: dict, lid: str, pids: list, S: float) -> dict:
+        """How the pieces of one layer meet (PLAN §11 round 7; pieces = regions 'r<k>' in paint order, cached by the
+        layer geometry): {'stack': [(i, j)] — piece j OVERLAPS the earlier piece i (a translucent piece over another;
+        A only occlusion-cuts under opaque art): j is stacked on i by their real heights; 'inset': {i: splines} —
+        piece i only TOUCHES later pieces along a shared edge (Secure Folder's tab and folder): its outline pulls back
+        INSET_GAP from them, so the bodies' walls never coincide and nothing changes height}. Indices into ``pids``."""
+        key = (geo_key(g, lid), tuple(pids), round(float(S), 6))
+        hit = self._touch_cache.get(key)
+        if hit is not None:
+            return hit
+        regions = g.get("regions") or []
+        rings = []
+        for pid in pids:
+            k = int(pid[1:]) if pid.startswith("r") and pid[1:].isdigit() else -1
+            spl = (regions[k].get("splines") or []) if 0 <= k < len(regions) else []
+            rings.append(heightfield.piece_rings(spl, S) if spl else [])
+        sc = max(float(S), 1e-9)
+        tol = TOUCH_TOL / sc
+        stack, inset = [], {}
+        for j in range(len(pids)):
+            for i in range(j):
+                rel = heightfield.rings_relation(rings[i], rings[j], tol)
+                if rel == 2:
+                    stack.append((i, j))
+                elif rel == 1:
+                    inset.setdefault(i, []).append(j)
+        out = {"stack": stack, "inset": {}}
+        for i, js in inset.items():
+            ri = rings[i]
+            for j in js:
+                ri = heightfield.inset_rings(ri, rings[j], INSET_GAP / sc)
+            out["inset"][i] = heightfield.rings_to_splines(ri)
+        if len(self._touch_cache) > 64:
+            self._touch_cache.clear()
+        self._touch_cache[key] = out
+        return out
 
     @staticmethod
     def subject_points(hulls: list, layer_z: Optional[dict] = None, canvas: bool = False) -> np.ndarray:
@@ -657,7 +722,7 @@ class SceneBuilder:
         bevel_local = min(max(0.0, float(dp.get("bevel", 0.045))), thickness / 2.0) / S
         inflate = max(0.0, min(1.0, float(dp.get("inflate", 0.0) or 0.0)))
         segments = int(dp.get("bevelSegments", 6))
-        placed = []        # (object, z offset) — positioned once every body's half height is known
+        placed = []        # (object, z offset, piece index) — positioned once every body's half height is known
         layer_opacity = float(Lr.get("opacity", 1.0))
 
         # ---- pieces ----------------------------------------------------------------------------------
@@ -706,10 +771,18 @@ class SceneBuilder:
             # round bevel along the outline as a hollow tube
             log(f"layer {lid}: {n_open} open spline(s) treated as closed fills")
             stats["openSplines"] = stats.get("openSplines", 0) + n_open
-        for pid, splines, zoff, op, rgb, raster in pieces:
+        # pieces of one layer that overlap / touch (_relations): touching ones pull back from each other, overlapping
+        # ones are stacked by their REAL heights in paint order — bodies of one layer never interpenetrate
+        rel = (self._relations(g, lid, [pc[0] for pc in pieces], S) if len(pieces) > 1 and not combined_body
+               else {"stack": [], "inset": {}})
+        for n_piece, (pid, splines, zoff, op, rgb, raster) in enumerate(pieces):
             if not splines:
                 continue
             kp = {**key_base, "p": pid, "n": len(splines)}
+            if n_piece in rel["inset"]:
+                splines = rel["inset"][n_piece]
+                kp["inset"] = INSET_GAP
+                stats["insetPieces"] = stats.get("insetPieces", 0) + 1
             data, _hinfo = heightfield.piece_mesh(kp, splines, th_local, bevel_local, inflate, segments, S)
             if data is None:
                 self.warnings.append(f"layer {lid} {pid}: degenerate outline skipped")
@@ -722,7 +795,7 @@ class SceneBuilder:
                 ppaint = paint_spec(fill, g.get("texturePath"), bbox, rpaints.get(pid))
             pmat = self._shape_material(Lr, layer_mat, eids.get(pid, "body"), ppaint, op, th_local, env, rgb, mats)
             ob = _mesh_object(f"BIS {lid} {pid}", data, col, lay)
-            placed.append((ob, zoff))
+            placed.append((ob, zoff, n_piece))
             ob.scale = (1.0, 1.0, 1.0)
             ob.color = (*rgb, max(0.0, min(1.0, op)))
             covered = pid.startswith("r") and (lid, int(pid[1:])) in self._hidden
@@ -738,10 +811,17 @@ class SceneBuilder:
             stats["pieces"] += 1
         # every body of the layer shares one mid-plane at z + thickness/2; an inflated layer is lifted so that its
         # lowest point stays on z (the dome is mirrored below the mid-plane)
-        half = max([float(ob.data.get("bis_half", 0.0)) for ob, _ in placed] + [0.0])
-        lift = max(0.0, half - th_local / 2.0)
-        for ob, zoff in placed:
-            ob.location = (0.0, 0.0, (thickness / 2.0 + zoff) / S + lift)
+        halves = [float(ob.data.get("bis_half", 0.0)) for ob, _z, _n in placed]
+        lift = max(0.0, max(halves + [0.0]) - th_local / 2.0)
+        base = [(thickness / 2.0 + zoff) / S + lift for _ob, zoff, _n in placed]
+        shifts = [0.0] * len(placed)
+        if rel["stack"]:
+            at = {n: k for k, (_o, _z, n) in enumerate(placed)}
+            pairs = [(at[i], at[j]) for i, j in rel["stack"] if i in at and j in at]
+            shifts = list(heightfield.stack_shifts(len(placed), pairs, halves, STACK_GAP / S, base))
+            stats["stackedPieces"] = stats.get("stackedPieces", 0) + sum(1 for x in shifts if x > 0)
+        for (ob, _z, _n), b0, sh in zip(placed, base, shifts):
+            ob.location = (0.0, 0.0, b0 + float(sh))
 
         for k, im in enumerate(cards):
             bb = im.get("bbox") or bbox

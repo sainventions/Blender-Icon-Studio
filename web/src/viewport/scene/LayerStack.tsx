@@ -14,7 +14,7 @@ import {
   type PaintBinding,
   type Principled,
 } from '../../lib/materials3d'
-import { bodyCache, imageUv, layerLift, layerScale, type Body, type BodyPart } from '../geometry/layerGeometry'
+import { bodyCache, imageUv, layerLift, layerScale, partShifts, type Body, type BodyPart } from '../geometry/layerGeometry'
 import { fillPreviewColor } from '../textures/fillTextures'
 import { useTextureAsset } from '../textures/layerTextures'
 import type { StackEntry } from './stack'
@@ -65,6 +65,13 @@ export const LayerBody = memo(function LayerBody(p: LayerBodyProps) {
     () => layerLift(entry.parts.map((part, i) => ({ part, body: bodies[i] })), entry.depth),
     [entry.parts, bodies, entry.depth],
   )
+  // local z of every body's mid-plane: one shared mid-plane (+ zSub) lifted for inflate, overlapping pieces of the
+  // layer stacked by their real heights (worker scene._layer: heightfield.stack_shifts)
+  const partZ = useMemo(() => {
+    const base = entry.parts.map((part) => (part.card ? part.z : part.z + lift))
+    const sh = partShifts(entry.pieceStack, bodies, base, entry.scale)
+    return base.map((z, i) => z + sh[i])
+  }, [entry.parts, entry.pieceStack, bodies, lift, entry.scale])
   const fallback = useMemo(() => {
     const r = lg.regions?.[0]
     return fillPreviewColor(layer.fill.type === 'auto' && r ? r.paint : layer.fill, '#c8ccd6')
@@ -228,7 +235,7 @@ export const LayerBody = memo(function LayerBody(p: LayerBodyProps) {
           key={part.key}
           part={part}
           body={bodies[i]}
-          z={part.card ? part.z : part.z + lift}
+          z={partZ[i]}
           layerId={layer.id}
           params={entry.params.get(part.key)!}
           paint={paint.binding}

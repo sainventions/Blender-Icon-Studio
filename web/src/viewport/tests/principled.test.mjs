@@ -144,6 +144,13 @@ test('glass seen through glass is drawn opaque × what lies behind it (no transm
   // opaque presets ignore it
   m3d.applyPrincipled(m, m3d.materialParams('satin', {}, presets), { paint: paint(), opacity: 1, thickness: 0.1, covered: behind })
   assert.ok(!m.covered && m.bis.bisBehind.value.getHex() === 0xffffff)
+  // only the TRANSMITTED share shows what lies behind (review r7: the dark renditions' DARK_GLYPH glass — transmission
+  // 0.5 — covered by more glass was drawn as base × the dark plate: Earth / Find Device / Weatherbug went black)
+  const dark = m3d.materialParams('liquid_glass', { transmission: 0.5, subsurfaceWeight: 1 }, presets)
+  m3d.applyPrincipled(m, dark, { paint: paint(), opacity: 1, thickness: 0.1, covered: behind })
+  assert.equal(m.transmission, 0)
+  assert.ok(m.covered)
+  near(m.bis.bisCovered.value, 0.5, 1e-12)
 })
 
 test('the shader patch only adds the paint pre-processing to three.js MeshPhysicalMaterial', () => {
@@ -184,7 +191,9 @@ test('rendition constants mirror blender_worker/appearance.py', () => {
   assert.deepEqual({ ...ap.CLEAR_PLATE }, pyDict(src, 'CLEAR_PLATE'))
   assert.deepEqual({ ...ap.TINTED_GLYPH }, pyDict(src, 'TINTED_GLYPH'))
   assert.deepEqual({ ...ap.TINTED_PLATE }, pyDict(src, 'TINTED_PLATE'))
-  assert.equal(ap.TINTED_DARK_GLOW, pyConst(src, 'TINTED_DARK_GLOW'))
+  assert.deepEqual({ ...ap.DARK_GLYPH }, pyDict(src, 'DARK_GLYPH'))
+  assert.equal(ap.MONO_FLOOR_DARK, pyConst(src, 'MONO_FLOOR_DARK'))
+  assert.equal('TINTED_DARK_GLOW' in ap, false, 'round 7: tinted-dark glyphs are lit, not emissive')
   assert.equal(ap.MONO_FLOOR, pyConst(src, 'MONO_FLOOR'))
   assert.equal(ap.MONO_MIN_RANGE, pyConst(src, 'MONO_MIN_RANGE'))
   for (const [k, w] of Object.entries(ap.WALLPAPERS)) {
@@ -257,15 +266,59 @@ test('renditions only change Principled inputs (appearance.resolve), per-shape o
   const tl = ap.resolveAppearance(p, 'tinted-light')
   assert.deepEqual(tl.layers[0].material.params, { ...ap.TINTED_GLYPH })
   assert.equal(tl.canvas.plate.fill.color, ap.mixHex('#ffffff', '#3b82f6', 0.18 + 0.2 * 0.8))
-  const td = ap.resolveAppearance(p, 'tinted-dark')
-  assert.equal(td.layers[0].material.params.paintMode, 'base+emission')
-  assert.equal(td.layers[0].material.params.emissionStrength, ap.TINTED_DARK_GLOW)
+  const td = ap.resolveAppearance(p, 'tinted-dark', presets)
+  // round 7: lit glass (DARK_GLYPH), no emission — TINTED_GLYPH capped to half transmission + subsurface
+  assert.deepEqual(td.layers[0].material, {
+    preset: 'liquid_glass',
+    params: { ...ap.TINTED_GLYPH, transmission: 0.5, subsurfaceWeight: 1, tint: 1 },
+  })
+  assert.equal(td.layers[0].material.params.emissionStrength, 0)
+  assert.equal(ap.appearanceMono(p, 'tinted-dark', null).floor, ap.MONO_FLOOR_DARK)
   assert.deepEqual(td.canvas.plate.fill, { type: 'system-dark' })
   assert.equal(td.canvas.plate.material.preset, 'glossy_plastic') // a solid plate preset is kept
   // watchOS ignores appearances
   const w = project({ canvas: { ...p.canvas, platform: 'watchos' } })
   assert.equal(ap.resolveAppearance(w, 'clear-dark'), w)
   assert.equal(ap.appearanceMono(w, 'tinted-dark', null), null)
+})
+
+test('dark renditions keep glyphs readable: transmissive glass → DARK_GLYPH lit glass (worker _dark_glyphs)', () => {
+  const glass = (id, extra = {}) => ({ ...project().layers[0], id, elementIds: [`${id}e`], material: { preset: 'liquid_glass', params: {} }, elementMaterials: {}, ...extra })
+  const p = project({
+    layers: [
+      glass('A'), // Liquid Glass: transmission 1 → capped
+      glass('B', { material: { preset: 'candy', params: { roughness: 0.4 } } }), // candy: not transmissive enough → unchanged
+      glass('C', { elementMaterials: { Ce: { preset: 'clear_glass', params: { roughness: 0.1 } } } }), // per-shape glass too
+      glass('D'), // the user set D's dark material → kept
+      glass('E', { glass: false }), // glass effects off → flat, untouched
+      glass('F', { visible: false }),
+    ],
+  })
+  p.appearances = { ...p.appearances, dark: { plateFill: { type: 'system-dark' }, layers: { D: { material: { preset: 'chrome', params: {} } } } } }
+  const dark = ap.resolveAppearance(p, 'dark', presets)
+  const byId = Object.fromEntries(dark.layers.map((l) => [l.id, l]))
+  const full = (l, eid = null) => m3d.shapeMaterial(l, eid, presets).params
+  const a = full(byId.A)
+  assert.equal(a.transmission, ap.DARK_GLYPH.transmission)
+  assert.equal(a.subsurfaceWeight, ap.DARK_GLYPH.subsurfaceWeight)
+  assert.ok(a.tint >= ap.DARK_GLYPH.tintMin, `tint ${a.tint}`)
+  assert.equal(a.emissionStrength, 0, 'lit, not self-lit')
+  assert.deepEqual(byId.B.material, { preset: 'candy', params: { roughness: 0.4 } })
+  assert.ok(full(byId.B).transmission <= ap.DARK_GLYPH.transmission)
+  const ce = full(byId.C, 'Ce')
+  assert.equal(byId.C.elementMaterials.Ce.preset, 'clear_glass')
+  assert.equal(ce.transmission, 0.5)
+  assert.equal(ce.roughness, 0.1, 'the shape keeps its own inputs')
+  assert.deepEqual(byId.D.material, { preset: 'chrome', params: {} })
+  assert.deepEqual(byId.E.material, { preset: 'liquid_glass', params: {} })
+  assert.deepEqual(byId.F.material, { preset: 'liquid_glass', params: {} })
+  // the light rendition is untouched; without presets the built-in Liquid Glass defaults decide
+  assert.equal(ap.resolveAppearance(p, 'light', presets), p)
+  assert.equal(full(ap.resolveAppearance(p, 'dark').layers[0]).transmission, 0.5)
+  // mirrors the worker's rules (DARK_GLYPH applied through _dark_params in both dark renditions)
+  const src = read('blender_worker/appearance.py')
+  assert.match(src, /_dark_glyphs\(proj, \{lid for lid, lo in/)
+  assert.match(src, /_glass_layers\(proj, TINTED_GLYPH\)\s+_dark_glyphs\(proj, set\(\)\)/)
 })
 
 test("tinted renditions: the worker's mono transform (luminance range over the visible paint × tint)", () => {

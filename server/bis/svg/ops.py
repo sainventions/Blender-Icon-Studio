@@ -11,13 +11,14 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from bis.models import Layer, Project
 from .elements import ElementStore, Elem, element_name, to_model
-from .geometry import layer_safe_radius
-from .layers import (dedupe_names, has_default_stack, layer_name, make_layer, members_for, next_layer_ids,
-                     restack)
+from .geometry import layer_max_radius
+from .layers import (clamp_bevel, dedupe_names, layer_name, make_layer, members_for, next_layer_ids, restack,
+                     stack_gap)
 from .paths import clean_d, islands, skia_from_d, bounds
 from .prepass import auto_name
 from .split import Analysis, SplitParams, components, forced_units, split, topo_order, _unit_preserving
 from .tiling import auto_mode, default_mode_kept, layer_defaults, lining_pairs, print_pairs, tile_pairs
+from bis import stacking
 
 
 class ZOrderError(ValueError):
@@ -39,10 +40,11 @@ def foreground_indices(store: ElementStore, active: Optional[Iterable[str]] = No
 
 
 def fresh_layers(store: ElementStore, strategy: str, params: Optional[SplitParams] = None,
-                 active: Optional[Iterable[str]] = None) -> Tuple[List[Layer], dict]:
+                 active: Optional[Iterable[str]] = None, art_scale: float = 1.0) -> Tuple[List[Layer], dict]:
     """Default layers for all non-plate (active) elements with the given strategy. The smart split
     keeps the pieces that tile one shape together; every layer gets its default mode ('combined'
-    for tiled art, :func:`bis.svg.tiling.auto_mode`) and a bevel within that mode's safe radius."""
+    for tiled art, :func:`bis.svg.tiling.auto_mode`) and the default depth, and the layers are stacked at
+    their REAL heights (:func:`bis.stacking.restack`; `art_scale` = ``canvas.art.scale``)."""
     fg = foreground_indices(store, active)
     tiles = []
     if strategy == "smart":   # pieces that tile one shape, edge lines drawn under a piece, covered prints
@@ -52,20 +54,29 @@ def fresh_layers(store: ElementStore, strategy: str, params: Optional[SplitParam
     an = Analysis(store.elems, store.gaps, store.edges, fg, store.view_box, store.inside, tiles)
     groups, info = split(an, strategy, params)
     layers: List[Layer] = []
+    radii: Dict[str, float] = {}
     for i, g in enumerate(groups):
         members = [an.els[k] for k in g]
-        mode, sr = layer_defaults(store, [m.id for m in members])
-        layers.append(make_layer(f"L{i + 1}", members, i, sr, mode=mode))
+        mode, mr = layer_defaults(store, [m.id for m in members])
+        layers.append(make_layer(f"L{i + 1}", members, mode=mode))
+        radii[layers[-1].id] = mr
+    stacking.restack(layers, radii, art_scale=art_scale)
     info["combined"] = [L.id for L in layers if L.mode == "combined"]
+    info["maxRadius"] = radii
     dedupe_names(layers)
     return layers, info
 
 
-def _clamp_bevel(store: ElementStore, L: Layer) -> None:
-    """Keep a layer's bevel within the safe radius of its (possibly new) mode. In place."""
-    sr = layer_safe_radius(store, L.elementIds, L.mode)
-    if sr > 0:
-        L.depth.bevel = round(min(L.depth.bevel, 0.9 * sr), 5)
+def layer_radii(store: ElementStore, layers: Sequence[Layer]) -> Dict[str, float]:
+    """{layer id: maxRadius of its bodies in its mode} (cached per layer content)."""
+    return {L.id: layer_max_radius(store, L.elementIds, L.mode) for L in layers}
+
+
+def _art_scale(project: Project) -> float:
+    try:
+        return float(project.canvas.art.scale)
+    except (AttributeError, TypeError, ValueError):
+        return 1.0
 
 
 def _assign(store: ElementStore, layers: Sequence[Layer]) -> List[int]:
@@ -134,13 +145,20 @@ def _auto_named(L: Layer, members: Sequence[Elem]) -> bool:
     return L.name == auto or bool(re.fullmatch(re.escape(auto) + r" \d+", L.name))
 
 
-def _refresh(store: ElementStore, layers: List[Layer], auto: Dict[str, bool], was_default: bool) -> List[Layer]:
+def _refresh(store: ElementStore, layers: List[Layer], auto: Dict[str, bool], gap: Optional[float],
+             art_scale: float = 1.0) -> List[Layer]:
+    """Names, real-height re-stack (`gap` of the stack before the edit, None = hand-placed) and unique names."""
     for L in layers:
         if auto.get(L.id, True):
             L.name = layer_name(members_for(store, L.elementIds))
-    restack(layers, was_default)
+    restack(layers, layer_radii(store, layers), gap, art_scale)
     dedupe_names(layers)
     return layers
+
+
+def _stack_gap(store: ElementStore, layers: Sequence[Layer], art_scale: float) -> Optional[float]:
+    """The real-height stack gap of the layers BEFORE an edit (None = hand-placed z)."""
+    return stack_gap(layers, layer_radii(store, layers), art_scale)
 
 
 def _auto_flags(store: ElementStore, layers: Sequence[Layer]) -> Dict[str, bool]:
@@ -165,7 +183,8 @@ def merge(store: ElementStore, project: Project, layer_ids: Sequence[str]) -> Li
         raise ValueError(f"unknown layer id(s): {', '.join(missing)}")
     layers = [L.model_copy(deep=True) for L in project.layers]
     auto = _auto_flags(store, layers)
-    was_default = has_default_stack(layers)
+    scale = _art_scale(project)
+    gap = _stack_gap(store, layers, scale)
     sel = sorted(ids, key=lambda i: pos[i])
     primary = layers[pos[sel[0]]]
     # layers still on their default mode -> the merged layer gets the default of its new content
@@ -175,14 +194,12 @@ def merge(store: ElementStore, project: Project, layer_ids: Sequence[str]) -> Li
     primary.elementIds = merged_ids
     if derive:
         primary.mode = auto_mode(store, merged_ids)
-    sr = layer_safe_radius(store, merged_ids, primary.mode)
-    if sr > 0:
-        primary.depth.bevel = round(min(primary.depth.bevel, 0.9 * sr), 5)
+    clamp_bevel(primary)
     auto[primary.id] = all(auto.get(i, True) for i in sel)
     keep = [L for L in layers if L.id not in sel[1:]]
     prio = [float(pos[L.id]) for L in keep]
     out = ordered_legal(store, keep, prio)
-    return _refresh(store, out, auto, was_default)
+    return _refresh(store, out, auto, gap, scale)
 
 
 def move(store: ElementStore, project: Project, element_ids: Sequence[str], to_layer_id: Optional[str]) -> List[Layer]:
@@ -191,7 +208,8 @@ def move(store: ElementStore, project: Project, element_ids: Sequence[str], to_l
         raise ValueError("no known elements to move")
     layers = [L.model_copy(deep=True) for L in project.layers]
     auto = _auto_flags(store, layers)
-    was_default = has_default_stack(layers)
+    scale = _art_scale(project)
+    gap = _stack_gap(store, layers, scale)
     pos = {L.id: k for k, L in enumerate(layers)}
     if to_layer_id is not None and to_layer_id not in pos:
         raise ValueError(f"unknown layer id: {to_layer_id}")
@@ -209,12 +227,12 @@ def move(store: ElementStore, project: Project, element_ids: Sequence[str], to_l
         new_id = next_layer_ids([L.id for L in layers], 1)[0]
         members = members_for(store, eids)
         if origin is None or derive.get(origin.id, True):
-            mode, sr = layer_defaults(store, eids)
+            mode, _mr = layer_defaults(store, eids)
         else:
-            mode, sr = origin.mode, layer_safe_radius(store, eids, origin.mode)
-        new = make_layer(new_id, members, len(layers), sr, template=origin, mode=mode)
-        if origin is not None:
-            new.depth.bevel = min(new.depth.bevel, round(0.9 * sr, 5)) if sr > 0 else new.depth.bevel
+            mode = origin.mode
+        new = make_layer(new_id, members, template=origin, mode=mode)
+        if origin is not None:   # slots in right above its source; the re-stack sorts out the heights
+            new.depth.z = origin.depth.z
         layers.append(new)
         prio[new_id] = (pos[origin.id] + 0.5) if origin is not None else -0.5
         auto[new_id] = True
@@ -223,10 +241,10 @@ def move(store: ElementStore, project: Project, element_ids: Sequence[str], to_l
             mode = auto_mode(store, L.elementIds)
             if mode != L.mode:
                 L.mode = mode
-                _clamp_bevel(store, L)
+                clamp_bevel(L)
     keep = [L for L in layers if L.elementIds]
     out = ordered_legal(store, keep, [prio[L.id] for L in keep])
-    return _refresh(store, out, auto, was_default)
+    return _refresh(store, out, auto, gap, scale)
 
 
 def split_layer(store: ElementStore, project: Project, layer_id: str, mode: str,
@@ -238,7 +256,8 @@ def split_layer(store: ElementStore, project: Project, layer_id: str, mode: str,
         raise ValueError(f"unknown split mode '{mode}'")
     layers = [L.model_copy(deep=True) for L in project.layers]
     auto = _auto_flags(store, layers)
-    was_default = has_default_stack(layers)
+    scale = _art_scale(project)
+    gap = _stack_gap(store, layers, scale)
     src = layers[pos[layer_id]]
     derive = default_mode_kept(store, src.mode, src.elementIds)
     idx = store.index
@@ -281,18 +300,18 @@ def split_layer(store: ElementStore, project: Project, layer_id: str, mode: str,
     for k, (lid, ids) in enumerate(zip(new_ids, groups)):
         members = members_for(store, ids)
         if derive:   # the source layer had its default mode: so do the pieces
-            mode, sr = layer_defaults(store, ids)
+            mode, _mr = layer_defaults(store, ids)
         else:
-            mode, sr = None, layer_safe_radius(store, ids, src.mode)
-        piece = make_layer(lid, members, 0, sr, template=src, mode=mode)
-        piece.depth.z = round(base_z + k * 0.13 / max(1, len(groups)), 6)
+            mode = None
+        piece = make_layer(lid, members, template=src, mode=mode)
+        piece.depth.z = base_z   # a hand-placed stack lifts each piece onto the one below (real heights)
         auto[lid] = auto.get(src.id, True) or k > 0
         pieces.append(piece)
     k0 = pos[layer_id]
     out = layers[:k0] + pieces + layers[k0 + 1:]
     prio = [float(i) for i in range(len(out))]
     out = ordered_legal(store, out, prio)
-    return _refresh(store, out, auto, was_default)
+    return _refresh(store, out, auto, gap, scale)
 
 
 def _expanded(store: ElementStore, ids: Sequence[str]) -> List[Elem]:

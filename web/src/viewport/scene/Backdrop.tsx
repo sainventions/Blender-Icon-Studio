@@ -10,6 +10,14 @@
 // The wallpaper is defined in world units (like the worker's wallpaper plane behind the plate), so the background
 // texture is framed to match the front camera (ortho_scale 2.24 / zoom across the icon frame — the editor's view
 // window, store.frame — so it zooms and pans with the icon).
+//
+// What REFRACTED light sees behind the icon (round 7): in Cycles only camera rays see the backdrop colour / the
+// transparent film — rays refracted through glass reach the studio world. three.js refracts by looking up its
+// transmission pass (the scene rendered behind the glass), so without help, glass floating above the plate in the iso
+// view (Photos' petals on a real-height stack) showed the dark stage and rendered black. TransmissionWorld draws the
+// studio environment behind everything in that pass only (camera-relative like the lights: the screen spans a wide
+// cone behind the icon), so floating glass refracts the studio like in Cycles. The wallpaper renditions keep their
+// wallpaper (the worker's wallpaper plane is real geometry behind the plate).
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
@@ -123,7 +131,97 @@ export function Backdrop({
     t.updateMatrix()
   })
 
-  return checker ? <StageCheckerBackdrop display={display} stage={stage} /> : null
+  return (
+    <>
+      {checker && <StageCheckerBackdrop display={display} stage={stage} />}
+      {binding.spec.kind !== 'wallpaper' && <TransmissionWorld />}
+    </>
+  )
+}
+
+// ------------------------------------------------------------------------------------------ transmission-pass world
+/** Half field of the cone behind the icon the canvas spans in the transmission pass: tan(45°) across half its height. */
+export const TRANSMISSION_WORLD_SPREAD = 1.0
+
+const WORLD_FRAG = /* glsl */ `
+varying vec2 vBisUv;
+uniform samplerCube uEnv;
+uniform float uPass;      // 1 while three.js renders its transmission pass, else 0 (nothing drawn)
+uniform mat3 uEnvView;    // camera frame -> environment cube frame (environmentRotation^T × camera rotation)
+uniform vec2 uSpread;     // tan of the half field across the canvas (x: × aspect)
+uniform float uIntensity; // scene.environmentIntensity
+void main() {
+  if (uPass < 0.5) discard;
+  // the direction behind the icon through this pixel (camera frame: x right, y up, looking along −z)
+  vec3 d = normalize(vec3((vBisUv * 2.0 - 1.0) * uSpread, -1.0));
+  gl_FragColor = vec4(textureCube(uEnv, uEnvView * d).rgb * uIntensity, 1.0);
+}
+`
+
+/** three.js' transmission render target (mip-mapped for the roughness blur; every other target in the app is not). */
+export function isTransmissionTarget(rt: THREE.WebGLRenderTarget | null): boolean {
+  return !!rt && rt.texture.generateMipmaps === true && rt.texture.minFilter === THREE.LinearMipmapLinearFilter
+}
+
+const _m4 = new THREE.Matrix4()
+const _env = new THREE.Matrix3()
+const _cam = new THREE.Matrix3()
+
+/** Full-screen quad drawn only in the transmission pass: the studio environment behind the icon (see above). */
+function TransmissionWorld() {
+  const mesh = useMemo(() => {
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(new Array(12).fill(0), 3))
+    geometry.setAttribute('bisClip', new THREE.Float32BufferAttribute([-1, -1, 1, -1, 1, 1, -1, 1], 2))
+    geometry.setIndex([0, 1, 2, 0, 2, 3])
+    const material = new THREE.ShaderMaterial({
+      name: 'BisTransmissionWorld',
+      vertexShader: VERT,
+      fragmentShader: WORLD_FRAG,
+      depthTest: false,
+      depthWrite: false,
+      toneMapped: false,
+      uniforms: {
+        uEnv: { value: null },
+        uPass: { value: 0 },
+        uEnvView: { value: new THREE.Matrix3() },
+        uSpread: { value: new THREE.Vector2(1, 1) },
+        uIntensity: { value: 1 },
+      },
+    })
+    const m = new THREE.Mesh(geometry, material)
+    m.name = 'bis-transmission-world'
+    m.frustumCulled = false
+    m.renderOrder = -1e9 + 1 // right after the stage backdrop; no depth, so the icon always draws over it
+    m.matrixAutoUpdate = false
+    m.raycast = () => {}
+    m.onBeforeRender = (renderer, scene, camera) => {
+      const u = material.uniforms
+      const rt = renderer.getRenderTarget()
+      const pass = isTransmissionTarget(rt) && !!scene.environment
+      u.uPass.value = pass ? 1 : 0
+      if (pass && rt) {
+        u.uEnv.value = scene.environment
+        // three.js samples the environment with environmentRotation^T (WebGLMaterials envMapRotation)
+        _env.setFromMatrix4(_m4.makeRotationFromEuler(scene.environmentRotation)).transpose()
+        _cam.setFromMatrix4(camera.matrixWorld)
+        ;(u.uEnvView.value as THREE.Matrix3).multiplyMatrices(_env, _cam)
+        const aspect = rt.width / Math.max(1, rt.height)
+        ;(u.uSpread.value as THREE.Vector2).set(TRANSMISSION_WORLD_SPREAD * aspect, TRANSMISSION_WORLD_SPREAD)
+        u.uIntensity.value = scene.environmentIntensity
+      }
+      material.uniformsNeedUpdate = true
+    }
+    return m
+  }, [])
+  useEffect(
+    () => () => {
+      mesh.geometry.dispose()
+      ;(mesh.material as THREE.Material).dispose()
+    },
+    [mesh],
+  )
+  return <primitive object={mesh} />
 }
 
 // ------------------------------------------------------------------------------------------ stage checker backdrop

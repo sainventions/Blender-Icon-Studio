@@ -383,7 +383,9 @@ class StyleSpec(_Model):
     """A transferable look. Applying it to a project (see bis.style.apply_style):
     - every layer gets layerDefaults (material/depth/shadow/mode) — or layerMaterials[i] by index from the bottom
       (clamped to the last entry) when given; bevel is clamped to thickness/2;
-    - layers are restacked with z_i = i * zGap (zGap None = keep z);
+    - layers are re-stacked at their REAL heights (shared/presets.json "geometry"): z0 = stackLift,
+      z(i+1) = z(i) + H(i) + gap, H = thickness + 2 x inflate x maxRadius x art/layer scale, gap = zGap
+      (None = the presets' stackGap);
     - plate material/thickness/bevel (+ fill/shape when not None), lighting, camera (when given),
       render.colorMode (when given) and appearances.tint (when given) are copied."""
     layerDefaults: StyleLayerDefaults = StyleLayerDefaults()

@@ -2,18 +2,20 @@
 // Principled inputs (and the plate fill / backdrop), never the nature of the shader.
 //
 //   light        base project
-//   dark         appearances.dark overrides (default plate fill system-dark); environment × 0.6, key × 0.85
+//   dark         appearances.dark overrides (default plate fill system-dark); environment × 0.6, key × 0.85; glyphs
+//                that transmit more than DARK_GLYPH allows become lit glass (transmission 0.5, subsurface 1, art base)
+//                unless the user set the layer's dark material
 //   clear-*      appearances.mono overrides; every visible layer → clear white glass (tint 0, transmission 1,
 //                roughness 0.22); the plate → frosted glass over the wallpaper
 //   tinted-light mono luminance × tint colour into the glass Base Color; plate = pale tinted frosted glass
-//   tinted-dark  plate system-dark satin; glyphs = mono × tint glass with a little emission
+//   tinted-dark  plate system-dark satin; glyphs = mono × tint as DARK_GLYPH lit glass (no emission), mono floor 0.3
 //
 // resolveAppearance returns the effective Project (render-time value: never persist it); the per-pixel mono transform
 // of the tinted renditions is returned by appearanceMono (the worker's env `mono`), applied by lib/materials3d.
-import type { AppearanceId, AppearanceOverride, Fill, Layer, LayerGeometry, LayerOverride, Paint, Project } from '../types'
-import type { MonoParams } from './materials3d'
+import type { AppearanceId, AppearanceOverride, Fill, Layer, LayerGeometry, LayerOverride, MaterialSpec, Paint, Presets, Project } from '../types'
+import { materialParams, resolveMaterial, type MonoParams } from './materials3d'
 
-/** worker appearance.CLEAR_GLYPH / CLEAR_PLATE / TINTED_GLYPH / TINTED_PLATE / TINTED_DARK_GLOW. */
+/** worker appearance.CLEAR_GLYPH / CLEAR_PLATE / TINTED_GLYPH / TINTED_PLATE / DARK_GLYPH. */
 export const CLEAR_GLYPH = {
   tint: 0.0,
   transmission: 1.0,
@@ -37,11 +39,19 @@ export const TINTED_GLYPH = {
   paintMode: 'base',
   emissionStrength: 0.0,
 } as const
-export const TINTED_DARK_GLOW = 0.5
 export const TINTED_PLATE = { tint: 0.6, transmission: 1.0, roughness: 0.45, ior: 1.45, coatWeight: 0.3 } as const
 /** Tinted renditions: luminance stretched to MONO_FLOOR..1 over at least MONO_MIN_RANGE (worker constants). */
 export const MONO_FLOOR = 0.08
 export const MONO_MIN_RANGE = 0.5
+/** tinted-dark: the darkest art still reflects 30 % of the tint (lit, not self-lit — worker MONO_FLOOR_DARK). */
+export const MONO_FLOOR_DARK = 0.3
+/**
+ * Dark renditions (dark, tinted-dark — worker DARK_GLYPH): clear glass over a near-black plate only transmits that plate
+ * (the glyphs vanished, QA r8 #2). Principled inputs only: at most `transmission` of the glyph stays specular
+ * transmission, the rest scatters inside (subsurface) and the art colour is the base (tint ≥ tintMin) — lit glass / opal
+ * that keeps its colour over any plate.
+ */
+export const DARK_GLYPH = { transmission: 0.5, subsurfaceWeight: 1.0, tintMin: 0.9 } as const
 
 const DEFAULT_TINT = { color: '#3b82f6', strength: 0.8 }
 
@@ -155,6 +165,47 @@ function cloneForRender(project: Project, appearance: AppearanceId): Project {
   }
 }
 
+type Params = MaterialSpec['params']
+
+/** worker appearance._dark_params: DARK_GLYPH applied to one material's params (null: not transmissive enough). */
+export function darkParams(preset: string, params: Params, presets: Presets | null | undefined): Params | null {
+  const full = materialParams(preset, params, presets)
+  if (!(full.transmission > DARK_GLYPH.transmission + 1e-6)) return null
+  return {
+    ...params,
+    transmission: DARK_GLYPH.transmission,
+    subsurfaceWeight: Math.max(full.subsurfaceWeight || 0, DARK_GLYPH.subsurfaceWeight),
+    tint: Math.max(Number.isFinite(full.tint) ? full.tint : 1, DARK_GLYPH.tintMin),
+  }
+}
+
+/**
+ * worker appearance._dark_glyphs: every visible layer (and its per-shape materials) that transmits more than DARK_GLYPH
+ * allows gets the DARK_GLYPH inputs — except layers whose dark material the user set explicitly (`explicit`) and layers
+ * with the glass effects off.
+ */
+function darkGlyphs(p: Project, explicit: Set<string>, presets: Presets | null | undefined): void {
+  p.layers = p.layers.map((l) => {
+    if (!l.visible || explicit.has(l.id) || l.glass === false) return l
+    const preset = String(l.material?.preset || 'liquid_glass')
+    const fixed = darkParams(preset, { ...(l.material?.params ?? {}) }, presets)
+    const material: MaterialSpec = fixed ? { preset, params: fixed } : l.material
+    const own = Object.entries(l.elementMaterials ?? {})
+    if (!fixed && !own.length) return l
+    const out: Layer = { ...l, material }
+    if (own.length) {
+      const ems: Record<string, MaterialSpec> = {}
+      for (const [eid, em] of own) {
+        const r = resolveMaterial(material, em, presets)
+        const fix = darkParams(r.preset, r.params as unknown as Params, presets)
+        ems[eid] = fix ? { preset: r.preset, params: fix } : em
+      }
+      out.elementMaterials = ems
+    }
+    return out
+  })
+}
+
 /** Every visible layer → Liquid Glass with `params` (per-shape overrides dropped: one look per rendition). */
 function glassLayers(p: Project, params: Record<string, number | string>): void {
   p.layers = p.layers.map((l) =>
@@ -197,9 +248,10 @@ export function luminanceRange(layers: Layer[], geometry: Record<string, LayerGe
 
 /**
  * Effective project for one of the six renditions. `light` returns the input unchanged (same reference), so memoised
- * consumers do not rebuild anything. watchOS ignores appearances (always light).
+ * consumers do not rebuild anything. watchOS ignores appearances (always light). `presets` resolves the full material
+ * params the dark renditions test (without them: the built-in Liquid Glass defaults of materials3d).
  */
-export function resolveAppearance(project: Project, appearance: AppearanceId): Project {
+export function resolveAppearance(project: Project, appearance: AppearanceId, presets?: Presets | null): Project {
   const id: AppearanceId = project.canvas.platform === 'watchos' ? 'light' : appearance
   if (id === 'light') return project
   const p = cloneForRender(project, id)
@@ -210,6 +262,8 @@ export function resolveAppearance(project: Project, appearance: AppearanceId): P
   }
   if (id === 'dark') {
     applyOverride(p, aps?.dark)
+    const explicit = new Set(Object.entries(aps?.dark?.layers ?? {}).filter(([, lo]) => lo && lo.material != null).map(([id]) => id))
+    darkGlyphs(p, explicit, presets)
     return p
   }
   applyOverride(p, aps?.mono)
@@ -223,7 +277,9 @@ export function resolveAppearance(project: Project, appearance: AppearanceId): P
   const tint = { color: aps?.tint?.color || DEFAULT_TINT.color, strength: aps?.tint?.strength ?? DEFAULT_TINT.strength }
   const strength = Math.max(0, Math.min(1, tint.strength))
   if (id === 'tinted-dark') {
-    glassLayers(p, { ...TINTED_GLYPH, paintMode: 'base+emission', emissionStrength: TINTED_DARK_GLOW })
+    // lit by the rig like the dark rendition (no self-lit glyphs): DARK_GLYPH over the near-black plate
+    glassLayers(p, TINTED_GLYPH)
+    darkGlyphs(p, new Set(), presets)
     plate.fill = SYSTEM_DARK
     if (!SOLID_PLATE_PRESETS.has(plate.material.preset)) plate.material = { preset: 'satin', params: {} }
   } else {
@@ -254,7 +310,7 @@ export function appearanceMono(
   return {
     lo: Math.min(lo, hi - MONO_MIN_RANGE),
     hi,
-    floor: MONO_FLOOR,
+    floor: id === 'tinted-dark' ? MONO_FLOOR_DARK : MONO_FLOOR,
     tint: [1 + (tl[0] - 1) * strength, 1 + (tl[1] - 1) * strength, 1 + (tl[2] - 1) * strength],
   }
 }

@@ -11,6 +11,7 @@ import {
   layerBodyParts,
   layerDepth,
   layerScale,
+  partStackPairs,
   type BodyPart,
   type DepthParams,
 } from '../geometry/layerGeometry'
@@ -23,11 +24,13 @@ export interface StackEntry {
   level: number
   /** World z of the layer's base (depth.z + LAYER_EPS). */
   z: number
-  /** World height of its bodies (thickness, or the inflated dome's full height). */
+  /** World height of its bodies (worker _body_height: thickness + 2·inflate·maxRadius·S, or the in-layer stack). */
   height: number
   scale: number
   depth: DepthParams
   parts: BodyPart[]
+  /** Part-index pairs [i, j] of overlapping pieces: j is stacked on i by their real heights (worker _relations). */
+  pieceStack: [number, number][]
   /** Resolved Principled params per part key (layer material ∘ elementMaterials). */
   params: Map<string, Principled>
   /** Some shape of the layer transmits (glass). */
@@ -131,6 +134,7 @@ export function buildStack(
       scale: S,
       depth,
       parts,
+      pieceStack: partStackPairs(parts, lg, S),
       params,
       transmissive,
       glassAbove: false,

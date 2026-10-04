@@ -342,18 +342,16 @@ def auto_mode(store: ElementStore, element_ids: Sequence[str], regions=None) -> 
 
 
 def layer_defaults(store: ElementStore, element_ids: Sequence[str]) -> Tuple[str, float]:
-    """(auto mode, safe radius for that mode) of a layer holding `element_ids` - one occlusion cut."""
-    from .geometry import layer_regions, layer_safe_radius, members_of, safe_radius, _art_scale_geom
+    """(auto mode, max inscribed radius of the layer's bodies in that mode - ``LayerGeometry.maxRadius``) of a
+    layer holding `element_ids` - one occlusion cut."""
+    from .geometry import layer_max_radius, layer_regions, members_of
 
     members = members_of(store, element_ids)
     if not members:
         return "individual", 0.0
     regions = layer_regions(store, members)
     mode = auto_mode(store, element_ids, regions) if len(members) > 1 else "individual"
-    if mode == "combined":
-        return mode, layer_safe_radius(store, element_ids, "combined")
-    tol, k = store.tolerance, store.art.k
-    return mode, safe_radius([_art_scale_geom(shapely_from_path(p, tol), k) for _m, p in regions])
+    return mode, layer_max_radius(store, element_ids, mode, regions)
 
 
 def default_mode_kept(store: ElementStore, mode: str, element_ids: Sequence[str]) -> bool:

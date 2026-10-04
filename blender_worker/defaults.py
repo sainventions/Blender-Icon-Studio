@@ -208,6 +208,7 @@ def norm_layer_geometry(g: Any, layer_id: str = "") -> dict:
                      "splines": [norm_spline(s) for s in _d(r).get("splines") or []]}
                     for i, r in enumerate(g.get("regions") or [])],
         "safeRadius": float(g.get("safeRadius", 1.0)),
+        "maxRadius": float(g.get("maxRadius", 0.0) or 0.0),    # round 7: 0 = unknown (the worker measures it)
         "bbox": list(g.get("bbox") or (-1.0, -1.0, 1.0, 1.0)),
         "texture": str(g.get("texture", "")),
         "texturePath": str(g.get("texturePath", "")),

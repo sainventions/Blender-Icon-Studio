@@ -29,7 +29,7 @@ def fx() -> dict:
     out = HERE / "_fixtures" / "corpus"          # shared with test_heightfield_corpus.py (never the worker suites')
     index_path = out / "index.json"
     index = json.loads(index_path.read_text(encoding="utf-8")) if index_path.exists() else {}
-    names = ["Photos", "Ti84"]
+    names = ["Photos", "Ti84", "Gemini"]
     if any(n not in index or not Path(index[n]["geometryPath"]).exists() for n in names):
         index = make_fixtures.make([n for n in names if n not in index or not Path(index[n]["geometryPath"]).exists()],
                                    out)
@@ -107,3 +107,31 @@ def test_iso_side_view_bodies_are_clean(worker, fx, tmp_path):
         assert c["nonManifold"] == 0 and c["selfIntersections"] == 0 and c["invertedNormals"] == 0, (o["name"], c)
         assert c["volume"] > 0, (o["name"], c)
     assert not _box(str(tmp_path / "ti84_iso.png"))["touch"]
+
+
+def test_light_rig_turns_with_the_camera(worker, fx, tmp_path):
+    """PLAN §11 round 7, camera-relative lighting: the key / rims / fill sit at the head-on positions turned by the
+    camera's rotation (lighting.angle is relative to the VIEW). At iso 1 a world-fixed key (−45°, elevation 50°) sat
+    ~5° from the mirror direction of the flat tops and Gemini's blue star rendered pure white (254, 254, 254)."""
+    import numpy as np
+    sys.path.insert(0, str(HERE.parents[1]))
+    from blender_worker import framing
+    f = fx["Gemini"]
+    lights = {}
+    for iso in (0.0, 1.0):
+        out = tmp_path / f"gem_iso{iso}.png"
+        _render(worker, f, out, {"view": "front", "iso": iso}, quality="preview", samples=16)
+        objs = {o["name"]: o for o in worker.result("scene_info")["objects"]}
+        lights[iso] = {n: np.array(objs[n]["location"]) for n in ("BIS Key", "BIS RimTop", "BIS RimOpposite", "BIS Fill")}
+        if iso == 1.0:
+            from PIL import Image
+            a = np.asarray(Image.open(out).convert("RGB")).astype(float)
+            h, w = a.shape[:2]
+            c = a[h // 2 - 3:h // 2 + 4, w // 2 - 3:w // 2 + 4].reshape(-1, 3).mean(0)
+            assert c[2] > c[0] + 60 and c.mean() < 200, c.round()          # the star stays blue, no mirror glare
+    _d, R = framing.iso_basis(1.0)
+    for name, p0 in lights[0.0].items():
+        assert np.allclose(lights[1.0][name], R @ p0, atol=1e-3), (name, lights[1.0][name], R @ p0)
+    # head-on: the classic rig (angle −45 = up-left of the screen, in front of the icon)
+    key0 = lights[0.0]["BIS Key"]
+    assert key0[0] < 0 and key0[1] > 0 and key0[2] > 0, key0

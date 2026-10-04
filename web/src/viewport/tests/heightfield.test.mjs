@@ -357,3 +357,265 @@ test('touching rings (a hole on the outer edge, two holes sharing a vertex): no 
     near(a, area, 1e-6, 'top covers exactly the outer minus its holes')
   }
 })
+
+// ------------------------------------------------------------------------------------------------ Poisson dome (round 7)
+/** Deterministic uniform numbers in [0, 1). */
+function rng(seed) {
+  let s = seed >>> 0
+  return () => (s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296
+}
+/** An irregular Delaunay mesh of a disc: `n` rim points ON the circle + `m` random interior points (poly2tri + flips). */
+function discMesh(R = 0.3, n = 72, m = 220, seed = 3, cx = 0) {
+  const rim = Array.from({ length: n }, (_, i) => [cx + R * Math.cos((2 * Math.PI * i) / n), R * Math.sin((2 * Math.PI * i) / n)])
+  // chord tolerance 1, no max edge: the outline is exactly the n rim points (all ON the circle: u = 0 there exactly)
+  const o = hf.outline([poly(rim)], 1, 0, 1e-12)
+  const ol = new hf.OutlineQuery(o, 0)
+  const r = rng(seed)
+  const pts = []
+  for (let i = 0; i < m; i++) {
+    const rr = R * Math.sqrt(0.85 * r())
+    const t = 2 * Math.PI * r()
+    pts.push(cx + rr * Math.cos(t), rr * Math.sin(t))
+  }
+  const tri = hf.triangulate(ol, pts)
+  const fixed = Uint8Array.from({ length: tri.V.length / 2 }, (_, i) => (i < tri.nOutline ? 1 : 0))
+  return { V: tri.V, T: tri.T, fixed, n: tri.nOutline }
+}
+/** Largest angle (degrees) between adjacent top faces whose corners all lie above 45 % of the half height (worker test). */
+function crease(mesh) {
+  const V = mesh.verts
+  const T = mesh.tris.subarray(0, mesh.tris.length / 2)
+  let zmax = 0
+  for (let i = 2; i < V.length; i += 3) zmax = Math.max(zmax, V[i])
+  const fn = []
+  const zt = []
+  for (let t = 0; t < T.length; t += 3) {
+    const [a, b, c] = [T[t], T[t + 1], T[t + 2]].map((i) => [V[3 * i], V[3 * i + 1], V[3 * i + 2]])
+    const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]]
+    const v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]]
+    const n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]]
+    const l = Math.hypot(...n)
+    fn.push(n.map((x) => x / l))
+    zt.push(Math.min(a[2], b[2], c[2]))
+  }
+  const seen = new Map()
+  let worst = 0
+  for (let t = 0; t < T.length / 3; t++)
+    for (let k = 0; k < 3; k++) {
+      const a = T[3 * t + k]
+      const b = T[3 * t + ((k + 1) % 3)]
+      const key = a < b ? a * 1e7 + b : b * 1e7 + a
+      const o = seen.get(key)
+      if (o === undefined) {
+        seen.set(key, t)
+        continue
+      }
+      if (zt[o] > 0.45 * zmax && zt[t] > 0.45 * zmax) {
+        const d = fn[o][0] * fn[t][0] + fn[o][1] * fn[t][1] + fn[o][2] * fn[t][2]
+        worst = Math.max(worst, (Math.acos(Math.max(-1, Math.min(1, d))) * 180) / Math.PI)
+      }
+    }
+  return worst
+}
+
+test('Poisson constants and the in-layer piece rules mirror blender_worker (heightfield.py, scene.py)', () => {
+  const src = read('blender_worker/heightfield.py')
+  for (const k of ['BISECT', 'POISSON_F', 'POISSON_TOL', 'POISSON_MAX_ITER']) assert.equal(hf[k], pyConst(src, k), k)
+  const scene = read('blender_worker/scene.py')
+  for (const k of ['STACK_GAP', 'INSET_GAP', 'TOUCH_TOL']) assert.equal(lg[k], pyConst(scene, k), k)
+})
+
+test('poisson: −∇²u = 4 reproduces a disc exactly (R² − r²) on an irregular Delaunay mesh; quadratic vertex gradient', () => {
+  const R = 0.3
+  const { V, T, fixed, n } = discMesh(R)
+  const exact = (i) => (i < n ? 0 : R * R - V[2 * i] ** 2 - V[2 * i + 1] ** 2)
+  const tight = hf.poisson(V, T, fixed, 4, 1e-10)
+  let err = 0
+  for (let i = 0; i < tight.u.length; i++) err = Math.max(err, Math.abs(tight.u[i] - exact(i)))
+  assert.ok(err < 1e-7 * R * R, `exact at every vertex (${err})`)
+  const { u, info } = hf.poisson(V, T, fixed) // the default stop: ample for a height field
+  err = 0
+  for (let i = 0; i < u.length; i++) err = Math.max(err, Math.abs(u[i] - exact(i)))
+  assert.ok(err < 1e-3 * R * R, `${err}`)
+  assert.ok(info.residual <= hf.POISSON_TOL && info.iterations > 0 && info.iterations < 300, JSON.stringify(info))
+  // the vertex gradient: exact for linear fields, −2x for the disc (least-squares quadratic fit)
+  const lin = Float64Array.from({ length: V.length / 2 }, (_, i) => 2 * V[2 * i] - 0.5 * V[2 * i + 1])
+  const gl = hf.vertexGradient(V, T, lin)
+  for (let i = 0; i < gl.length / 2; i++) {
+    near(gl[2 * i], 2, 1e-9, 'gx')
+    near(gl[2 * i + 1], -0.5, 1e-9, 'gy')
+  }
+  const gu = hf.vertexGradient(V, T, tight.u)
+  for (let i = n; i < V.length / 2; i++)
+    if (Math.hypot(V[2 * i], V[2 * i + 1]) < 0.2) {
+      near(gu[2 * i], -2 * V[2 * i], 1e-6, 'disc gx')
+      near(gu[2 * i + 1], -2 * V[2 * i + 1], 1e-6, 'disc gy')
+    }
+})
+
+test('poisson: separate parts are components of the free vertices (solved and normalised apart)', () => {
+  const a = discMesh(0.2, 48, 80, 1)
+  const b = discMesh(0.1, 48, 40, 2, 0.6)
+  const off = a.V.length / 2
+  const V = a.V.concat(b.V)
+  const T = a.T.concat(b.T.map((i) => i + off))
+  const fixed = Uint8Array.from([...a.fixed, ...b.fixed])
+  const { comp, count } = hf.components(V.length / 2, T, fixed)
+  assert.equal(count, 2)
+  for (let i = 0; i < fixed.length; i++) assert.equal(comp[i] === -1, !!fixed[i])
+  assert.equal(new Set(Array.from(comp.subarray(0, off)).filter((c) => c >= 0)).size, 1)
+})
+
+test('inflated bodies = the worker: a Poisson dome (round tube on thin parts, no fins) with half height t/2 + k·D', () => {
+  // an ellipse x²/a² + y²/b² ≤ 1: u = c(1 − x²/a² − y²/b²) → dome = k·D·√(1 − x²/a² − y²/b²)
+  const a = 0.5
+  const bb = 0.12
+  const el = Array.from({ length: 96 }, (_, i) => [a * Math.cos((2 * Math.PI * i) / 96), bb * Math.sin((2 * Math.PI * i) / 96)])
+  const { arr, mesh } = build([poly(el)], 0.1, 0.03, 1, 6)
+  assertClean(mesh, 'ellipse')
+  near(arr.info.half, 0.05 + arr.info.D, 1e-6 * arr.info.half, 'q = 1 at the apex: H = t + 2·k·D')
+  assert.ok(arr.info.poisson && arr.info.poisson.residual <= hf.POISSON_TOL && arr.info.poisson.components === 1)
+  // a thin stadium (bevel 0, wall e = t/2): a ROUND tube (semicircular cross-section) — not a creased ridge
+  const w = 0.04
+  const st = []
+  for (let i = 0; i < 9; i++) st.push([-0.4 + (0.8 * i) / 8, -w])
+  for (let i = 0; i < 6; i++) {
+    const t = 0.3 + ((Math.PI - 0.6) * i) / 5
+    st.push([0.4 + w * Math.sin(t), -w * Math.cos(t)])
+  }
+  for (let i = 0; i < 9; i++) st.push([0.4 - (0.8 * i) / 8, w])
+  for (let i = 0; i < 6; i++) {
+    const t = 0.3 + ((Math.PI - 0.6) * i) / 5
+    st.push([-0.4 - w * Math.sin(t), w * Math.cos(t)])
+  }
+  const tube = build([poly(st)], 0.02, 0, 1, 6).mesh
+  const mid = topVerts(tube).filter((v) => Math.abs(v[0]) < 0.15)
+  const ridge = Math.max(...mid.map((v) => v[2]))
+  for (const v of mid)
+    if (Math.abs(v[1]) < 0.9 * w) {
+      const rel = (v[2] - 0.01) / (ridge - 0.01)
+      assert.ok(Math.abs(rel - Math.sqrt(1 - (v[1] / w) ** 2)) < 0.08, `tube cross-section at y=${v[1]}`)
+    }
+  // the corpus shapes whose distance dome grew fins (Gemini's tips): adjacent upper-dome faces meet at < 30°, and the
+  // body equals the worker's (half height / volume measured with blender_worker.heightfield.build, thickness 0.16,
+  // bevel 0.08, 8 segments — the import defaults)
+  const REF = {
+    'gemini-star.json|0|0.5': { half: 0.245228, volume: 0.1944458 },
+    'gemini-star.json|0|1': { half: 0.415896, volume: 0.3119194 },
+    'contacts.json|0|1': { half: 0.320313, volume: 0.125551 },
+    'contacts.json|1|1': { half: 0.270939, volume: 0.047004 },
+  }
+  for (const [key, ref] of Object.entries(REF)) {
+    const [file, ri, k] = key.split('|')
+    const fx = fixture(file)
+    const S = fx.artScale
+    const r = build(fx.regions[Number(ri)].splines, 0.16 / S, 0.08 / S, Number(k), 8, S)
+    const c = assertClean(r.mesh, key)
+    near(r.arr.info.half, ref.half, 0.002 * ref.half, `${key} half`)
+    near(c.volume, ref.volume, 0.005 * ref.volume, `${key} volume`)
+    if (file === 'gemini-star.json') assert.ok(crease(r.mesh) < 30, `${key}: crease ${crease(r.mesh).toFixed(1)}°`)
+  }
+})
+
+test('dome rows sample thin parts ACROSS (per-ray rows scaled to the local width), all inside the piece', () => {
+  const strip = poly([[-0.4, -0.03], [0.4, -0.03], [0.4, 0.03], [-0.4, 0.03]])
+  const o = hf.outline([strip], hf.CHORD_TOL, hf.MAX_EDGE, hf.MERGE_EPS, 0.005)
+  const ol = new hf.OutlineQuery(o, hf.NEAR)
+  const D = hf.islandInradius(ol, 40)
+  const pts = hf.steinerPoints(ol, D, 0.01, 1, 6, hf.MAX_EDGE, hf.TAN_MIN, 1)
+  for (let i = 0; i < pts.length; i += 2) assert.ok(Math.abs(pts[i]) < 0.4 && Math.abs(pts[i + 1]) < 0.03, 'inside')
+  const rowsOf = (P) => {
+    const ys = new Set()
+    for (let i = 0; i < P.length; i += 2) if (Math.abs(P[i]) < 0.2) ys.add(Math.round(Math.abs(P[i + 1]) * 1e4) / 1e4)
+    return [...ys]
+  }
+  const rows = rowsOf(pts)
+  assert.ok(rows.length >= 5, `spine + ≥ 4 rows: ${rows}`)
+  assert.ok(Math.min(...rows) < 1e-3, 'the spine (medial points)')
+  const flat = hf.steinerPoints(ol, D, 0.01, 0, 6, hf.MAX_EDGE, hf.TAN_MIN, 1) // no inflate: unchanged sampling
+  assert.ok(rowsOf(flat).length < rows.length)
+})
+
+// ------------------------------------------------------------------------------------------------ pieces of one layer
+test('pieces of one layer: touching ones pull back INSET_GAP, overlapping / coincident ones stack by real height', () => {
+  const tol = 3 * hf.CHORD_TOL
+  const rings = (x0, y0, x1, y1) => hf.pieceRings([sq(x0, y0, x1, y1)])
+  const a = rings(-0.4, -0.2, 0, 0.2)
+  const b = rings(0, -0.3, 0.5, 0.3) // shares the edge x = 0 with a
+  const c = rings(-0.2, -0.1, 0.3, 0.1) // overlaps both
+  const d = rings(0.7, -0.1, 0.9, 0.1) // apart
+  assert.equal(hf.ringsRelation(a, b, tol), 1)
+  assert.equal(hf.ringsRelation(a, c, tol), 2)
+  assert.equal(hf.ringsRelation(a, d, tol), 0)
+  const ai = hf.insetRings(a, b, 0.003)
+  const xs = ai.flatMap((r) => Array.from(r).filter((_, i) => i % 2 === 0))
+  near(Math.max(...xs), -0.003, 1e-12, 'pulled back from the shared edge')
+  near(Math.min(...xs), -0.4, 1e-12, 'the rest unchanged')
+  assert.equal(hf.ringsRelation(ai, b, tol), 0)
+  const spl = hf.ringsToSplines(ai)
+  assert.ok(spl[0].closed && spl[0].points.length === ai[0].length / 2)
+  // coincident outlines (a translucent overlay on its base's outline) OVERLAP; a disc filling a ring's hole TOUCHES
+  const s0 = rings(-0.4, -0.4, 0.4, 0.4)
+  for (const o of [rings(-0.4, -0.4, 0.4, 0.4), rings(-0.399, -0.399, 0.399, 0.399), rings(-0.4005, -0.4, 0.4, 0.4005)]) {
+    assert.equal(hf.ringsRelation(s0, o, tol), 2)
+    assert.equal(hf.ringsRelation(o, s0, tol), 2)
+  }
+  const left = rings(-0.4, -0.2, 0.0005, 0.2)
+  const right = rings(0, -0.3, 0.5, 0.3)
+  assert.equal(hf.ringsRelation(left, right, tol), 1)
+  assert.equal(hf.ringsRelation(right, left, tol), 1)
+  const ring = hf.pieceRings([circle(0.3), circle(0.15, 0, 0, true)])
+  assert.equal(hf.ringsRelation(ring, hf.pieceRings([circle(0.15)]), tol), 1)
+  // real-height stacking: c (half 0.05) on a (half 0.05); b only touches → no shift
+  const s = hf.stackShifts(3, [[0, 2]], [0.05, 0.05, 0.05], 0.002)
+  assert.deepEqual(Array.from(s).map((v) => Math.round(v * 1e9) / 1e9), [0, 0, 0.102])
+})
+
+test('layer layout mirrors scene._layer / _body_height: inset touching pieces, stacked overlapping pieces', () => {
+  // two touching pieces with their own materials (no automatic merge): the lower one is built from inset splines
+  const L = layerOf({ elementMaterials: { a: { preset: 'chrome', params: {} } } })
+  const g = geometryOf({
+    hash: 'touch',
+    silhouette: [sq(-0.4, -0.3, 0.5, 0.3)],
+    regions: [
+      { elementId: 'a', paint: solid, opacity: 1, zSub: 0, splines: [sq(-0.4, -0.2, 0, 0.2)] },
+      { elementId: 'b', paint: solid, opacity: 1, zSub: 0, splines: [sq(0, -0.3, 0.5, 0.3)] },
+    ],
+  })
+  const parts = lg.layerBodyParts(L, g, lg.layerDepth(L, 1))
+  assert.match(parts[0].key, /\|inset\|/)
+  assert.doesNotMatch(parts[1].key, /\|inset\|/)
+  const b0 = parts[0].build().geometry.getAttribute('position')
+  let xmax = -Infinity
+  for (let i = 0; i < b0.count; i++) xmax = Math.max(xmax, b0.getX(i))
+  near(xmax, -lg.INSET_GAP, 1e-6, 'the inset body stops INSET_GAP short of the shared edge')
+  // a translucent disc over a square in ONE layer: stacked on it by their real heights (no interpenetration)
+  const over = geometryOf({
+    hash: 'overlap',
+    silhouette: [sq(-0.5, -0.5, 0.5, 0.5)],
+    regions: [
+      { elementId: 'a', paint: solid, opacity: 1, zSub: 0, splines: [sq(-0.5, -0.5, 0.5, 0.5)] },
+      { elementId: 'b', paint: solid, opacity: 0.5, zSub: 0, splines: [circle(0.2)] },
+    ],
+  })
+  const L2 = layerOf({ depth: { z: 0, thickness: 0.1, bevel: 0.03, bevelSegments: 6, inflate: 0.5 } })
+  const d = lg.layerDepth(L2, 1)
+  const ps = lg.layerBodyParts(L2, over, d)
+  const pairs = lg.partStackPairs(ps, over, 1)
+  assert.deepEqual(pairs, [[0, 1]])
+  const bodies = ps.map((p) => p.build())
+  const lift = lg.layerLift(ps.map((part, i) => ({ part, body: bodies[i] })), d)
+  const base = ps.map((p) => p.z + lift)
+  const sh = lg.partShifts(pairs, bodies, base, 1)
+  assert.equal(sh[0], 0)
+  // the disc's lowest point clears the square's top by STACK_GAP
+  near(base[1] + sh[1] - bodies[1].half, base[0] + bodies[0].half + lg.STACK_GAP, 1e-9)
+  // the layer's height (framing / Re-stack) is that in-layer stack, measured like the worker (disc model halves)
+  const H = lg.layerBodyHeight(L2, over, 1)
+  const top = base[1] + sh[1] + bodies[1].half
+  assert.ok(Math.abs(H - top) < 0.03, `H ${H} vs real top ${top}`)
+  assert.ok(H > 0.1 + 2 * 0.5 * 0.2, 'taller than one body')
+  // with maxRadius in the bundle and no overlaps: H = thickness + 2·inflate·maxRadius·S exactly (presets "geometry")
+  const one = geometryOf({ hash: 'mr', regions: [geometryOf().regions[0]], maxRadius: 0.25 })
+  near(lg.layerBodyHeight(L2, one, 1.5), 0.1 + 2 * 0.5 * 0.25 * 1.5, 1e-12)
+})

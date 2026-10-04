@@ -31,8 +31,8 @@ import { FillEditor } from './FillEditor'
 import { MaterialGallery, MaterialSwatch } from './MaterialGallery'
 import { PrincipledEditor, type MaterialEditKeys } from './PrincipledEditor'
 import { overriddenElements, updateElementMaterials } from './principled'
-import { bevelLimit, restack, roundnessOf, withRoundness, withThickness } from './depth'
-import { layerBodyHeight, layerScale } from '../viewportBridge'
+import { bevelLimit, roundnessOf, withRoundness, withThickness } from './depth'
+import { restackProject } from '../stacking'
 import { OverrideRows, ScopePicker, useScope } from './scope'
 
 const BLEND_MODES: { value: BlendMode; label: string }[] = [
@@ -286,22 +286,10 @@ export function LayerInspector() {
           icon={<Box />}
           right={
             <IconButton
-              label="Re-stack all layers bottom → top so no bodies overlap"
+              label="Re-stack all layers bottom → top at their real heights (thickness + inflated dome), no bodies overlapping"
               size="xs"
-              onClick={() =>
-                commit(
-                  (p) => {
-                    // each body's real height (inflated domes included), measured like the renderers do
-                    const height = (l: Layer) => {
-                      const lg = geometry?.layers[l.id]
-                      return lg ? layerBodyHeight(l, lg, layerScale(p.canvas.art.scale, l.transform.scale)) : l.depth.thickness
-                    }
-                    const layers = restack(p.layers, height)
-                    return layers === p.layers ? p : { ...p, layers }
-                  },
-                  { coalesce: 'restack' },
-                )
-              }
+              // the shared rule (presets.json "geometry"): z0 = stackLift, z(i+1) = z(i) + H(i) + stackGap
+              onClick={() => commit((p) => restackProject(p, geometry, presets), { coalesce: 'restack' })}
             >
               <AlignVerticalSpaceAround />
             </IconButton>
