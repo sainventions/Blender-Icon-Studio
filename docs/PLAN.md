@@ -327,3 +327,13 @@ viewport and Blender renders; animation kind `iso` = head-on → iso → head-on
   (`LayerGeometry.maxRadius`); layers stack z0 = stackLift, z(i+1) = z(i) + H(i) + stackGap (StyleSpec.zGap overrides the
   gap). Used by import defaults, looks/style, batch and the UI Re-stack. Bevel is clamped to thickness/2 only.
 - **Dark rendition** stays physical (Principled inputs only) but must keep glyphs readable over the dark plate.
+
+**Round 8 decisions (binding):**
+- **Overlap-aware stacking**: a layer only stacks above lower layers it overlaps in XY (silhouette overlap after a small
+  clearance dilation): z(i) = max(stackLift, max over overlapped lower j of z(j) + H(j) + gap). Non-overlapping layers
+  share the base. H(i) = max(rule height, in-layer stacked height) — identical in server, worker framing and web.
+- **Local bevel cap**: the round-edge radius is capped at each part's local half-width (thin strokes become round tubes,
+  no roof ridge).
+- **Raster image layers** (kind 'image') import as flat cards (inflate 0, thin, small bevel); looks don't inflate them.
+- The Liquid Glass look matches the import defaults (thickness 0.16, bevel 0.08, inflate 0.25, gap = stackGap).
+- EEVEE drafts must not render translucent or floating glass near-black (drafts feed Render tab / batch / animations).
