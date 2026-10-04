@@ -131,6 +131,7 @@ export interface LayerGeometry {
   silhouette: Spline[]
   regions: Region[]
   safeRadius: number
+  maxRadius?: number // max inscribed radius over the layer's bodies; body height H = thickness + 2·inflate·maxRadius
   bbox: BBox
   texture: string // URL; covers art square −1..1: u=(x+1)/2, v=(y+1)/2
   texturePath: string

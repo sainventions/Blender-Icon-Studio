@@ -16,7 +16,9 @@ Read `docs/PLAN.md` first (architecture, binding decisions, ownership, protocols
 - Cycles must use the **OptiX** device only (disable CUDA + CPU device entries) and the OptiX denoiser.
 - The GPU is shared with the desktop (~3.5–4.7 GB already used). **Never render big while testing**: draft/preview
   tiers at ≤ 512 px (tests: ≤ 256 px, ≤ 32 spp). Final/ultra tiers only via explicit user action.
-- `use_persistent_data = False`. Do not enable caustics/MNEE in tests (164 s kernel compile).
+- `use_persistent_data = False`. Cycles refractive/reflective caustics are ON (physical glass shadows); never enable
+  MNEE caustic lights/casters in tests (164 s kernel compile).
+- Materials: ONE Principled BSDF per shape (pre-processing nodes only; no shader mixing) — see docs/PLAN.md §11.
 
 ## Conventions
 - Data contract: `server/bis/models.py` ⇄ `web/src/types.ts` (camelCase field names = JSON keys) and

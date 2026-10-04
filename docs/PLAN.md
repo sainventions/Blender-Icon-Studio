@@ -314,3 +314,16 @@ hole-aware), smooth normals, cached. The curve-bevel route is retired (fallback 
 **View — CAD-style POV instead of "explode".** `camera.iso` 0..1 interpolates an orthographic camera from head-on (0) to
 isometric (1: pitch 35.264°, yaw 45°) showing the REAL z distances (no artificial spreading), auto-framed. Same in the live
 viewport and Blender renders; animation kind `iso` = head-on → iso → head-on. `camera.explode` stays 1 (legacy).
+
+**Round 7 additions (binding):**
+- **Poisson inflation** replaces the distance-based dome (which creased thin parts into fins): per body solve
+  ∇²u = −4 on the CDT mesh (Dirichlet u = 0 on the outline; numpy conjugate gradient — no scipy in Blender; typed-array
+  CG in the viewport), dome = inflate · D · √(u / u_max) with D = the body's max inscribed radius (disc → sphere-like
+  dome, thin parts → round tapering tubes, no medial-axis creases). The round-edge rim hb(d) stays.
+- **Camera-relative lighting**: the key/rim/fill rig and the studio world are defined relative to the camera, so iso /
+  perspective / animated views light like the head-on view (no washed-out mirror glare). `lighting.angle` is relative to
+  the view.
+- **Real-height stacking** (`shared/presets.json` "geometry"): body height H = thickness + 2·inflate·maxRadius
+  (`LayerGeometry.maxRadius`); layers stack z0 = stackLift, z(i+1) = z(i) + H(i) + stackGap (StyleSpec.zGap overrides the
+  gap). Used by import defaults, looks/style, batch and the UI Re-stack. Bevel is clamped to thickness/2 only.
+- **Dark rendition** stays physical (Principled inputs only) but must keep glyphs readable over the dark plate.

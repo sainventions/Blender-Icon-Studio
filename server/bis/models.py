@@ -128,7 +128,7 @@ class LayerTransform(_Model):
 class LayerDepth(_Model):
     z: float = 0.0              # back face of the layer above the plate's front face (art units)
     thickness: float = 0.10     # total extrusion thickness
-    bevel: float = 0.045        # requested round-bevel radius (clamped to safeRadius by the builder)
+    bevel: float = 0.045        # round-edge radius (roundness); clamped to thickness/2 — height-field bodies taper thin parts
     bevelSegments: int = 6
     inflate: float = 0.0        # 0..1 dome on the front face (reflections sweep across flat faces)
 
@@ -316,6 +316,8 @@ class LayerGeometry(_Model):
     silhouette: list[Spline]   # union of all members (art space, before layer transform)
     regions: list[Region]      # occlusion-cut, disjoint pieces in paint order
     safeRadius: float          # largest bevel radius that will not invert any thin feature
+    maxRadius: float = 0.0     # max inscribed-circle radius over the layer's bodies (art units): dome height at
+                               # inflate 1 = inflate x maxRadius; body height H = thickness + 2 x inflate x maxRadius
     bbox: BBox                 # art space
     texture: str               # /files/... URL of the rasterised layer art (RGBA, edge-padded).
                                # Covers the art square −1..1: u=(x+1)/2, v=(y+1)/2.
@@ -380,7 +382,7 @@ class StylePlate(_Model):
 class StyleSpec(_Model):
     """A transferable look. Applying it to a project (see bis.style.apply_style):
     - every layer gets layerDefaults (material/depth/shadow/mode) — or layerMaterials[i] by index from the bottom
-      (clamped to the last entry) when given; bevel is clamped to each layer's safeRadius;
+      (clamped to the last entry) when given; bevel is clamped to thickness/2;
     - layers are restacked with z_i = i * zGap (zGap None = keep z);
     - plate material/thickness/bevel (+ fill/shape when not None), lighting, camera (when given),
       render.colorMode (when given) and appearances.tint (when given) are copied."""

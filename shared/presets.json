@@ -5052,5 +5052,10 @@
       "Emission",
       "Thin Film"
     ]
+  },
+  "geometry": {
+    "$comment": "Shared body/stacking rules (worker, server, viewport). Dome: Poisson inflation, max dome height = inflate x D (D = the body's max inscribed radius; a disc at inflate 1 becomes a sphere-like dome). Body height H = thickness + 2 x inflate x D. Layers stack bottom->top: z0 = stackLift, z(i+1) = z(i) + H(i) + stackGap (StyleSpec.zGap overrides stackGap when given).",
+    "stackLift": 0.0,
+    "stackGap": 0.03
   }
 }
