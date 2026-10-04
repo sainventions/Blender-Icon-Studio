@@ -281,3 +281,26 @@ Contract: `StyleSpec`, `StyleRequest`, `BatchRequest`, `BatchSource` in models.p
 | POST | `/batch` | `BatchRequest` → `Job` (kind `batch`); result `{items: BatchItemResult[], contactSheet?: url, zip?: url}` |
 Apply rules are documented on `StyleSpec` in models.py (bevel clamped to each layer's safeRadius).
 Mono floor: the worker uses 0.3 (supersedes 0.25 in §5); the viewport mirrors the worker.
+
+## 11. Round 6 pivot — PHYSICAL glass (binding; supersedes the round-4/5 "colour fidelity" glass work)
+User feedback: the glass must be *real* Blender physics (Principled BSDF transmission, IOR, roughness, tint),
+like the user's own renders (reference images: Contacts — clear glass IOR 1.6 roughness 0, sphere head from
+bevel = radius; Gemini — frosted glass IOR 1.6 roughness 0.267, Base Color = gradient texture, Transmission 1).
+The previous glass was faked (self-lit emission bodies, milk layers, overlay estimation, glow cards, paint
+pre-compensation) — that approach is abandoned for glass.
+- **Glass presets** (liquid_glass, clear_glass, frosted_glass, tinted_glass, dispersive_crystal, jelly) are plain,
+  editable node graphs a Blender user recognises: paint texture → (mix white→paint by `tint`) → Principled
+  Base Color; Transmission Weight = `transmission` (default 1); Roughness = `frost`; IOR = `ior`; optional Coat,
+  Thin Film, bump grain, Volume Absorption/Scatter (jelly, depth tint), 3-lobe dispersion (prism, Cycles).
+  No emission/milk/overlay/glow fakes. Cycles = truth; EEVEE drafts approximate (raytraced refraction; only where
+  EEVEE physically can't show glass-through-glass may a lower layer fall back).
+- **Shadows**: new `LayerShadow.kind = 'physical'` (no shadow-ray trick) is the default for glass layers;
+  'neutral'/'chromatic' remain as art-directed options.
+- **Opaque presets** (satin, plastic, clay, metals, candy, gummy) stay physically based (calibrated lighting +
+  albedo choice is fine); colour modes stay ('brand' default).
+- **Roundness**: UI slider = bevel / min(thickness/2, 0.9·safeRadius); 1 → full pill / sphere lens.
+- **Inflate** (`LayerDepth.inflate` 0..1): REAL geometry — a height-field body: inward distance d from the
+  silhouette, per-piece max distance D; top z = e + hb(d) + inflate·D·sqrt(1−(1−min(d/D,1))²) and the mirror below
+  (e = extrude half, hb = round-bevel profile); inflate 1 on a disc ≈ sphere. Built in Blender with
+  mathutils.geometry.delaunay_2d_cdt (boundary + interior Steiner points); mirrored in the viewport with poly2tri.
+- Fidelity harness: applies to plates and opaque presets only.
