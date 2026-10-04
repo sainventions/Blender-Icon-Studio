@@ -131,7 +131,9 @@ class LayerDepth(_Model):
 
 
 class LayerShadow(_Model):
-    kind: Literal["none", "neutral", "chromatic"] = "neutral"
+    # physical = the body really blocks/attenuates light (no shadow-ray trick; Cycles' true result);
+    # neutral / chromatic = art-directed soft shadow (Is-Shadow-Ray transparent wrap, grey / tinted)
+    kind: Literal["none", "physical", "neutral", "chromatic"] = "neutral"
     opacity: float = 0.5        # 0..1 (Icon Composer shadow %)
 
 

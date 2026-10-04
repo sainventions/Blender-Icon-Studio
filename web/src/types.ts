@@ -41,7 +41,7 @@ export interface SvgElement {
 export interface MaterialSpec { preset: string; params: Record<string, number | string | boolean> }
 export interface LayerTransform { x: number; y: number; scale: number }
 export interface LayerDepth { z: number; thickness: number; bevel: number; bevelSegments: number; inflate: number }
-export interface LayerShadow { kind: 'none' | 'neutral' | 'chromatic'; opacity: number }
+export interface LayerShadow { kind: 'none' | 'physical' | 'neutral' | 'chromatic'; opacity: number }
 export type BlendMode =
   | 'normal' | 'multiply' | 'screen' | 'overlay' | 'darken' | 'lighten'
   | 'soft-light' | 'hard-light' | 'plus-darker' | 'plus-lighter'
