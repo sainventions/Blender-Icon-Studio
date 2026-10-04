@@ -157,7 +157,7 @@ test('colour calibration constants mirror the worker (display_paint, _albedo, EN
   assert.ok(rig.LIVE_CAL > 0.9 && rig.LIVE_CAL < 1.3)
   const studio = read('web/src/viewport/scene/StudioLighting.tsx')
   assert.match(studio, /scene\.environmentIntensity = LIVE_CAL/)
-  assert.equal((studio.match(/DIFFUSE_CAL \* LIVE_CAL \* rig\./g) ?? []).length, 2) // key + fill
+  assert.equal((studio.match(/DIFFUSE_CAL \* LIVE_CAL \* LIVE_LIGHT_CAL\.(key|fill) \* rig\./g) ?? []).length, 2) // key + fill
 })
 
 test('displayPaint is util.pbr_neutral_inverse: Khronos PBR Neutral shows the paint (peaks capped by saturation)', () => {
@@ -217,7 +217,8 @@ test('Liquid Glass round-4 model mirrors the worker (clear share, body radiance,
   const cfs = compile(mcg)
   assert.deepEqual(cfs.warnings, [])
   assert.match(cfs.shader.fragmentShader, /m = max\( m, pow\( bisWhiteness\( paint \), 1\.5 \) \* bisWhiteMilk \* mix\( 0\.8, 1\.0, h \) \);/)
-  assert.equal(m3d.describeMaterial({ preset: 'frosted_glass', params: {} }, presets).whiteMilk, 0)
+  // round 5: frosted (WHITE_ICE) and prism (CLEAR_WHITE_MILK) white glyphs are frosted ice too (worker _white_ice)
+  assert.equal(m3d.describeMaterial({ preset: 'frosted_glass', params: {} }, presets).whiteMilk, m3d.WHITE_ICE)
   assert.match(lg, /g\.map_range\(e, 0\.0, 0\.6, 0\.9, 0\.5\)/) // clear tint gamma per interface ↔ LG_DEEP
   assert.deepEqual(m3d.LG_DEEP, [0.9, 0.5])
   assert.match(lg, /mix_shader\(0\.85, pc\.outputs\[0\], fill_em\.outputs\[0\]\)/) // diffuse share 0.15
@@ -266,7 +267,7 @@ test('diffuse presets take the albedo of the displayed paint; flat emits it', ()
   const gp = new m3d.IconMaterial()
   m3d.applyIconMaterial(gp, m3d.describeMaterial({ preset: 'glossy_plastic', params: {} }, presets), ctx({ displayPaint: true }))
   assert.ok(!('BIS_SPEC_TINT' in gp.defines))
-  assert.match(compile(gp).shader.fragmentShader, /diffuseColor\.rgb \*= bisAlbedo\( bisDisplayPaint\( bisPm, 0\.9277\d* \), bisAlbedoB \);/)
+  assert.match(compile(gp).shader.fragmentShader, /diffuseColor\.rgb \*= bisAlbedo\( bisDisplayPaint\( bisPm, 0\.9277\d* \), bisAlbedoB \) \* bisAlbedoGain;/)
   const f = new m3d.IconMaterial()
   m3d.applyIconMaterial(f, m3d.describeMaterial({ preset: 'flat', params: {} }, presets), ctx({ displayPaint: true }))
   assert.ok('BIS_DISPLAY_EMISSION' in f.defines)
@@ -314,7 +315,8 @@ test('clear-light: tinted mono glass, low glow, edge darkening, deep shadow, smo
   assert.equal(p.layers[0].shadow.opacity, 0.8) // floor
   assert.equal(p.layers[1].shadow.opacity, 0.95) // kept when deeper
   assert.deepEqual(p.canvas.plate.material, { preset: 'frosted_glass', params: { tint: 0.4, frost: 0.42, grain: 0.04 } })
-  assert.equal(p.canvas.plate.fill.color, '#c9ccd6')
+  // round 5: a smoky pane — CLEAR_LIGHT_PLATE × CLEAR_LIGHT_SMOKE in linear light (worker _scale_hex: '#787a80')
+  assert.equal(p.canvas.plate.fill.color, '#787a80')
   const s = m3d.describeMaterial(p.layers[0].material, presets)
   assert.equal(s.lg.edgeDark, 0.8)
   assert.equal(s.lg.glow, 0.1)
@@ -328,7 +330,8 @@ test('clear-dark: moderate glow, no edge darkening, white frosted pane, shadows 
     assert.equal(L.material.params.__edgeDark, undefined)
   }
   assert.equal(p.layers[0].shadow.opacity, 0.3)
-  assert.deepEqual(p.canvas.plate.material, { preset: 'frosted_glass', params: { tint: 0, frost: 0.42, grain: 0.04 } })
+  // round 5: a weaker coat (CLEAR_DARK_COAT) and IOR 1.3 on the dark pane
+  assert.deepEqual(p.canvas.plate.material, { preset: 'frosted_glass', params: { tint: 0, frost: 0.42, grain: 0.04, coat: 0.3, ior: 1.3 } })
   assert.equal(p.canvas.plate.fill.color, '#ffffff')
   assert.equal(m3d.describeMaterial(p.layers[0].material, presets).lg.edgeDark, 0)
 })
@@ -375,7 +378,7 @@ test('Liquid Glass: smoked glass for dark paints, edge darkening, transmission t
   const fs = compile(m).shader.fragmentShader
   assert.match(fs, /bisRimL = mix\( 0\.06, 1\.0, smoothstep\( 0\.1, 0\.8, bisLum \) \)/) // subdued rim (worker 11:31)
   assert.match(fs, /mix\( 0\.35, 1\.0, clamp\( bisLum \/ 0\.5, 0\.0, 1\.0 \) \)/) // subdued coat / specular
-  assert.match(fs, /mix\( bisPm, vec3\( 1\.0 \), 0\.3 \* bisLum \)/) // glow carries no white for dark paints
+  assert.match(fs, /mix\( bisPm, vec3\( 1\.0 \), 0\.3 \* bisLum \* \( 1\.0 - bisPmSat \) \)/) // glow: no white for dark / saturated paints
   assert.match(fs, /mix\( 1\.0 - bisLgEdgeDark, 1\.0, smoothstep\( 0\.0, 0\.6, bisE \) \)/)
   assert.match(fs, /material\.diffuseContribution \* bisTransTint/) // deep tint only on the transmitted light
 })
@@ -508,4 +511,422 @@ test('untangleInset collapses a folded inset loop', () => {
   }
   assert.equal(rep.length, pts.length)
   assert.ok(keep.length < pts.length)
+})
+
+// ------------------------------------------------------------------------------------------------ round 5 (ui-sync)
+// The worker's round-5 changes, mirrored: 'brand' colour mode (Standard + highlight soft clip, paints pre-compensated by
+// the exact inverse, default for a missing mode), key light at KEY_DIST, Liquid Glass rim / near-black / flush / thin
+// strokes / glow, display-space blend films for translucent pieces (overlay.py), clear / tinted mono maps (gamma / rank
+// LUTs), smoky clear-light pane, weak-coat clear-dark pane, white ice on frosted / prism glass, merged touching pieces.
+// Numbers marked "worker reference" were produced by the worker's own pure-Python functions (util / overlay /
+// appearance) on the current sources; the constants are parsed from those sources, so a worker change fails here.
+const dt = await import('../scene/displayTransform.ts')
+const ov = await import('../../lib/overlay3d.ts')
+const lg3 = await import('../geometry/layerGeometry.ts')
+const cmodes = await import('../../lib/colorModes.ts')
+
+/** `NAME = (a, b, c, d)` tuple → numbers. */
+function pyTuple(src, re) {
+  const m = re.exec(src)
+  assert.ok(m, `${re} not found`)
+  return m[1].split(',').map((v) => Number(v.trim()))
+}
+const close = (a, b, tol, msg) => assert.ok(Math.abs(a - b) <= tol, `${msg ?? ''} ${a} vs ${b}`)
+const closeV = (a, b, tol, msg) => a.forEach((v, i) => close(v, b[i], tol, `${msg ?? ''}[${i}]`))
+
+test("round 5: 'brand' colour mode = Standard + the worker's highlight soft clip (util.BRAND_KNEE / BRAND_CAP)", () => {
+  const util = read('blender_worker/util.py')
+  assert.equal(dt.BRAND_KNEE, pyConst(util, 'BRAND_KNEE'))
+  assert.equal(dt.BRAND_CAP, pyConst(util, 'BRAND_CAP'))
+  assert.equal(presets.colorModes.brand.softClip, dt.BRAND_KNEE)
+  assert.match(util, /return tuple\(v if v <= knee else 1\.0 - w \* math\.exp\(-\(v - knee\) \/ w\) for v in/)
+  assert.match(util, /out\.append\(y if y <= knee else knee - w \* math\.log\(1\.0 - \(y - knee\) \/ w\)\)/)
+  // worker reference: util.soft_clip / util.soft_clip_inverse
+  closeV(dt.softClip([0.5, 0.95, 1.3]), [0.5, 0.939347, 0.998168], 1e-6, 'soft_clip')
+  closeV(dt.softClip([0.9, 2.0, 0.1]), [0.9, 0.999998, 0.1], 1e-6, 'soft_clip')
+  closeV(dt.softClipInverse([0.5, 0.95, 0.998]), [0.5, 0.969315, 1.291202], 1e-6, 'soft_clip_inverse')
+  closeV(dt.softClipInverse([0.2, 0.91, 1.0]), [0.2, 0.910536, 1.291202], 1e-6, 'soft_clip_inverse')
+  closeV(dt.softClipInverse([0, 0.9, 0.99]), [0, 0.9, 1.130259], 1e-6, 'soft_clip_inverse')
+  // the default for a missing / unknown mode (presets.DEFAULT_COLOR_MODE)
+  assert.equal(dt.DEFAULT_COLOR_MODE, /^DEFAULT_COLOR_MODE\s*=\s*"(\w+)"/m.exec(read('blender_worker/presets.py'))[1])
+  assert.equal(dt.colorModeId(undefined), 'brand')
+  assert.equal(dt.colorModeId('nonsense'), 'brand')
+  assert.equal(dt.colorModeId('neutral'), 'neutral')
+  assert.deepEqual(dt.COLOR_MODES.slice().sort(), Object.keys(presets.colorModes).sort())
+  // display transform + its inverse (backdrop) round-trip; the tone-mapping effect is the soft clip
+  const t = dt.displayTransformFor('brand')
+  assert.equal(t.mode, 3)
+  for (const c of [[0.2, 0.5, 0.95], [0.004, 0.01, 0.02]]) closeV(dt.toDisplay(dt.toScene(c, t), t), c, 1e-9, 'round trip')
+  assert.ok(dt.DISPLAY_INVERSE_GLSL.includes('bisToneMode == 3'))
+  const fx = read('web/src/viewport/scene/Effects.tsx')
+  assert.match(fx, /colorMode === 'brand' \? <primitive object=\{softClip\} \/> : <ToneMapping mode=\{mode\} \/>/)
+  assert.match(fx, /const colorMode = colorModeId\(rawColorMode\)/)
+  const sc = read('web/src/viewport/scene/softClipEffect.ts')
+  assert.match(sc, /vec3 hi = 1\.0 - w \* exp\(-\(x - knee\) \/ w\);/)
+  assert.match(sc, /mix\(x, hi, step\(vec3\(knee\), x\)\)/)
+})
+
+test("round 5: paints are pre-compensated with the exact inverse soft clip in 'brand' (materials._brand_graph)", () => {
+  const mat = read('blender_worker/materials.py')
+  assert.match(mat, /cap = BRAND_CAP if max_peak >= NEUTRAL_CAP\[0\] - 1e-9 else brand_diffuse_peak\(\)/)
+  assert.match(mat, /return min\(BRAND_CAP, soft_clip\(\(ALBEDO_MAX \+ DIFFUSE_B,\), brand_knee\(\)\)\[0\]\)/)
+  close(m3d.brandDiffusePeak(), Math.min(dt.BRAND_CAP, dt.softClip([m3d.ALBEDO_MAX + m3d.DIFFUSE_B, 0, 0])[0]), 1e-12)
+  // opaque / glass bodies: targets ≤ BRAND_CAP; diffuse presets (DIFFUSE_PEAK requests): ≤ brand_diffuse_peak
+  closeV(m3d.displayPaint([0.5, 0.95, 1.0], m3d.NEUTRAL_CAP[0], 'brand'), dt.softClipInverse([0.5, 0.95, 1.0]), 1e-12)
+  closeV(m3d.displayPaint([1, 1, 1], m3d.DIFFUSE_PEAK, 'brand'), dt.softClipInverse([1, 1, 1], dt.BRAND_KNEE, m3d.brandDiffusePeak()), 1e-12)
+  // paint_radiance: 'brand' uses the exact inverse for translucent pieces too (identity below the knee)
+  assert.match(mat, /if not c\.spec\.get\("alpha"\) or c\.spec\.get\("cm", "neutral"\) != "neutral":\s*\n\s*return display_paint\(c, col\)/)
+  closeV(m3d.paintRadiance([0.5, 0.2, 0], true, 'brand'), [0.5, 0.2, 0], 1e-12)
+  assert.deepEqual(m3d.paintTransformFor('brand'), 'brand')
+  assert.deepEqual(m3d.paintTransformFor(undefined), 'brand')
+  assert.deepEqual(m3d.paintTransformFor('agx'), 'identity')
+  // satin in 'brand': dark paints get a proportionally weaker specular and coat
+  assert.equal(m3d.SATIN_DARK, pyConst(mat, 'SATIN_DARK'))
+  assert.match(mat, /dk = g\.map_range\(mx, 0\.0, SATIN_DARK, 0\.12, 1\.0\)/)
+  const dj = m3d.satinPaint([0.0052, 0.0052, 0.0052], 'brand') // #101010
+  close(dj.coat, 0.12 + 0.88 * 0.0052 / m3d.SATIN_DARK, 1e-9)
+  assert.equal(m3d.satinPaint([0.5, 0.2, 0.1], 'brand').coat, 1)
+  // shader: BIS_BRAND_PAINT carries the same inverse
+  const m = new m3d.IconMaterial()
+  m3d.applyIconMaterial(m, m3d.describeMaterial({ preset: 'satin', params: {} }, presets), ctx({ displayPaint: 'brand' }))
+  assert.ok('BIS_BRAND_PAINT' in m.defines && !('BIS_DISPLAY_PAINT' in m.defines))
+  const fs = compile(m).shader.fragmentShader
+  assert.deepEqual(compile(m).warnings, [])
+  assert.match(fs, /vec3 hi = 0\.9 - 0\.100000 \* log\( 1\.0 - max\( y - 0\.9, vec3\( 0\.0 \) \) \/ 0\.100000 \);/)
+  assert.match(fs, /bisSatinCoat = mix\( 0\.12, 1\.0, clamp\( bisSMx \/ 0\.08, 0\.0, 1\.0 \) \);/)
+})
+
+test('round 5: key light at lighting.KEY_DIST (same centre irradiance and angular size), fill as a near area light', () => {
+  const src = read('blender_worker/lighting.py')
+  const studio = read('web/src/viewport/scene/StudioLighting.tsx')
+  assert.equal(Number(/export const KEY_DISTANCE = ([0-9.]+)/.exec(studio)[1]), pyConst(src, 'KEY_DIST'))
+  assert.match(src, /^KEY_SCALE = KEY_DIST \/ 6\.0/m)
+  assert.match(studio, /export const KEY_SCALE = KEY_DISTANCE \/ 6/)
+  assert.match(src, /energy = K_BASE \* DIFFUSE_CAL \* rig\["key"\] \* KEY_SCALE \*\* 2/)
+  assert.match(studio, /const KEY_POWER = 1\.9 \* KEY_DISTANCE \* KEY_DISTANCE/) // centre irradiance independent of d
+  assert.match(studio, /const keySize = 4 \* KEY_SCALE \* \(0\.3 \+ 1\.4 \* rig\.softness\)/)
+  const fillD = /\("BIS Fill", 160\.0, 55\.0, ([0-9.]+),/.exec(src)
+  assert.equal(Number(/const FILL_DISTANCE = ([0-9.]+)/.exec(studio)[1]), Number(fillD[1]))
+  // the world terms are linear in the environment, like the worker's _world_graph
+  assert.match(src, /soft = g\.map_range\(g\.vmath\("DOT_PRODUCT", d, L\), 0\.90, 0\.97, 0\.0, 6\.0 \* max\(0\.2, rig\["key"\]\)/)
+  assert.match(src, /front = g\.map_range\(g\.vmath\("DOT_PRODUCT", d, \(0\.0, 0\.0, 1\.0\)\), 0\.0, 1\.0, 0\.0, 0\.5 \* max\(0\.3, rig\["fill"\]\)\)/)
+  assert.match(src, /g\.set\(bg\.inputs\["Strength"\], 0\.6 \* WORLD_CAL \* rig\["environment"\] \* strength_scale\)/)
+  const env = read('web/src/viewport/scene/studioEnvironment.ts')
+  assert.match(env, /domeU\.strength\.value = 0\.6 \* WORLD_CAL \* env \* LIVE_LIGHT_CAL\.dome/)
+  assert.match(env, /this\.softbox\.set\(6 \* WORLD_CAL \* Math\.max\(0\.2, rig\.key\) \* env \* LIVE_LIGHT_CAL\.softbox, keyColor\)/)
+  assert.match(env, /0\.5 \* Math\.max\(0\.3, rig\.fill\) \* LIVE_LIGHT_CAL\.front/)
+  // per-component live calibration stays a calibration (measured, near 1 except the structural dome / key / fill)
+  for (const [k, v] of Object.entries(rig.LIVE_LIGHT_CAL)) assert.ok(v > 0.4 && v < 1.6, `${k} ${v}`)
+})
+
+test('round 5: Liquid Glass rim band, near-black glass, flush edges, thin strokes, saturated glow, raster rim', () => {
+  const mat = read('blender_worker/materials.py')
+  const lgsrc = /def b_liquid_glass[\s\S]*?return cyc, ev, None/.exec(mat)[0]
+  assert.deepEqual(m3d.LG_RIM_BANDS.auto, pyTuple(mat, /RIM_BANDS = \{"auto": \(([^)]*)\)/))
+  assert.deepEqual(m3d.LG_RIM_BANDS.inside, pyTuple(mat, /RIM_BANDS = \{"auto": \([^)]*\), "inside": \(([^)]*)\)/))
+  assert.deepEqual(m3d.LG_RIM_BANDS.outside, pyTuple(mat, /RIM_BANDS = \{[^}]*"outside": \(([^)]*)\)\}/))
+  assert.deepEqual(m3d.LG_NEAR_BLACK, pyTuple(lgsrc, /nb = g\.map_range\(lum, ([0-9.]+, [0-9.]+), 0\.0, 1\.0\)/))
+  assert.match(lgsrc, /rim = g\.math\("MULTIPLY", rim, nb\)/)
+  assert.match(lgsrc, /rim = g\.math\("MULTIPLY", rim, keep\)/)
+  assert.match(lgsrc, /fill = g\.math\("MAXIMUM", fill, g\.math\("SUBTRACT", 1\.0, keep\)\)/)
+  assert.match(lgsrc, /fill = g\.math\("MAXIMUM", fill, g\.math\("SUBTRACT", 1\.0, nb\)\)/)
+  assert.match(lgsrc, /fill = g\.math\("MAXIMUM", fill, float\(c\.spec\.get\("solid_edge"\) or 0\.0\)\)/)
+  assert.match(lgsrc, /coat_b = g\.math\("MULTIPLY", coat_b, g\.mix_float\(nb, g\.map_range\(e, 0\.6, 0\.9, 0\.0, 0\.5\), 1\.0\)\)/)
+  assert.match(lgsrc, /g\.math\("MULTIPLY", g\.math\("MULTIPLY", lum, 0\.3\),\s*g\.math\("SUBTRACT", 1\.0, hsv\.outputs\[1\]\)\), base_m, WHITE\)/)
+  assert.match(lgsrc, /g\.set\(glow_em\.inputs\["Strength"\], g\.math\("MULTIPLY", gstr, keep\)\)/)
+  const scene = read('blender_worker/scene.py')
+  assert.equal(m3d.THIN_RATIO, pyConst(scene, 'THIN_RATIO'))
+  assert.equal(m3d.THIN_SOLID, pyConst(scene, 'THIN_SOLID'))
+  assert.equal(m3d.RASTER_RIM, pyConst(scene, 'RASTER_RIM'))
+  assert.match(scene, /solid_edge=THIN_SOLID if bevel_local >= THIN_RATIO \* float\(g\.get\("safeRadius", 1\.0\)\) else 0\.0/)
+  assert.equal(ov.solidEdge(0.04, 0.05), m3d.THIN_SOLID)
+  assert.equal(ov.solidEdge(0.03, 0.05), 0)
+  // shader
+  const s = m3d.describeMaterial({ preset: 'liquid_glass', params: {} }, presets)
+  const flush = { shape: 'squircle', r: 0.45, grow: 1, band: [0.0225, 0.0625] }
+  const m = new m3d.IconMaterial()
+  m3d.applyIconMaterial(m, s, ctx({ displayPaint: 'brand', flush, solidEdge: m3d.THIN_SOLID, rimScale: m3d.RASTER_RIM }))
+  assert.ok('BIS_FLUSH' in m.defines)
+  assert.equal(m.bis.bisLgSolidEdge.value, m3d.THIN_SOLID)
+  close(m.bis.bisLgRim.value, s.lg.rim * m3d.RASTER_RIM, 1e-12)
+  assert.deepEqual(m.bis.bisFlush.value.toArray(), [1, 0.45, 1, 0])
+  const { shader, warnings } = compile(m)
+  assert.deepEqual(warnings, [])
+  const fs = shader.fragmentShader
+  assert.match(fs, /float bisNb = clamp\( \( bisLum - 0\.04 \) \/ 0\.18\d*, 0\.0, 1\.0 \);/)
+  assert.match(fs, /bisFill = max\( max\( bisFill, 1\.0 - bisKeep \), max\( 1\.0 - bisNb, bisLgSolidEdge \) \);/)
+  assert.match(fs, /bisLgRim \* bisRimL \* bisNb \* bisKeep;/)
+  assert.match(fs, /float bisCoatNb = mix\( clamp\( \( bisE - 0\.6 \) \/ 0\.3, 0\.0, 1\.0 \) \* 0\.5, 1\.0, bisNb \);/)
+  assert.match(fs, /return smoothstep\( bisFlushBand\.x, bisFlushBand\.y, mix\( dR, dS, bisFlush\.z \) \* grow \);/)
+})
+
+test('round 5: flush-with-plate detection mirrors overlay.flush_spec / plate_distance', () => {
+  const o = read('blender_worker/overlay.py')
+  assert.equal(ov.FLUSH_TOL, pyConst(o, 'FLUSH_TOL'))
+  assert.match(o, /"band": \(round\(0\.5 \* b, 5\), round\(1\.3 \* b \+ 0\.004, 5\)\)\}/)
+  assert.match(o, /d = 1\.0 - \(x \*\* 5 \+ y \*\* 5\) \*\* 0\.2/)
+  // worker reference: overlay.plate_distance(shape, 0.225, p)
+  const ref = [
+    ['squircle', [0.5, 0.5], 0.425651], ['squircle', [0.99, 0], 0.01], ['squircle', [0.9, 0.9], -0.033829],
+    ['rounded', [0.5, 0.5], 0.5], ['rounded', [0.99, 0], 0.01], ['rounded', [0.9, 0.9], -0.044975],
+    ['circle', [0.5, 0.5], 0.292893], ['circle', [0.9, 0.9], -0.272792], ['square', [0.9, 0.9], 0.1],
+  ]
+  for (const [shape, p, d] of ref) close(ov.plateDistance(shape, 0.225, p), d, 2e-6, `${shape} ${p}`)
+  const ring = Array.from({ length: 80 }, (_, i) => [Math.cos((2 * Math.PI * i) / 80), Math.sin((2 * Math.PI * i) / 80)])
+  assert.deepEqual(ov.flushSpec([ring], 'circle', 0.225, 0.045), { shape: 'circle', r: 0.45, grow: 1, band: [0.0225, 0.0625] })
+  assert.equal(ov.flushSpec([ring.map(([x, y]) => [x * 0.5, y * 0.5])], 'circle', 0.225, 0.045), null)
+  // the shader's field is the same function (squircle / rounded SDF in units of grow)
+  const m = new m3d.IconMaterial()
+  m3d.applyIconMaterial(m, m3d.describeMaterial({ preset: 'liquid_glass', params: {} }, presets), ctx({ flush: { shape: 'rounded', r: 0.45, grow: 1, band: [0.02, 0.06] } }))
+  assert.deepEqual(m.bis.bisFlush.value.toArray(), [1, 0.45, 0, 0])
+})
+
+test('round 5: translucent Liquid Glass pieces are display-space blend films (overlay.blend_coeffs / beneath_srgb)', () => {
+  const o = read('blender_worker/overlay.py')
+  assert.equal(ov.FILM_FOLLOW, pyConst(o, 'FILM_FOLLOW'))
+  assert.equal(ov.SAMPLES, pyConst(o, 'SAMPLES'))
+  assert.deepEqual([...ov.FILM_MODES], /^FILM_MODES = \(([^)]*)\)/m.exec(o)[1].split(',').map((v) => v.trim().replace(/"/g, '')))
+  // worker reference: overlay.blend_coeffs(paint, a, beneath, cm)
+  const ref = [
+    [[0, 0, 0], 0.33, [0.3, 0.43, 0.96], 'brand', [0.423753, 0.412565, 0.321312], [0.002382, 0.003589, 0.078245]],
+    [[1, 1, 1], 0.66, [0.98, 0.56, 0.0], 'neutral', [1.0, 1.0, 1.0], [0.804484, 0.931743, 0.716121]],
+    [[0.5, 0.5, 0.5], 0.5, [1, 1, 1], 'standard', [0.0, 0.0, 0.0], [0.522522, 0.522522, 0.522522]],
+    [[0, 0, 0], 0.44, [0.58, 0.72, 0.0], 'brand', [0.272597, 0.268232, 0.56], [0.005517, 0.007176, 0.0]],
+  ]
+  for (const [p, a, b, cm, t, e] of ref) {
+    const r = ov.blendCoeffs(p, a, b, cm)
+    closeV(r.t, t, 2e-5, `T ${cm}`)
+    closeV(r.e, e, 2e-5, `E ${cm}`)
+  }
+  // film_params: FILM_FOLLOW of the slope, a mid-grey estimate when nothing lies beneath
+  const f0 = ov.filmParams([0, 0, 0], 0.33, null, 'brand')
+  closeV(f0.t, [0.224802, 0.224802, 0.224802], 2e-5)
+  closeV(f0.e, [0.043663, 0.043663, 0.043663], 2e-5)
+  const f1 = ov.filmParams([0, 0, 0], 0.33, [0.3, 0.43, 0.96], 'brand')
+  closeV(f1.t, [0.233064, 0.226911, 0.176722], 2e-5)
+  closeV(f1.e, [0.016348, 0.032342, 0.210128], 2e-5)
+  // beneath estimate: plate + lower layers + lower regions of the same layer, SVG-composited (worker reference)
+  const sq = (x0, y0, x1, y1) => ({ closed: true, hole: false, parent: -1, depth: 0, points: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map((p) => ({ co: p, hl: p, hr: p })) })
+  const lay = (id) => ({ id, visible: true, opacity: 1, fill: { type: 'auto' }, transform: { x: 0, y: 0, scale: 1 }, material: { preset: 'liquid_glass', params: {} }, mode: 'individual' })
+  const proj = {
+    canvas: { shape: 'rounded', cornerRadius: 0.225, art: { scale: 1, x: 0, y: 0 }, plate: { visible: true, fill: { type: 'solid', color: '#2050e0', opacity: 1 } } },
+    layers: [lay('L1'), lay('L2')],
+  }
+  const geo = {
+    L1: { regions: [{ elementId: 'a', opacity: 1, paint: { type: 'solid', color: '#ffffff' }, splines: [sq(-0.5, -0.5, 0.5, 0.5)] }] },
+    L2: {
+      regions: [
+        { elementId: 'b', opacity: 0.8, paint: { type: 'solid', color: '#ff0000' }, splines: [sq(-0.2, -0.2, 0.3, 0.3)] },
+        { elementId: 'c', opacity: 0.33, paint: { type: 'solid', color: '#000000' }, splines: [sq(0.0, -0.8, 0.8, 0.8)] },
+      ],
+    },
+  }
+  closeV(ov.beneathSrgb(proj, geo, 'L2', 1, 'rounded'), [0.527051, 0.526811, 0.832213], 1e-5, 'beneath')
+  // which pieces film (scene._film_params): translucent solid pieces of non-combined Liquid Glass layers, light / dark only
+  const films = ov.filmParamsFor(proj, geo, 'brand', false, lg3.touchingOpaque)
+  assert.deepEqual([...films.keys()].sort(), ['L2:0', 'L2:1'])
+  assert.equal(ov.filmParamsFor(proj, geo, 'agx', false, lg3.touchingOpaque).size, 0)
+  assert.equal(ov.filmParamsFor(proj, geo, 'brand', true, lg3.touchingOpaque).size, 0) // clear / tinted renditions
+  const grad = structuredClone(geo)
+  grad.L2.regions[0].paint = { type: 'linear', start: [0, 0], end: [1, 0], stops: [{ offset: 0, color: '#000000', opacity: 1 }, { offset: 1, color: '#ffffff', opacity: 1 }] }
+  assert.equal(ov.filmParamsFor(proj, grad, 'brand', false, lg3.touchingOpaque).size, 0) // a gradient piece blocks its layer
+  // worker plumbing + the live shader: dst' = E + T · dst (blend colour T), no transmission, coat × alpha
+  assert.match(read('blender_worker/materials.py'), /ec = g\.vmath\("MAXIMUM", g\.vmath\("SUBTRACT", e, g\.combine\(\*\(g\.math\("MULTIPLY", coat_b, LG_COAT_B\),\) \* 3\)\),/)
+  const m = new m3d.IconMaterial()
+  m3d.applyIconMaterial(m, m3d.describeMaterial({ preset: 'liquid_glass', params: {} }, presets), ctx({ displayPaint: 'brand', opacity: 0.33, film: f1 }))
+  assert.ok(m.isFilm && 'BIS_FILM' in m.defines && !('BIS_SRGB_ALPHA' in m.defines))
+  assert.equal(m.blending, THREE.CustomBlending)
+  assert.equal(m.blendDst, THREE.ConstantColorFactor)
+  closeV(m.blendColor.toArray(), f1.t, 1e-6)
+  assert.equal(m.transmission, 0)
+  assert.deepEqual(compile(m).warnings, [])
+  assert.match(compile(m).shader.fragmentShader, /totalEmissiveRadiance \+= max\( bisFilmE - bisTame \* bisCoatNb \* bisFilmAlpha \* 0\.01, vec3\( 0\.0 \) \);/)
+})
+
+test('round 5: clear / tinted mono maps mirror appearance.gamma_lut / mono_lut (and the rendition rules)', () => {
+  const src = read('blender_worker/appearance.py')
+  for (const k of ['CLEAR_MONO_FLOOR', 'CLEAR_MONO_GAMMA', 'CLEAR_DARK_COAT', 'CLEAR_COMBINED_FLOOR', 'CLEAR_COMBINED_LINEAR',
+    'CLEAR_LIGHT_SMOKE', 'TINT_LIGHT_GAIN', 'TINT_DARK_FLOOR', 'MONO_LINEAR', 'MONO_MERGE'])
+    assert.equal(appearance[k], pyConst(src, k), k)
+  assert.match(src, /"lut": gamma_lut\(vals, CLEAR_MONO_FLOOR, CLEAR_MONO_GAMMA\)\}/)
+  assert.match(src, /"lut": mono_lut\(vals, CLEAR_COMBINED_FLOOR, linear=CLEAR_COMBINED_LINEAR\)\}/)
+  assert.match(src, /"strength": min\(1\.0, strength \+ TINT_LIGHT_GAIN\), "lut": mono_lut\(vals, MONO_FLOOR\)\}/)
+  assert.match(src, /mono=\{"lo": lo, "hi": hi, "floor": TINT_DARK_FLOOR, "tint": tint_lin, "strength": strength,\s*"lut": mono_lut\(vals, TINT_DARK_FLOOR\)\}/)
+  // worker reference: appearance.mono_lut / gamma_lut
+  const vals = [0.2, 0.21, 0.5, 0.53, 0.58, 0.9, 1.0, 0.05]
+  const eq = (a, b, msg) => {
+    assert.equal(a.length, b.length, `${msg}: ${JSON.stringify(a)}`)
+    a.forEach(([x, y], i) => { close(x, b[i][0], 1e-6, msg); close(y, b[i][1], 1e-6, msg) })
+  }
+  eq(appearance.monoLut(vals, 0.3), [[0.05, 0.3], [0.2, 0.414825], [0.5, 0.562807], [0.53, 0.651105], [0.58, 0.743825], [0.9, 0.896228], [1.0, 1.0]], 'mono_lut')
+  eq(appearance.monoLut(vals, 0.4, 0.55, 0.5), [[0.05, 0.4], [0.2, 0.497368], [0.5, 0.642105], [0.53, 0.701579], [0.58, 0.767368], [0.9, 0.918421], [1.0, 1.0]], 'mono_lut combined')
+  eq(appearance.gammaLut(vals, 0.3, 0.35), [[0.05, 0.3], [0.0595, 0.439668], [0.0785, 0.505159], [0.1165, 0.575983], [0.1735, 0.642751], [0.2, 0.666882], [0.259, 0.712046], [0.3825, 0.784755], [0.5, 0.838914], [0.525, 0.849209], [0.53, 0.851225], [0.58, 0.870678], [0.715, 0.917849], [0.8575, 0.961294], [0.9, 0.973273], [1.0, 1.0]], 'gamma_lut')
+  eq(appearance.monoLut([0.8, 0.85, 0.9], 0.5), [[0.35, 0.5], [0.8, 0.622727], [0.85, 0.811364], [0.9, 1.0]], 'mono_lut narrow')
+  const many = Array.from({ length: 41 }, (_, i) => i / 40)
+  const gm = appearance.gammaLut(many, 0.3, 0.35)
+  assert.equal(gm.length, 30)
+  close(gm[2][0], 0.025, 1e-9, 'thinned stop')
+  close(gm[27][0], 0.925, 1e-9, 'thinned stop')
+  const mm = appearance.monoLut(many, 0.3)
+  assert.equal(mm.length, 30)
+  close(mm[19][0], 0.65, 1e-9, 'banker-rounded thinning')
+  // the colour ramp is piecewise linear and clamps at the end stops (Blender ValToRGB)
+  close(appearance.lutValue([[0.2, 0.3], [0.6, 0.7]], 0.4), 0.5, 1e-12)
+  assert.equal(appearance.lutValue([[0.2, 0.3], [0.6, 0.7]], 0.9), 0.7)
+  // live: a LUT texture sampled like the ramp
+  const lut = appearance.gammaLut(vals, 0.3, 0.35)
+  const tex = m3d.monoLutTexture(lut)
+  assert.equal(tex.image.width, m3d.MONO_LUT_SIZE)
+  close(THREE.DataUtils.fromHalfFloat(tex.image.data[4 * 128]), appearance.lutValue(lut, 128 / 255), 2e-3)
+  // the rendition picks: clear → gamma / rank (combined), tinted → rank, light / dark → none
+  const luts = appearance.monoLutsFor('clear-light', [{ id: 'A', visible: true, fill: { type: 'solid', color: '#ffffff', opacity: 1 } }], {})
+  assert.ok(luts && luts.mono.length && luts.combined.length)
+  assert.equal(appearance.monoLutsFor('dark', [], {}), null)
+  // tinted-light: mono × tint at min(1, strength + TINT_LIGHT_GAIN); the glass tint keeps the tint's own strength
+  const p = appearance.resolveAppearance(project(), 'tinted-light')
+  assert.equal(p.layers[0].material.params.__tintStrength, Math.min(1, 0.8 + appearance.TINT_LIGHT_GAIN))
+  close(p.layers[0].material.params.tint, 0.55 + 0.4 * 0.8, 1e-12)
+  // shader: BIS_MONO_LUT replaces the linear stretch
+  const m = new m3d.IconMaterial()
+  const intent = { ...m3d.describeMaterial(p.layers[0].material, presets) }
+  m3d.applyIconMaterial(m, intent, ctx({ paint: { map: null, color: new THREE.Color(1, 1, 1), lumRange: [0, 1], monoLut: tex } }))
+  assert.ok('BIS_MONO_LUT' in m.defines)
+  assert.deepEqual(compile(m).warnings, [])
+  assert.match(compile(m).shader.fragmentShader, /float st = texture2D\( bisMonoLut, vec2\( min\( l, 1\.0 \) \* 0\.99609375 \+ 0\.00195313, 0\.5 \) \)\.r;/)
+})
+
+test('round 5: white ice on frosted / prism glass (not the plate); glass transmits sqrt(body) like Cycles', () => {
+  const mat = read('blender_worker/materials.py')
+  assert.equal(m3d.WHITE_ICE, pyConst(mat, 'WHITE_ICE'))
+  assert.match(mat, /cyc, ev = _white_ice\(c, col, normal, p\.outputs\[0\], ev, WHITE_ICE, frost\)/)
+  assert.match(mat, /cyc, ev = _white_ice\(c, col, normal, cyc, ev, CLEAR_WHITE_MILK, frost\)/)
+  assert.match(mat, /if amount <= 0 or c\.spec\.get\("plate"\) or c\.spec\.get\("clear"\):/)
+  assert.equal(m3d.describeMaterial({ preset: 'dispersive_crystal', params: {} }, presets).whiteMilk, m3d.CLEAR_WHITE_MILK)
+  const fr = m3d.describeMaterial({ preset: 'frosted_glass', params: {} }, presets)
+  const m = new m3d.IconMaterial()
+  m3d.applyIconMaterial(m, fr, ctx())
+  assert.ok('BIS_WHITE_MILK' in m.defines)
+  m3d.applyIconMaterial(m, fr, ctx({ plate: true }))
+  assert.ok(!('BIS_WHITE_MILK' in m.defines), 'the plate never gets the white-ice body')
+  // the worker mixes milk at both faces of a slab: (1 − m)² stays clear
+  m3d.applyIconMaterial(m, fr, ctx())
+  const fs = compile(m).shader.fragmentShader
+  assert.match(fs, /return 1\.0 - \( 1\.0 - m \) \* \( 1\.0 - m \);/)
+  assert.ok(fs.includes(`bisTransTint = ${m3d.GLASS_TRANSMIT} * sqrt( max( bisPm, vec3( 0.0 ) ) ) / max( bisPm, vec3( 1e-4 ) );`))
+  assert.match(mat, /The transmission colour is sqrt\(body\)/)
+})
+
+test('round 5: touching opaque pieces render as one body (scene.touching_opaque)', () => {
+  const scene = read('blender_worker/scene.py')
+  assert.match(scene, /return 0 < sil_outer < reg_outer/)
+  assert.match(scene, /combined_body = Lr\.get\("mode"\) == "combined" or touching_opaque\(g, images\)/)
+  const sq = (x0, y0, x1, y1, hole = false) => ({ closed: true, hole, parent: hole ? 0 : -1, depth: hole ? 1 : 0, points: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map((p) => ({ co: p, hl: p, hr: p })) })
+  const reg = (s, extra = {}) => ({ elementId: 'e', paint: { type: 'solid', color: '#ff0000', opacity: 1 }, opacity: 1, zSub: 0, splines: [s], ...extra })
+  const two = { regions: [reg(sq(0, 0, 1, 1)), reg(sq(1, 0, 2, 1))], silhouette: [sq(0, 0, 2, 1)], images: [] }
+  assert.equal(lg3.touchingOpaque(two), true)
+  assert.equal(lg3.touchingOpaque({ ...two, silhouette: [sq(0, 0, 1, 1), sq(1.5, 0, 2, 1)] }), false) // separate pieces
+  assert.equal(lg3.touchingOpaque({ ...two, regions: [two.regions[0], reg(sq(1, 0, 2, 1), { opacity: 0.5 })] }), false)
+  assert.equal(lg3.touchingOpaque({ ...two, images: [{ elementId: 'x' }] }), false)
+  const layer = { mode: 'individual', fill: { type: 'auto' } }
+  assert.equal(lg3.layerBodyParts(layer, { layerId: 'L', hash: 'h', ...two }, { thickness: 0.1, bevel: 0.02, segments: 4, scale: 1 }).length, 1)
+})
+
+test('round 5: Render ▸ Colour offers every presets colour mode, Brand-exact marked as the default', () => {
+  const opts = cmodes.colorModeOptions(presets)
+  assert.deepEqual(opts.map((o) => o.value), Object.keys(presets.colorModes))
+  const brand = opts.find((o) => o.value === 'brand')
+  assert.equal(brand.label, `${presets.colorModes.brand.label} (default)`)
+  assert.match(brand.description, /Standard \+ highlight soft clip/)
+  assert.equal(opts.find((o) => o.value === 'neutral').label, presets.colorModes.neutral.label)
+  assert.equal(cmodes.effectiveColorMode(undefined, presets), 'brand')
+  assert.equal(cmodes.effectiveColorMode('agx', presets), 'agx')
+  const ui = read('web/src/features/editor/inspector/RenderInspector.tsx')
+  assert.match(ui, /options=\{colorModeOptions\(presets\)\}/)
+  assert.doesNotMatch(ui, /Neutral \(Khronos PBR\) keeps brand colours accurate/)
+})
+
+test('round 5: cap triangulation survives self-crossing inset rings (Earth waves hairpins)', () => {
+  const V = (x, y) => new THREE.Vector2(x, y)
+  assert.equal(pill.ringsCross([[V(0, 0), V(1, 0), V(1, 1), V(0, 1)]]), false)
+  assert.equal(pill.ringsCross([[V(0, 0), V(1, 1), V(1, 0), V(0, 1)]]), true) // bow tie
+  // Earth's lowest wave (fixture): hairpins where it meets the plate edge fold the inset cap ring; earcut fanned a wedge
+  // across the gap between the waves. The cap must stay inside the outline.
+  const fx = JSON.parse(readFileSync(new URL('./fixtures/earth-wave.json', import.meta.url), 'utf8'))
+  const S = 1.072959
+  const bevel = Math.min(0.045 / S, 0.9 * fx.safeRadius, 0.1 / S / 2)
+  const geo = pill.buildPillGeometry(flatten.splinesToGroups(fillet.prepareSplines([fx.spline], bevel)), { thickness: 0.1 / S, bevel, segments: 6 })
+  const outline = flatten.splinesToGroups([fx.spline])[0].outer.pts
+  const inPoly = (x, y, p) => {
+    let c = false
+    for (let i = 0, j = p.length / 2 - 1; i < p.length / 2; j = i++)
+      if (p[2 * i + 1] > y !== p[2 * j + 1] > y && x < ((p[2 * j] - p[2 * i]) * (y - p[2 * i + 1])) / (p[2 * j + 1] - p[2 * i + 1]) + p[2 * i]) c = !c
+    return c
+  }
+  const pos = geo.attributes.position.array
+  const idx = geo.index.array
+  const T = geo.userData.thickness
+  const tris = []
+  for (let i = 0; i < idx.length; i += 3) {
+    const v = [idx[i], idx[i + 1], idx[i + 2]]
+    if (v.every((k) => Math.abs(pos[3 * k + 2] - T) < 1e-6)) tris.push(v.map((k) => [pos[3 * k], pos[3 * k + 1]]))
+  }
+  const inTri = (x, y, [a, b, c]) => {
+    const d = (p, q) => (q[0] - p[0]) * (y - p[1]) - (q[1] - p[1]) * (x - p[0])
+    const s1 = d(a, b), s2 = d(b, c), s3 = d(c, a)
+    return (s1 >= 0 && s2 >= 0 && s3 >= 0) || (s1 <= 0 && s2 <= 0 && s3 <= 0)
+  }
+  let covered = 0
+  let stray = 0
+  for (let gx = -0.95; gx <= 0.95; gx += 0.025)
+    for (let gy = -0.95; gy <= 0.95; gy += 0.025) {
+      if (!tris.some((t) => inTri(gx, gy, t))) continue
+      covered++
+      if (!inPoly(gx, gy, outline)) stray++
+    }
+  assert.ok(covered > 900, `cap covers ${covered} samples`)
+  assert.ok(stray <= 0.01 * covered, `${stray} of ${covered} cap samples lie outside the outline (the wedge)`)
+  // small self-intersection loops are cut from flattened rings
+  const loop = flatten.removeSmallLoops([0, 0, 1, 0, 1, 1, 0.5, 1, 0.52, 1.02, 0.51, 0.98, 0.49, 1.0, 0, 1])
+  assert.ok(loop.length < 16)
+})
+
+// ------------------------------------------------------------------------------------------------ round 5 (review)
+test('round 5 review: prism glass keeps the body colour once (Glass BSDF), Principled glass presets sqrt(body)', () => {
+  // The worker's prism is built from Glass BSDFs whose colour (glass_colors' sqrt(body)) tints BOTH interfaces, while
+  // clear / frosted / tinted glass are Principled (sqrt(body) once): only the latter take the GLASS_TRANSMIT calibration.
+  const mat = read('blender_worker/materials.py')
+  const prism = /def b_dispersive_crystal[\s\S]*?\n(?=def )/.exec(mat)[0]
+  assert.match(prism, /base, base_m = glass_colors\(c, col, tint\)/)
+  assert.match(prism, /g\.node\("ShaderNodeBsdfGlass"/)
+  assert.doesNotMatch(prism, /_glass_common\(/)
+  for (const id of ['clear_glass', 'tinted_glass']) assert.match(/def b_\w+[\s\S]*?\n(?=def )/g.exec(mat.slice(mat.indexOf(`def b_${id}(`)))[0], /_glass_common\(/)
+  assert.match(/def b_frosted_glass[\s\S]*?\n(?=def )/.exec(mat)[0], /ShaderNodeBsdfPrincipled/)
+  const sqrtLine = /bisTransTint = 0\.72\d* \* sqrt\( max\( bisPm, vec3\( 0\.0 \) \) \) \/ max\( bisPm, vec3\( 1e-4 \) \);/
+  for (const id of ['clear_glass', 'frosted_glass', 'tinted_glass', 'dispersive_crystal']) {
+    const s = m3d.describeMaterial({ preset: id, params: {} }, presets)
+    assert.equal(s.transmitBody, id === 'dispersive_crystal', id)
+    const m = new m3d.IconMaterial()
+    m3d.applyIconMaterial(m, s, ctx({ displayPaint: 'brand' }))
+    assert.equal('BIS_TRANSMIT_BODY' in m.defines, id === 'dispersive_crystal', id)
+    const { shader, warnings } = compile(m)
+    assert.deepEqual(warnings, [])
+    assert.match(shader.fragmentShader, sqrtLine) // present in the source, compiled out by the guard for prism
+    assert.match(shader.fragmentShader, /#if defined\( BIS_PAINT_PERCEPTUAL \) && !defined\( BIS_TRANSMIT_BODY \)/)
+  }
+  assert.equal(m3d.describeMaterial({ preset: 'liquid_glass', params: {} }, presets).transmitBody, false)
+})
+
+test('round 5 review: live neon bloom follows the worker Glare strength curve (threshold 0.3, × NEON_BLOOM_LIVE)', () => {
+  // Calibrated on 8 neon-look icons against 256 px Cycles previews; the round-3 values (0.15 / 0.4 + 1.2 × bloom) laid a
+  // grey veil over the dark plate that 'brand' (no PBR Neutral toe) shows: a worker Glare change fails here.
+  const r = read('blender_worker/render.py')
+  assert.equal(pyConst(r, 'BLOOM_THRESHOLD'), 0.35)
+  assert.match(r, /gl\.inputs\["Strength"\]\.default_value = 0\.3 \+ 0\.9 \* bloom/)
+  assert.match(r, /gl\.inputs\["Size"\]\.default_value = 0\.2 \+ 0\.3 \* bloom/)
+  const fx = read('web/src/viewport/scene/Effects.tsx')
+  assert.match(fx, /^const NEON_BLOOM_THRESHOLD = 0\.3$/m)
+  assert.match(fx, /^const NEON_BLOOM_LIVE = 0\.25 \/ 0\.3$/m)
+  assert.match(fx, /luminanceThreshold: NEON_BLOOM_THRESHOLD,/)
+  assert.match(fx, /effect\.intensity = NEON_BLOOM_LIVE \* \(0\.3 \+ 0\.9 \* strength\)/)
+  assert.doesNotMatch(fx, /0\.4 \+ 1\.2 \* strength/)
 })

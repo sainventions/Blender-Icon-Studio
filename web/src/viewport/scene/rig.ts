@@ -33,6 +33,13 @@ export const WORLD_CAL = 0.65
  * WebGL, satin plates #3d3d3d … #d5d5d5, fit radiance = A · albedo + B): A 0.883 / B 0.015 at 0.96 → 1.0 / 0.017.
  */
 export const LIVE_CAL = 1.088
+/**
+ * Per-component live calibration (round 5): the face-on diffuse response of each rig component — key, fill, the world's
+ * gradient dome, its front term and key softbox spot (all three × environment), the rim strips — measured against Cycles
+ * one component at a time (grey satin plate, 256 px, 'brand' mode) so every lighting preset, not only studio, lights a
+ * plate like the worker. Multiplies the worker-mirrored energies below (× LIVE_CAL).
+ */
+export const LIVE_LIGHT_CAL = { key: 1.29, fill: 0.595, dome: 0.935, front: 0.948, softbox: 1.207, rim: 1.0 } as const
 
 /** Linear-light colours used by the worker for warm keys and cool fills. */
 export const WARM = new THREE.Color(1.0, 0.82, 0.64)

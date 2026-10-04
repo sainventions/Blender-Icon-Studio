@@ -73,6 +73,29 @@ def test_presets_and_swatches(ctx, tmp_path):
     assert {"materials", "lighting", "platforms", "appearances", "quality", "colorModes"} <= set(p)
     assert "liquid_glass" in p["materials"] and "$comment" not in p
     assert p["quality"]["draft"]["size"] == 512
+    # every colour mode of shared/presets.json is served verbatim (round 5: the 'brand' mode + its softClip)
+    repo = json.loads((ROOT / "shared" / "presets.json").read_text(encoding="utf-8"))
+    assert p["colorModes"] == repo["colorModes"]
+
+
+def test_presets_serve_new_color_modes_live(tmp_path):
+    """The server hard-codes no colour-mode list: a mode added to presets.json (e.g. round 5's brand-exact
+    mode with its extra fields) reaches /api/presets without a restart."""
+    root = tmp_path / "root"
+    (root / "shared").mkdir(parents=True)
+    path = root / "shared" / "presets.json"
+    data = json.loads((ROOT / "shared" / "presets.json").read_text(encoding="utf-8"))
+    path.write_text(json.dumps(data), encoding="utf-8")
+    app = create_app(make_test_settings(tmp_path, root=root), bridge=FakeBridge())
+    with TestClient(app) as c:
+        assert c.get("/api/presets").json()["colorModes"] == data["colorModes"]
+        data["colorModes"]["brand-test"] = {"label": "Brand test", "viewTransform": "Standard", "look": "None",
+                                            "softClip": 0.9, "description": "x"}
+        path.write_text(json.dumps(data), encoding="utf-8")
+        st = path.stat()
+        os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000_000))
+        modes = c.get("/api/presets").json()["colorModes"]
+        assert modes["brand-test"] == data["colorModes"]["brand-test"] and set(modes) == set(data["colorModes"])
 
 
 def test_samples_and_thumbnail(ctx):

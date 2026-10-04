@@ -38,7 +38,7 @@ const pick = await import('../../lib/renderPick.ts')
 
 const s2l = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4)
 const l2s = (c) => (c <= 0.0031308 ? c * 12.92 : 1.055 * Math.max(0, c) ** (1 / 2.4) - 0.055)
-const MODES = ['neutral', 'standard', 'agx', 'agx-punchy']
+const MODES = ['brand', 'neutral', 'standard', 'agx', 'agx-punchy']
 
 /** What the viewport shows (sRGB 0..255) when the backdrop paints `css` (sRGB 0..1) the way Backdrop.tsx does. */
 function shown(css, colorMode) {

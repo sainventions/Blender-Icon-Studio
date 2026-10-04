@@ -17,7 +17,7 @@ from .layers import (dedupe_names, has_default_stack, layer_name, make_layer, me
 from .paths import clean_d, islands, skia_from_d, bounds
 from .prepass import auto_name
 from .split import Analysis, SplitParams, components, forced_units, split, topo_order, _unit_preserving
-from .tiling import auto_mode, default_mode_kept, layer_defaults, lining_pairs, tile_pairs
+from .tiling import auto_mode, default_mode_kept, layer_defaults, lining_pairs, print_pairs, tile_pairs
 
 
 class ZOrderError(ValueError):
@@ -45,9 +45,10 @@ def fresh_layers(store: ElementStore, strategy: str, params: Optional[SplitParam
     for tiled art, :func:`bis.svg.tiling.auto_mode`) and a bevel within that mode's safe radius."""
     fg = foreground_indices(store, active)
     tiles = []
-    if strategy == "smart":   # pieces that tile one shape, and edge lines drawn under a piece
+    if strategy == "smart":   # pieces that tile one shape, edge lines drawn under a piece, covered prints
         tiles = (tile_pairs(store.elems, fg, store.gaps, store.tolerance, store.art.k)
-                 + lining_pairs(store.elems, fg, store.edges, store.tolerance, store.art.k))
+                 + lining_pairs(store.elems, fg, store.edges, store.tolerance, store.art.k)
+                 + print_pairs(store.elems, fg, store.edges, store.inside, store.tolerance))
     an = Analysis(store.elems, store.gaps, store.edges, fg, store.view_box, store.inside, tiles)
     groups, info = split(an, strategy, params)
     layers: List[Layer] = []

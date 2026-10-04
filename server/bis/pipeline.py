@@ -77,6 +77,14 @@ class SvgPipeline:
             return None
         return _layers(fn(project_dir, project, element_ids, to_layer_id))
 
+    def layer_auto_modes(self, project_dir: Path, project: Project) -> dict[str, str] | None:
+        """{layer id: the mode A's tiling heuristic picks for the layer's art}; None when the pipeline has no
+        such op (tests' fake pipeline). A layer whose mode differs was set by the user."""
+        fn = getattr(self.module, "layer_auto_modes", None)
+        if fn is None:
+            return None
+        return {str(k): str(v) for k, v in fn(project_dir, project).items()}
+
     def build_geometry(self, project_dir: Path, project: Project, url_prefix: str) -> GeometryBundle:
         bundle = self.module.build_geometry(project_dir, project, url_prefix)
         return bundle if isinstance(bundle, GeometryBundle) else GeometryBundle.model_validate(_plain(bundle))

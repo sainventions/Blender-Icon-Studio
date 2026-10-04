@@ -31,9 +31,15 @@ WORLD_CAL = 0.65
 # materials.py pre-compensates paint colours against that response (DIFFUSE_A/B). The world is left alone
 # (changing it makes EEVEE re-bake its probes on every draft <-> preview switch).
 ENGINE_CAL = {"CYCLES": 0.95, "BLENDER_EEVEE": 1.075}
+# Key distance (round 5): at 6 BU the key's irradiance fell from 1.46x (top-left corner) to 0.68x (bottom-right)
+# of the centre across a flat plate — with a brand-exact transform every plate showed that spread (Spotify, Syno
+# Photos VPN plate dE 5.5, Life360's shading). The key now sits KEY_DIST away, scaled in size (same angular size:
+# same shadow softness and highlight shapes) and energy (same radiance: same centre irradiance), spread 0.83-1.21.
+KEY_DIST = 12.0
+KEY_SCALE = KEY_DIST / 6.0
 RIG = (
     # name, angle offset, elevation (None = lighting.elevation), distance, shape, size, size_y, energy factor
-    ("BIS Key", 0.0, None, 6.0, "DISK", 4.0, 4.0, 1.0),
+    ("BIS Key", 0.0, None, KEY_DIST, "DISK", 4.0 * KEY_SCALE, 4.0 * KEY_SCALE, 1.0),
     ("BIS RimTop", 0.0, 82.0, 5.0, "RECTANGLE", 6.0, 0.4, 0.5),
     ("BIS RimOpposite", 180.0, 82.0, 5.0, "RECTANGLE", 6.0, 0.4, 0.15),
     ("BIS Fill", 160.0, 55.0, 6.0, "RECTANGLE", 5.0, 5.0, 0.15),
@@ -99,7 +105,7 @@ def update_lights(scene: bpy.types.Scene, collection: bpy.types.Collection, rig:
         if name == "BIS Key":
             ld.size = size * soft
             ld.size_y = size * soft
-            energy = K_BASE * DIFFUSE_CAL * rig["key"]
+            energy = K_BASE * DIFFUSE_CAL * rig["key"] * KEY_SCALE ** 2
             col = lerp((1.0, 1.0, 1.0), WARM, rig["warmth"])
         elif name == "BIS Fill":
             ld.size = size

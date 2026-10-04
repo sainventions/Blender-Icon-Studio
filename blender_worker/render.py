@@ -35,6 +35,7 @@ TIERS = {
 }
 MAX_SIZE = 4096
 BLOOM_THRESHOLD = 0.35
+EEVEE_FILTER = 1.15
 ProgressFn = Callable[[float, str], None]
 
 
@@ -117,6 +118,9 @@ def configure(scene: bpy.types.Scene, quality: str, size: Optional[int], *, tran
         cy.seed = 0
         cy.use_light_tree = True
     else:
+        # a narrower reconstruction filter (default 1.5 px): drafts blurred thin dark detail lines (Ti84's screen)
+        # well past the SVG's own anti-aliasing (Cycles previews use a 1.3 px Blackman-Harris)
+        r.filter_size = EEVEE_FILTER
         ee = scene.eevee
         ee.taa_render_samples = spp
         ee.use_raytracing = True
@@ -139,78 +143,124 @@ def configure(scene: bpy.types.Scene, quality: str, size: Optional[int], *, tran
 
 
 # ------------------------------------------------------------------------------------------------
-# compositor: neon bloom (5.0 API: compositing_node_group + NodeGroupOutput; Glare options are sockets)
+# compositor: neon bloom + the 'brand' highlight soft clip (5.0 API: compositing_node_group + NodeGroupOutput;
+# Glare options are sockets)
 # ------------------------------------------------------------------------------------------------
-def configure_compositor(scene: bpy.types.Scene, bloom: float, transparent: bool) -> None:
+def _soft_clip_nodes(ng, image_socket, knee: float, chain: list):
+    """Per-channel highlight roll-off (util.soft_clip) on a scene-linear colour socket -> vector socket:
+    min(x, k) + (1 - k)(1 - exp(-max(x - k, 0) / (1 - k)))."""
+    w = max(1e-4, 1.0 - knee)
+
+    def vm(op, a, b=None, c=None):
+        n = ng.nodes.new("ShaderNodeVectorMath")
+        n.operation = op
+        for k, v in enumerate((a, b, c)):
+            if v is None:
+                continue
+            if isinstance(v, (tuple, list)):
+                n.inputs[k].default_value = v
+            else:
+                ng.links.new(v, n.inputs[k])
+        chain.append(n)
+        return n
+    d = vm("MAXIMUM", vm("SUBTRACT", image_socket, (knee,) * 3).outputs[0], (0.0, 0.0, 0.0))
+    t = vm("SCALE", d.outputs[0])
+    t.inputs["Scale"].default_value = -1.0 / w
+    ex = vm("POWER", (math.e,) * 3, t.outputs[0])                  # exp(-(x - k) / (1 - k))
+    lo = vm("MINIMUM", image_socket, (knee,) * 3)
+    hi = vm("MULTIPLY_ADD", ex.outputs[0], (-w,) * 3, (w,) * 3)     # (1 - k)(1 - exp(...))
+    return vm("ADD", lo.outputs[0], hi.outputs[0]).outputs[0]
+
+
+def configure_compositor(scene: bpy.types.Scene, bloom: float, transparent: bool, soft_clip: float = 0.0) -> None:
     """Neon bloom: Glare('Bloom') on the *Emission* pass only (a bright white plate must not glow), added
     onto the image. With a transparent film the glow would fall on alpha = 0 pixels and be lost in the
-    PNG, so its luminance is folded into the alpha (premultiplied, so it composites correctly)."""
+    PNG, so its luminance is folded into the alpha (premultiplied, so it composites correctly).
+
+    ``soft_clip`` (knee, 'brand' colour mode): the highlight roll-off of util.soft_clip, applied last (after the
+    bloom) to the scene-linear image; the Standard view transform then encodes it. Alpha is kept."""
     vl = scene.view_layers[0]
-    if bloom <= 0.0:
+    bloom_on = bloom > 0.0
+    clip = float(soft_clip or 0.0)
+    clip = clip if 0.0 < clip < 1.0 else 0.0
+    if not bloom_on and not clip:
         if scene.render.use_compositing:
             scene.render.use_compositing = False
         if vl.use_pass_emit:
             vl.use_pass_emit = False
         return
-    if not vl.use_pass_emit:
-        vl.use_pass_emit = True
-    name = "BIS Bloom Alpha" if transparent else "BIS Bloom"
+    if vl.use_pass_emit != bloom_on:
+        vl.use_pass_emit = bloom_on
+    name = (("BIS Bloom" if bloom_on else "BIS Comp") + (" Alpha" if bloom_on and transparent else "")
+            + (f" Clip {clip:.4f}" if clip else ""))
     ng = bpy.data.node_groups.get(name)
     if ng is None:
         ng = bpy.data.node_groups.new(name, "CompositorNodeTree")
         ng.interface.new_socket("Image", in_out="OUTPUT", socket_type="NodeSocketColor")
         rl = ng.nodes.new("CompositorNodeRLayers")
-        gl = ng.nodes.new("CompositorNodeGlare")
-        gl.name = "BIS Glare"
-        gl.inputs["Type"].default_value = "Bloom"
-        gl.inputs["Quality"].default_value = "High"
-        add = ng.nodes.new("ShaderNodeMix")
-        add.data_type = "RGBA"
-        add.blend_type = "ADD"
-        add.inputs[0].default_value = 1.0
         out = ng.nodes.new("NodeGroupOutput")
-        ng.links.new(rl.outputs["Emission"], gl.inputs["Image"])
-        ng.links.new(rl.outputs["Image"], add.inputs[6])
-        ng.links.new(gl.outputs["Glare"], add.inputs[7])
-        chain = [rl, gl, add]
-        if transparent:
-            bw = ng.nodes.new("CompositorNodeRGBToBW")
-            sub = ng.nodes.new("ShaderNodeMath")        # drop the faint far haze (no veil over the frame)
-            sub.name = "BIS Haze"
-            sub.operation = "SUBTRACT"
-            mul = ng.nodes.new("ShaderNodeMath")
-            mul.name = "BIS Haze Gain"
-            mul.operation = "MULTIPLY"
-            mul.use_clamp = True
-            mx = ng.nodes.new("ShaderNodeMath")
-            mx.operation = "MAXIMUM"
+        chain = [rl]
+        image, alpha = rl.outputs["Image"], None
+        if bloom_on:
+            gl = ng.nodes.new("CompositorNodeGlare")
+            gl.name = "BIS Glare"
+            gl.inputs["Type"].default_value = "Bloom"
+            gl.inputs["Quality"].default_value = "High"
+            add = ng.nodes.new("ShaderNodeMix")
+            add.data_type = "RGBA"
+            add.blend_type = "ADD"
+            add.inputs[0].default_value = 1.0
+            ng.links.new(rl.outputs["Emission"], gl.inputs["Image"])
+            ng.links.new(image, add.inputs[6])
+            ng.links.new(gl.outputs["Glare"], add.inputs[7])
+            chain += [gl, add]
+            image = add.outputs[2]
+            if transparent:
+                bw = ng.nodes.new("CompositorNodeRGBToBW")
+                sub = ng.nodes.new("ShaderNodeMath")        # drop the faint far haze (no veil over the frame)
+                sub.name = "BIS Haze"
+                sub.operation = "SUBTRACT"
+                mul = ng.nodes.new("ShaderNodeMath")
+                mul.name = "BIS Haze Gain"
+                mul.operation = "MULTIPLY"
+                mul.use_clamp = True
+                mx = ng.nodes.new("ShaderNodeMath")
+                mx.operation = "MAXIMUM"
+                ng.links.new(gl.outputs["Glare"], bw.inputs["Image"])
+                ng.links.new(bw.outputs[0], sub.inputs[0])
+                ng.links.new(sub.outputs[0], mul.inputs[0])
+                ng.links.new(rl.outputs["Alpha"], mx.inputs[0])
+                ng.links.new(mul.outputs[0], mx.inputs[1])
+                chain += [bw, sub, mul, mx]
+                alpha = mx.outputs[0]
+        if clip:
+            image = _soft_clip_nodes(ng, image, clip, chain)
+            if alpha is None:
+                alpha = rl.outputs["Alpha"]          # the vector math drops alpha: give the film's back
+        if alpha is not None:
             sa = ng.nodes.new("CompositorNodeSetAlpha")
             sa.inputs["Type"].default_value = "Replace Alpha"
-            ng.links.new(gl.outputs["Glare"], bw.inputs["Image"])
-            ng.links.new(bw.outputs[0], sub.inputs[0])
-            ng.links.new(sub.outputs[0], mul.inputs[0])
-            ng.links.new(rl.outputs["Alpha"], mx.inputs[0])
-            ng.links.new(mul.outputs[0], mx.inputs[1])
-            ng.links.new(add.outputs[2], sa.inputs["Image"])
-            ng.links.new(mx.outputs[0], sa.inputs["Alpha"])
-            ng.links.new(sa.outputs["Image"], out.inputs[0])
-            chain += [bw, sub, mul, mx, sa]
-        else:
-            ng.links.new(add.outputs[2], out.inputs[0])
+            ng.links.new(image, sa.inputs["Image"])
+            ng.links.new(alpha, sa.inputs["Alpha"])
+            chain.append(sa)
+            image = sa.outputs["Image"]
+        ng.links.new(image, out.inputs[0])
         for i, n in enumerate(chain + [out]):
             n.location = (i * 220, 0)
-    # icon framing (QA round 3 #8): the glow hugs the tubes instead of spilling far past the plate — only the
-    # bright cores bloom (threshold), over a short reach (size), and the faint far haze is not folded into alpha
-    gl = ng.nodes["BIS Glare"]
-    gl.inputs["Threshold"].default_value = BLOOM_THRESHOLD
-    gl.inputs["Strength"].default_value = 0.3 + 0.9 * bloom
-    gl.inputs["Size"].default_value = 0.2 + 0.3 * bloom
-    if "BIS Haze" in ng.nodes:
-        ng.nodes["BIS Haze"].inputs[1].default_value = 0.1
-        ng.nodes["BIS Haze Gain"].inputs[1].default_value = 1.6
+    if bloom_on:
+        # icon framing (QA round 3 #8): the glow hugs the tubes instead of spilling far past the plate — only the
+        # bright cores bloom (threshold), over a short reach (size), and the faint far haze is not folded into alpha
+        gl = ng.nodes["BIS Glare"]
+        gl.inputs["Threshold"].default_value = BLOOM_THRESHOLD
+        gl.inputs["Strength"].default_value = 0.3 + 0.9 * bloom
+        gl.inputs["Size"].default_value = 0.2 + 0.3 * bloom
+        if "BIS Haze" in ng.nodes:
+            ng.nodes["BIS Haze"].inputs[1].default_value = 0.1
+            ng.nodes["BIS Haze Gain"].inputs[1].default_value = 1.6
     if scene.compositing_node_group != ng:
         scene.compositing_node_group = ng
-    scene.render.use_compositing = True
+    if not scene.render.use_compositing:
+        scene.render.use_compositing = True
 
 
 # ------------------------------------------------------------------------------------------------

@@ -87,7 +87,8 @@ export type AppearanceId = 'light' | 'dark' | 'clear-light' | 'clear-dark' | 'ti
 export type Quality = 'draft' | 'preview' | 'final' | 'ultra'
 export interface RenderSettings {
   quality: Quality; size?: number | null
-  colorMode: 'neutral' | 'standard' | 'agx' | 'agx-punchy'
+  /** 'brand' (round 5): Standard + highlight soft clip — blender_worker's default for a missing / unknown mode. */
+  colorMode: 'brand' | 'neutral' | 'standard' | 'agx' | 'agx-punchy'
   backdrop: 'transparent' | 'color' | 'wallpaper'; backdropColor: ColorHex
   autoPreview: boolean
 }
@@ -200,7 +201,7 @@ export interface Presets {
   platforms: Record<string, PlatformSpec>
   appearances: Record<AppearanceId, { label: string; short: string }>
   quality: Record<Quality, QualitySpec>
-  colorModes: Record<string, { label: string; viewTransform: string; look: string }>
+  colorModes: Record<string, { label: string; viewTransform: string; look: string; softClip?: number; description?: string }>
   looks: Record<string, Look>
 }
 

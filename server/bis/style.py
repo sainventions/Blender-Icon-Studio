@@ -6,12 +6,18 @@
 * :func:`apply_style`   — apply a StyleSpec to a project (pure; see the StyleSpec docstring in models.py).
 * :func:`restyle_project` — load → safe radii (``bis.svg.build_geometry``, hash-cached) → apply → save.
 
-Apply rules (StyleSpec): every layer gets ``layerDefaults`` (material/depth/shadow/mode) or
+Apply rules (StyleSpec): every layer gets ``layerDefaults`` (material/depth/shadow) or
 ``layerMaterials[i]`` (by index from the bottom, clamped to the last entry); the requested bevel is clamped to
 ``0.9 × safeRadius`` of each layer; layers are restacked ``z_i = i × zGap`` (``zGap`` None = keep z); plate
 material/thickness/bevel are copied (+ fill/shape when not None); lighting, camera, ``render.colorMode`` and
 ``appearances.tint`` are copied when given. Per-layer *material* overrides of the dark/mono appearances are
 dropped so the look shows in every rendition.
+
+Layer mode (round 5): ``layerDefaults.mode`` None — every look in presets.json, and every extracted style
+unless its source's user fused its layers into 'combined' on purpose — keeps each layer's own mode. The SVG pipeline derives
+that mode per icon from its art (tiles of one shape → one 'combined' body, ``bis.svg.tiling``), so a look or an
+Icon Pack never turns a tiled icon's 'combined' layer back into seamed 'individual' pieces. A non-None mode (a
+pasted/explicit StyleSpec) is applied to every layer, and the bevel is clamped to that mode's safe radius.
 """
 from __future__ import annotations
 
@@ -77,12 +83,35 @@ def resolve_look(presets: Any, look_id: str) -> StyleSpec:
 
 
 # ---------------------------------------------------------------------------------------------- extract
-def extract_style(project: Project, *, plate_fill: Optional[bool] = None, plate_shape: bool = False) -> StyleSpec:
+def extracted_mode(layers: list, auto_modes: Optional[Mapping[str, str]]) -> Optional[str]:
+    """The ``layerDefaults.mode`` a copied style carries. Rule (round 5): 'combined' ONLY when the user fused
+    the layers on purpose — every given layer is 'combined' and at least one of them is not what the SVG
+    pipeline's tiling heuristic picks for its art (`auto_modes`: layer id → auto mode); otherwise None (= keep
+    each target layer's own, art-derived mode). A mode is a property of an icon's geometry (tiles of one
+    shape vs separate pieces), not of a look: copying an untouched icon's modes would fuse another icon's
+    separate pieces or re-seam its tiled layers. 'individual' is never copied: it would turn the targets'
+    tiled 'combined' bodies back into seamed pieces (QA round 4 #8), and it cannot be told apart from the
+    default of a project saved before the tiling heuristic existed. Unknown auto modes (no SVG pipeline) →
+    None."""
+    if not layers or not auto_modes:
+        return None
+    if any(l.mode != "combined" for l in layers):
+        return None
+    if any(l.id in auto_modes and auto_modes[l.id] != "combined" for l in layers):
+        return "combined"
+    return None
+
+
+def extract_style(project: Project, *, plate_fill: Optional[bool] = None, plate_shape: bool = False,
+                  auto_modes: Optional[Mapping[str, str]] = None) -> StyleSpec:
     """The transferable look of `project` ("Copy style").
 
     * layerDefaults: material/shadow of the dominant material among the visible layers (most layers, ties →
       the higher one; its top-most layer is the representative). The bevel is the largest bevel among those
       layers (builder clamping only ever lowers a bevel, so the largest is closest to what was requested).
+      ``mode`` is None unless the user fused the visible layers into 'combined' bodies on purpose — see
+      :func:`extracted_mode`; `auto_modes` (layer id → the pipeline's auto mode, :meth:`ProjectStore.auto_modes`)
+      tells the two apart. Without it the mode is never copied.
     * layerMaterials: every layer's material by index from the bottom — only when they are not all equal.
     * zGap: median z step between neighbouring layers (None for a single layer = keep the target's z).
     * plate: material/thickness/bevel always; ``fill`` when `plate_fill` is True, or (None = auto) when the
@@ -103,10 +132,9 @@ def extract_style(project: Project, *, plate_fill: Optional[bool] = None, plate_
         depth = rep.depth.model_copy(deep=True)
         depth.z = 0.0
         depth.bevel = max(l.depth.bevel for l in same)
-        modes = Counter(l.mode for l in visible)
-        mode = "combined" if modes["combined"] > modes["individual"] else "individual"
         defaults = StyleLayerDefaults(material=rep.material.model_copy(deep=True), depth=depth,
-                                      shadow=rep.shadow.model_copy(deep=True), mode=mode)
+                                      shadow=rep.shadow.model_copy(deep=True),
+                                      mode=extracted_mode(visible, auto_modes))
         mats = [l.material.model_copy(deep=True) for l in layers]
         if any(m != defaults.material for m in mats):
             layer_materials = mats
@@ -150,7 +178,8 @@ def clamp_bevel(bevel: float, safe_radius: float) -> float:
 
 def apply_style(project: Project, style: StyleSpec, safe_radii: Optional[Mapping[str, float]] = None) -> Project:
     """Return a restyled deep copy of `project` (the input is not modified). `safe_radii` maps layer id →
-    ``LayerGeometry.safeRadius``; layers missing from it keep the requested bevel unclamped."""
+    ``LayerGeometry.safeRadius`` (of the mode each layer ends up with); layers missing from it keep the requested
+    bevel unclamped. ``layerDefaults.mode`` None keeps every layer's own mode."""
     p = project.model_copy(deep=True)
     radii = safe_radii or {}
     ld = style.layerDefaults
@@ -165,7 +194,8 @@ def apply_style(project: Project, style: StyleSpec, safe_radii: Optional[Mapping
             depth.bevel = clamp_bevel(depth.bevel, sr)
         layer.depth = depth
         layer.shadow = ld.shadow.model_copy(deep=True)
-        layer.mode = ld.mode
+        if ld.mode is not None:
+            layer.mode = ld.mode
     for ov in (p.appearances.dark, p.appearances.mono):
         for lo in ov.layers.values():
             lo.material = None
@@ -197,8 +227,11 @@ def resolve_style_request(
     load_project: Callable[[str], Project],
     *,
     allow_none: bool = False,
+    extract: Optional[Callable[[str], StyleSpec]] = None,
 ) -> Optional[StyleSpec]:
     """StyleSpec named by a StyleRequest / BatchRequest (exactly one of look / style / fromProject).
+    `extract` (project id → its style; default: :func:`extract_style` of `load_project`, which never copies
+    layer modes) — the server passes :func:`project_style`, which knows the pipeline's auto modes.
 
     Raises StyleError (none or several given; none is allowed with `allow_none` → returns None),
     LookNotFound, or the store's ProjectNotFound for an unknown ``fromProject``."""
@@ -213,15 +246,28 @@ def resolve_style_request(
         return resolve_look(presets, req.look)
     if req.style is not None:
         return req.style.model_copy(deep=True)
+    if extract is not None:
+        return extract(req.fromProject)
     return extract_style(load_project(req.fromProject))
 
 
+def project_style(store: "ProjectStore", pid: str, *, plate_fill: Optional[bool] = None,
+                  plate_shape: bool = False) -> StyleSpec:
+    """:func:`extract_style` of the stored project `pid`, with the pipeline's auto layer modes (so a mode the
+    user picked on purpose is copied and an art-derived one is not)."""
+    project = store.load(pid)
+    return extract_style(project, plate_fill=plate_fill, plate_shape=plate_shape,
+                         auto_modes=store.auto_modes(project))
+
+
 def layer_safe_radii(store: "ProjectStore", project: Project, style: StyleSpec) -> dict[str, float]:
-    """Safe radius of every layer *as the style will build it* (the radius depends on the layer mode).
-    Uses the hash-cached geometry bundle, so the following render reuses it."""
-    probe = project.model_copy(deep=True)
-    for layer in probe.layers:
-        layer.mode = style.layerDefaults.mode
+    """Safe radius of every layer *as the style will build it* (the radius depends on the layer mode; a None
+    style mode keeps each layer's own). Uses the hash-cached geometry bundle, so the following render reuses it."""
+    probe = project
+    if style.layerDefaults.mode is not None:
+        probe = project.model_copy(deep=True)
+        for layer in probe.layers:
+            layer.mode = style.layerDefaults.mode
     bundle, _ = store.geometry(probe)
     return {lid: float(lg.safeRadius) for lid, lg in bundle.layers.items()}
 

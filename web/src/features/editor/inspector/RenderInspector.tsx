@@ -3,6 +3,7 @@ import { Box, Download, History, Image as ImageIcon, Paintbrush, Play, RotateCcw
 import type { Project, Quality } from '../../../types'
 import { errorMessage, systemApi } from '../../../api'
 import { cn, formatSeconds, relativeTime } from '../../../lib/format'
+import { colorModeOptions, effectiveColorMode } from '../../../lib/colorModes'
 import { appearanceLabel, engineLabel } from '../../../lib/labels'
 import { useAppStore } from '../../../store/app'
 import { useEditor } from '../../../store/editor'
@@ -80,11 +81,14 @@ export function RenderInspector() {
       </Section>
 
       <Section id="render.look" title="Look" icon={<Paintbrush />}>
-        <Row label="Colour" hint="View transform. Neutral (Khronos PBR) keeps brand colours accurate.">
+        <Row
+          label="Colour"
+          hint="View transform. Brand-exact (the default) shows every SVG colour exactly and rolls highlights off softly; Neutral is Khronos PBR Neutral."
+        >
           <Select
-            value={r.colorMode}
+            value={effectiveColorMode(r.colorMode, presets)}
             onChange={(v) => setRender('colorMode', { colorMode: v as Project['render']['colorMode'] })}
-            options={Object.entries(presets.colorModes).map(([id, m]) => ({ value: id, label: m.label, description: `${m.viewTransform}${m.look !== 'None' ? ` · ${m.look}` : ''}` }))}
+            options={colorModeOptions(presets)}
             className="flex-1"
           />
         </Row>

@@ -83,6 +83,9 @@ def test_contact_sheet_layout(tmp_path):
     reds = sum(1 for px in im.getdata() if px == (255, 0, 0))
     assert reds > 150 * 150                                          # the red icon fills its tile
     assert make_contact_sheet([], tmp_path / "empty.png").is_file()
+    # multi-line error messages (pydantic validation errors) used to fail the whole sheet - and the batch job
+    multi = [Tile("Maps", None, "1 validation error for Project\nlayers.0.mode\n  Input should be 'individual'")]
+    assert make_contact_sheet(multi, tmp_path / "multi.png", "Icon Pack\nx", "1 icon\n1 failed").is_file()
 
 
 # ---------------------------------------------------------------------------------------------- validation
@@ -131,6 +134,27 @@ def test_batch_of_samples_with_a_look(ctx):
     sheet = _png(c, res["contactSheet"])
     assert res["contactSheet"] == f"/files/batches/{job['id']}/contact-sheet.png" and res["url"] == res["contactSheet"]
     assert sheet.size[0] >= 3 * 192 and sheet.convert("RGB").getpixel((3, 3)) == (18, 18, 22)
+
+
+@needs_svg
+@pytest.mark.parametrize("style", [{"look": "crystal"}, {"look": "liquid-glass"}, {"fromProject": "calc"}])
+def test_batch_keeps_tiling_combined_layers(ctx, style):
+    """QA round 4 #8: in an Icon Pack with a look (or another icon's copied style), Maps and Gmail - whose tiled
+    pieces the pipeline builds as ONE 'combined' body - came back 'individual' (seams in the viewport). With
+    the round-5 contract (looks carry no mode) the round-4 server even wrote ``mode: null`` and failed both."""
+    c = ctx.client
+    if "fromProject" in style:
+        style = {"fromProject": c.post("/api/projects", json={"sample": "Calculator"}).json()["id"]}
+    r = c.post("/api/batch", json={"sources": [{"sample": "Maps"}, {"sample": "Gmail"}], "size": 64, **style})
+    assert r.status_code == 200, r.text
+    job = wait_job(c, r.json()["id"])
+    assert job["state"] == "done" and job["result"]["failed"] == 0, job
+    renders = {a["out"]: a for _m, cmd, a in ctx.bridge.calls if cmd == "render"}
+    for it in job["result"]["items"]:
+        p = c.get(f"/api/projects/{it['projectId']}").json()
+        assert [l["mode"] for l in p["layers"]] == ["combined"], (it["name"], style)
+        sent = next(a for out, a in renders.items() if it["projectId"] in out.replace("\\", "/"))
+        assert [l["mode"] for l in sent["project"]["layers"]] == ["combined"]   # what the worker was asked to build
 
 
 @needs_svg

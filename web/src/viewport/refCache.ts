@@ -13,11 +13,14 @@ interface Entry<V> {
 
 export class RefCache<K extends string, V> {
   private entries = new Map<K, Entry<V>>()
+  private readonly destroy: (value: V, key: K) => void
+  private readonly graceMs: number
 
-  constructor(
-    private readonly destroy: (value: V, key: K) => void,
-    private readonly graceMs = 1500,
-  ) {}
+  // (no TS parameter properties: the node tests import this module with type stripping only)
+  constructor(destroy: (value: V, key: K) => void, graceMs = 1500) {
+    this.destroy = destroy
+    this.graceMs = graceMs
+  }
 
   get size(): number {
     return this.entries.size

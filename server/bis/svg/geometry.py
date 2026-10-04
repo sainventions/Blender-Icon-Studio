@@ -40,8 +40,10 @@ SMOOTH_CORNER_DEG = 25.0      # turning angles above this stay sharp corners
 SMOOTH_MAX_BULGE = 0.006      # art units (~1.5 px on a 500 px icon): straighten if a curve bulges more
 SMOOTH_TRACED_MIN_SEGMENTS = 6     # raster traces: smooth every contour ...
 SMOOTH_TRACED_CORNER_DEG = 50.0    # ... keeping only clear corners (the trace is already sub-pixel smooth)
-SAFE_RADIUS_AREA_TOL = 0.02   # morphological opening may remove <= 2 % of the area
+SAFE_RADIUS_AREA_TOL = 0.02   # morphological opening may remove <= 2 % of a part's area
 SAFE_RADIUS_CAP = 0.5         # art units
+SAFE_RADIUS_MIN = 0.004       # art units (hygiene.MICRO, ~1 px): separate slivers thinner than this that hold
+                              # <= SAFE_RADIUS_AREA_TOL of the layer's area do not limit its radius
 REGION_Z_STEP = 0.001         # zSub per translucent overlap level
 TEXTURE_SIZE = 2048
 TEXTURE_BUDGET = ((8, 2048), (24, 1024))  # (max layers, max texture px); more layers -> 512 px
@@ -322,48 +324,70 @@ def splines_to_d(splines: Sequence) -> str:
 # ----------------------------------------------------------------------------------------------
 # safe radius
 # ----------------------------------------------------------------------------------------------
+def _opening_loss(parts: np.ndarray, areas: np.ndarray, r: np.ndarray) -> np.ndarray:
+    """Per part: the share of its area a morphological opening with radius ``r[i]`` destroys - 1.0 when
+    the part vanishes, else the lost *thin features* (lost pieces longer than 2.5 r: bars, hairlines,
+    spikes). Plain convex-corner rounding (pieces ~r in size) is not a thin feature: a round bevel
+    simply rounds such corners."""
+    opened = shapely.buffer(shapely.buffer(parts, -r, quad_segs=6), r, quad_segs=6)
+    gone = shapely.is_empty(opened) | (shapely.area(opened) <= 0.0)
+    try:
+        lost = shapely.difference(parts, opened)
+    except shapely.errors.GEOSException:
+        try:
+            lost = shapely.difference(parts, opened, grid_size=max(float(np.max(r)) * 1e-3, 1e-9))
+        except shapely.errors.GEOSException:  # last resort: plain area difference
+            out = np.clip(areas - shapely.area(opened), 0.0, None) / areas
+            out[gone] = 1.0
+            return out
+    pieces, owner = shapely.get_parts(lost, return_index=True)
+    out = np.zeros(len(parts))
+    if len(pieces):
+        b = shapely.bounds(pieces)
+        thin = np.maximum(b[:, 2] - b[:, 0], b[:, 3] - b[:, 1]) > 2.5 * r[owner]
+        np.add.at(out, owner[thin], shapely.area(pieces[thin]))
+    out = out / areas
+    out[gone] = 1.0
+    return out
+
+
 def safe_radius(geoms: Sequence, area_tol: float = SAFE_RADIUS_AREA_TOL, cap: float = SAFE_RADIUS_CAP) -> float:
-    """Largest r such that a morphological opening with radius r removes at most `area_tol` of the
-    total area as *thin features* - lost pieces longer than 2.5 r (bars, hairlines, spikes).
-    Plain convex-corner rounding (pieces ~r in size) is not a thin feature: a round bevel simply
-    rounds such corners. Geometries in art units; binary search on vectorised shapely buffers."""
+    """Largest bevel radius every connected PART of `geoms` takes without inverting: the minimum over
+    the parts of the largest r whose morphological opening keeps the part (a part narrower than 2 r
+    has no inset outline - the round bevel inverts it as a whole) and removes at most `area_tol` of
+    its area as thin features (:func:`_opening_loss`). A layer has ONE bevel, so its smallest part
+    sets the limit: round 5 - measured on the whole union (√(area/π) bound, a vanished small part not
+    counted), a 'combined' body with small separate parts reported a radius far above what those parts
+    take (Ti84's keys 0.326 vs 0.039, Google Calendar's digits 0.456 vs 0.025). Separate slivers thinner
+    than SAFE_RADIUS_MIN that together hold <= `area_tol` of the area (boolean debris below the
+    builders' resolution) are ignored. Geometries in art units; per-part bisection on vectorised
+    shapely buffers."""
     arr = np.array([g for g in geoms if g is not None and not g.is_empty and g.area > 0], dtype=object)
     if len(arr) == 0:
         return 0.0
     arr = shapely.make_valid(shapely.simplify(arr, 5e-4))  # 0.025 % of the icon: plenty, much faster
-    arr = arr[~shapely.is_empty(arr)]
-    if len(arr) == 0:
+    parts = shapely.get_parts(arr[~shapely.is_empty(arr)])
+    parts = parts[np.isin(shapely.get_type_id(parts), (3, 6))]   # (Multi)Polygons only
+    areas = shapely.area(parts) if len(parts) else np.zeros(0)
+    parts, areas = parts[areas > 0], areas[areas > 0]
+    if len(parts) == 0:
         return 0.0
-    areas = shapely.area(arr)
-    total = float(areas.sum())
-    hi = float(min(cap, max(math.sqrt(a / math.pi) for a in areas)))
-
-    def loss(r: float) -> float:
-        opened = shapely.buffer(shapely.buffer(arr, -r, quad_segs=6), r, quad_segs=6)
-        try:
-            lost = shapely.difference(arr, opened)
-        except shapely.errors.GEOSException:
-            try:
-                lost = shapely.difference(arr, opened, grid_size=max(r * 1e-3, 1e-9))
-            except shapely.errors.GEOSException:  # last resort: plain area difference
-                return float(np.clip(areas - shapely.area(opened), 0.0, None).sum()) / total
-        parts = shapely.get_parts(lost)
-        if len(parts) == 0:
-            return 0.0
-        b = shapely.bounds(parts)
-        extent = np.maximum(b[:, 2] - b[:, 0], b[:, 3] - b[:, 1])
-        return float(shapely.area(parts[extent > 2.5 * r]).sum()) / total
-
-    if loss(hi) <= area_tol:
-        return round(hi, 5)
-    lo = 0.0
-    for _ in range(14):
-        mid = (lo + hi) / 2
-        if loss(mid) <= area_tol:
-            lo = mid
-        else:
-            hi = mid
-    return round(lo, 5)
+    hi = np.minimum(cap, np.sqrt(areas / math.pi))
+    res = hi.copy()
+    todo = np.nonzero(_opening_loss(parts, areas, hi) > area_tol)[0]
+    if len(todo):
+        lo, up = np.zeros(len(todo)), hi[todo].copy()
+        sub, sub_a = parts[todo], areas[todo]
+        for _ in range(14):
+            mid = (lo + up) / 2
+            ok = _opening_loss(sub, sub_a, mid) <= area_tol
+            lo = np.where(ok, mid, lo)
+            up = np.where(ok, up, mid)
+        res[todo] = lo
+    sliver = res < SAFE_RADIUS_MIN
+    if sliver.any() and not sliver.all() and areas[sliver].sum() <= area_tol * areas.sum():
+        res = res[~sliver]
+    return round(float(res.min()), 5)
 
 
 # ----------------------------------------------------------------------------------------------

@@ -450,6 +450,29 @@ def test_find_device_sweep_has_no_pinholes(import_icon):
         assert L.depth.bevel == pytest.approx(0.045)
 
 
+@pytest.mark.parametrize("name,limit", [("Ti84", 0.041), ("Google Calendar", 0.03)])
+def test_combined_layers_with_small_parts_clamp_the_bevel(name, limit, import_icon):
+    """svg review round 4 #3: a 'combined' body's safe radius is limited by its smallest separate part
+    (Ti84's keypad face: keys 0.079 tall, was 0.326; Google Calendar's body: the "31" digits, was 0.456),
+    so the default bevel is clamped to what those parts take and no part's inset outline inverts."""
+    res, project, pdir, bundle = _bundle(import_icon, name)
+    combined = [L for L in project.layers if L.mode == "combined"]
+    assert combined
+    for L in combined:
+        lg = bundle.layers[L.id]
+        outers = [Polygon(_ring(s)) for s in lg.silhouette if not s.hole]
+        if len(outers) < 2:
+            continue
+        smallest = min(outers, key=lambda p: p.area)
+        inr = 0.0
+        for r in np.linspace(0.001, 0.2, 400):      # inradius of the smallest part (holes ignored: an upper bound)
+            if smallest.buffer(-r).is_empty:
+                break
+            inr = r
+        assert lg.safeRadius <= inr + 2e-3 and lg.safeRadius < limit, (L.id, lg.safeRadius, inr)
+        assert L.depth.bevel <= 0.9 * lg.safeRadius + 1e-5
+
+
 def test_smoothing_keeps_the_few_curve_segments_exact():
     """A mostly-straight contour (dense polyline arc + ONE cubic, e.g. the plate clip's corner arc
     on a traced outline) is smoothed through its vertices - the cubic must not be flattened."""

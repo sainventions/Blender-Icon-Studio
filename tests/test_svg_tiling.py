@@ -217,6 +217,47 @@ def test_frame_lining_joins_the_frame(name, import_icon):
 
 
 # ----------------------------------------------------------------------------------------------
+# prints: a glyph on a card that another object lies across stays on its card's plane (round 5)
+# ----------------------------------------------------------------------------------------------
+def test_translate_print_stays_on_its_card(import_icon):
+    """svg review r4 #2 / QA r4 #5: once the fold joined the G card's combined layer, the 文 glyph got
+    a plane of its own between the back card and the G card lying across it, and rendered as a pale
+    glass slab with white rims (文 zone ΔE 4.2 -> 2.9 draft, 4.1 -> 2.8 preview with it on its card).
+    Now 文 + back card are one combined body; the G card group and the white G keep their planes."""
+    res, project, pdir = import_icon(corpus("Translate"))
+    paint = {e.id: getattr(e.paint, "color", e.paint.type) for e in res.elements}
+    assert len(project.layers) == 3, _layers(project)
+    back, front, top = project.layers
+    assert back.mode == "combined" and "#657b84" in [paint[e] for e in back.elementIds]   # card + 文
+    assert front.mode == "combined" and len(front.elementIds) == 3                      # G card + fold + pink
+    assert top.mode == "individual" and [paint[e] for e in top.elementIds] == ["#eff3f3"]  # the white G
+
+
+PRINTS = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <path id="backcard" d="M40 20H90V80H40Z" fill="#9aa5b1"/>
+  <path id="print" d="M55 40H80V60H55Z" fill="#3d4a55"/>
+  <path id="hidden" d="M42 30H52V70H42Z" fill="#ff15dc"/>
+  <path id="frontcard" d="M10 25H58V75H10Z" fill="#4285f4"/>
+  <path id="glyph" d="M20 40H40V60H20Z" fill="#ffffff"/>
+</svg>"""
+
+
+def test_synthetic_print_pairs(import_icon):
+    """`print` (on the back card, partly under the front card that lies across it) joins the back
+    card; `hidden` (on the back card too, but mostly under the front card) does not; the front
+    card's own glyph (nothing covers it) keeps its own plane."""
+    res, project, pdir = import_icon(PRINTS, name="prints.svg")
+    store = svg.read_store(pdir)
+    oid = {e.id: e.meta.get("orig_id") for e in store.elems}
+    fg = [i for i, e in enumerate(store.elems) if e.id not in store.plate_ids]
+    pairs = tiling.print_pairs(store.elems, fg, store.edges, store.inside, store.tolerance)
+    assert [(oid[store.elems[i].id], oid[store.elems[j].id]) for i, j, _s in pairs] == [("backcard", "print")]
+    of = {oid[e]: L.id for L in project.layers for e in L.elementIds}
+    assert of["print"] == of["backcard"] and of["glyph"] != of["frontcard"], _layers(project)
+    assert of["hidden"] != of["backcard"]
+
+
+# ----------------------------------------------------------------------------------------------
 # SourceInfo.fullBleed
 # ----------------------------------------------------------------------------------------------
 def test_full_bleed_flag(import_icon):
@@ -278,7 +319,7 @@ EXPECTED_COMBINED = {
     "Files_1": ["Blue, Red +2"], "Find Device": ["Blue & White"], "Gmail": ["Red"],
     "Google Calendar": ["Blue"], "Home": ["Blue, Red +2"], "Maps": ["Green, Blue +2"],
     "Play Store": ["Green, Red +2"], "Ti73": ["Gray & Black"], "Ti84": ["White, Light Gray +4"],
-    "Translate": ["Blue & Pink"], "Wallet": ["Blue"],
+    "Translate": ["Light Gray & Cyan", "Blue & Pink"], "Wallet": ["Blue"],
 }
 
 

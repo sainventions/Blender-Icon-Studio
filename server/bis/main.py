@@ -41,7 +41,7 @@ from .schemas import (
     SplitLayerBody,
     SwatchesBody,
 )
-from .style import LookNotFound, StyleError, extract_style, looks, resolve_style_request, restyle_project
+from .style import LookNotFound, StyleError, looks, project_style, resolve_style_request, restyle_project
 from .system import SystemMonitor
 from .util import PathOutsideBase, background
 
@@ -346,14 +346,15 @@ def create_app(
     @api.get("/projects/{pid}/style")
     def get_style(pid: str, plateFill: bool | None = None, shape: bool = False) -> dict:
         """Copy style. plateFill: None = only deliberate system/none plate fills; shape: include the plate shape."""
-        return extract_style(store.load(pid), plate_fill=plateFill, plate_shape=shape).model_dump(mode="json")
+        return project_style(store, pid, plate_fill=plateFill, plate_shape=shape).model_dump(mode="json")
 
     @api.post("/projects/{pid}/style")
     def post_style(pid: str, body: StyleRequest | None = None) -> dict:
         """Apply a look / pasted style / another project's style; saves (broadcasts "saved") and returns it."""
         if not store.exists(pid):
             raise ProjectNotFound(pid)
-        style = resolve_style_request(body or StyleRequest(), presets, store.load)
+        style = resolve_style_request(body or StyleRequest(), presets, store.load,
+                                      extract=lambda src: project_style(store, src))
         return restyle_project(store, pid, style).model_dump(mode="json")
 
     @api.get("/projects/{pid}/geometry")

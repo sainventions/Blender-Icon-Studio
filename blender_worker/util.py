@@ -129,6 +129,36 @@ def pbr_neutral_inverse(rgb: Sequence[float], cap: Sequence[float] = NEUTRAL_CAP
     return tuple(v + off for v in x1)  # type: ignore[return-value]
 
 
+# ------------------------------------------------------------------------------------------------
+# 'brand' colour mode: Standard view transform + a compositor highlight soft clip (render.configure_compositor)
+# ------------------------------------------------------------------------------------------------
+# Per channel, scene-linear: identity up to the knee, then an exponential roll-off toward 1.0 (C1 at the knee):
+#     y = x                                      x <= k
+#     y = 1 - (1 - k) * exp(-(x - k) / (1 - k))  x >  k
+# Paints are pre-compensated with the exact inverse (identity below the knee), so every SVG colour displays
+# exactly — saturated brand colours included (Brave #ff3b00 is out of Khronos PBR Neutral's gamut) — while
+# specular rims and glints roll off smoothly instead of hard-clipping (and hue-skewing) like plain Standard.
+BRAND_KNEE = 0.9
+BRAND_CAP = 0.998           # brightest displayed target of the inverse (255/255 after 8-bit rounding)
+
+
+def soft_clip(rgb: Sequence[float], knee: float = BRAND_KNEE) -> tuple[float, float, float]:
+    """The 'brand' mode's compositor highlight roll-off (scene-linear -> display-linear, per channel)."""
+    w = 1.0 - knee
+    return tuple(v if v <= knee else 1.0 - w * math.exp(-(v - knee) / w) for v in (float(c) for c in rgb))  # type: ignore[return-value]
+
+
+def soft_clip_inverse(rgb: Sequence[float], knee: float = BRAND_KNEE, cap: float = BRAND_CAP) -> tuple[float, float, float]:
+    """Scene-linear radiance that the 'brand' mode displays as the display-linear colour ``rgb`` (targets capped
+    at ``cap``: 1.0 itself needs infinite radiance). Mirrors materials._brand_graph."""
+    w = 1.0 - knee
+    out = []
+    for v in rgb:
+        y = min(max(0.0, float(v)), cap)
+        out.append(y if y <= knee else knee - w * math.log(1.0 - (y - knee) / w))
+    return tuple(out)  # type: ignore[return-value]
+
+
 class Timer:
     def __init__(self):
         self.t0 = time.perf_counter()

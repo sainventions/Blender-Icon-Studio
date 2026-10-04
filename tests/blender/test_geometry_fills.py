@@ -187,7 +187,10 @@ def test_clear_light_glyph_separates_from_the_plate():
     assert L["shadow"]["opacity"] >= A.CLEAR_LIGHT_SHADOW
     assert res["env"]["edgeDark"] == A.CLEAR_EDGE_DARK > 0
     plate = res["project"]["canvas"]["plate"]
-    assert plate["fill"]["color"] == A.CLEAR_LIGHT_PLATE and plate["material"]["preset"] == "frosted_glass"
+    # round 5: a smoky pane (CLEAR_LIGHT_PLATE x CLEAR_LIGHT_SMOKE in linear light) so white glyphs read (L* +25)
+    assert plate["fill"]["color"] == A._scale_hex(A.CLEAR_LIGHT_PLATE, A.CLEAR_LIGHT_SMOKE)
+    assert plate["material"]["preset"] == "frosted_glass"
+    assert A.hex_to_linear(plate["fill"]["color"])[1] < 0.5 * A.hex_to_linear(A.CLEAR_LIGHT_PLATE)[1]
 
 
 def test_clear_dark_keeps_its_rim_and_glow():

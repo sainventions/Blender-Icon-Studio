@@ -20,13 +20,25 @@ import {
   BLENDED_RENDER_ORDER,
   describeMaterial,
   IconMaterial,
+  RASTER_RIM,
   type FakeGlassBinding,
+  type FilmParams,
+  type FlushSpec,
   type IconMaterialSpec,
   type MaterialContext,
+  type PaintTransform,
   type PaintUv,
 } from '../../lib/materials3d'
+import { solidEdge } from '../../lib/overlay3d'
 import { useCached } from '../refCache'
-import { effectiveDepth, geometryCache, layerBodyParts, layerScale, type BodyPart } from '../geometry/layerGeometry'
+import {
+  effectiveDepth,
+  geometryCache,
+  isCombinedBody,
+  layerBodyParts,
+  layerScale,
+  type BodyPart,
+} from '../geometry/layerGeometry'
 import { fillPreviewColor } from '../textures/fillTextures'
 import { assetSoftAlpha, HALO_SOFT_MIN, useTextureAsset } from '../textures/layerTextures'
 import { EXPLODE_SPREAD, useViewportStore } from './store'
@@ -238,11 +250,23 @@ interface LayerBodyProps {
   onTransform: (id: string, t: LayerTransform) => void
   /** Icon-wide luminance range (mono / tint renditions). */
   intentLum: [number, number]
+  /** Mono maps of the rendition (worker env mono / monoCombined `lut`), null = linear stretch (intentLum). */
+  monoLuts: MonoLutTextures | null
+  /** Liquid Glass outline flush with the plate outline (lib/overlay3d.flushParams), null = none. */
+  flush: FlushSpec | null
+  /** Display-space blend films of this rendition (lib/overlay3d.filmParamsFor), keyed `${layerId}:${regionIndex}`. */
+  films: Map<string, FilmParams>
   presets: Presets | null
   /** Liquid Glass self-illumination (worker `lit`). */
   lit: number
-  /** Colour mode 'neutral': paints pre-compensated for Khronos PBR Neutral (worker display_paint). */
-  displayPaint: boolean
+  /** Paint pre-compensation for the colour mode's view transform (worker display_paint). */
+  displayPaint: PaintTransform
+}
+
+/** Mono LUT textures of a rendition (monoLutTexture): per-region pieces / combined bodies. */
+export interface MonoLutTextures {
+  mono: THREE.Texture
+  combined: THREE.Texture
 }
 
 export const LayerBody = memo(function LayerBody(p: LayerBodyProps) {
@@ -261,11 +285,13 @@ export const LayerBody = memo(function LayerBody(p: LayerBodyProps) {
   }, [layer.fill, lg])
   const paint = usePaint(layer.fill, lg.texture || null, fallback)
 
+  const combined = useMemo(() => isCombinedBody(layer, lg), [layer, lg])
+  const monoLut = p.monoLuts ? (combined ? p.monoLuts.combined : p.monoLuts.mono) : null
   const ctx = useMemo<MaterialContext>(() => {
     const [x0, y0, x1, y1] = lg.bbox ?? [-1, -1, 1, 1]
     const intent = entry.spec.intent.intent !== 'color'
     return {
-      paint: intent ? { ...paint.binding, lumRange: p.intentLum } : paint.binding,
+      paint: intent ? { ...paint.binding, lumRange: p.intentLum, monoLut } : paint.binding,
       thickness: depth.thickness,
       modelScale: depth.scale,
       fake: entry.fake ? p.plateBehind : null,
@@ -278,6 +304,8 @@ export const LayerBody = memo(function LayerBody(p: LayerBodyProps) {
       opacity: layer.opacity * paint.opacity,
       lit: p.lit,
       displayPaint: p.displayPaint,
+      flush: p.flush,
+      solidEdge: solidEdge(depth.bevel, lg.safeRadius),
     }
   }, [
     paint,
@@ -286,11 +314,15 @@ export const LayerBody = memo(function LayerBody(p: LayerBodyProps) {
     entry.fake,
     entry.spec,
     p.intentLum,
+    monoLut,
     p.plateBehind,
     p.rimDir,
     p.rimColor,
     p.lit,
     p.displayPaint,
+    p.flush,
+    depth.bevel,
+    lg.safeRadius,
     layer.depth.inflate,
     layer.opacity,
     lg.bbox,
@@ -481,6 +513,7 @@ export const LayerBody = memo(function LayerBody(p: LayerBodyProps) {
           castShadow={castShadow}
           order={BLENDED_RENDER_ORDER.layer + entry.level + Math.min(0.9, Math.max(0, part.zSub) * 10)}
           route={entry.routeBlended}
+          film={part.regionIndex != null ? (p.films.get(`${layer.id}:${part.regionIndex}`) ?? null) : null}
         />
       ))}
       {cards.map(({ card: c, halo }, i) => (
@@ -495,6 +528,7 @@ export const LayerBody = memo(function LayerBody(p: LayerBodyProps) {
           presets={p.presets}
           rimDir={p.rimDir}
           lumRange={p.intentLum}
+          monoLut={p.monoLuts?.mono ?? null}
           displayPaint={p.displayPaint}
           order={BLENDED_RENDER_ORDER.layer + entry.level + 0.95}
           route={entry.routeBlended}
@@ -517,10 +551,17 @@ interface BodyMeshProps {
   order: number
   /** Blended bodies go to the opaque pass (StackEntry.routeBlended). */
   route: boolean
+  /** Display-space blend film of this piece (translucent Liquid Glass, light / dark renditions), null = alpha model. */
+  film: FilmParams | null
 }
 
 /** Returns the material's pass key: `mode|transparent|routed|blended` (blended = needs the back-to-front order). */
 function applyBlend(m: IconMaterial, blend: BlendMode, route: boolean): string {
+  if (m.isFilm) {
+    // Display-space blend film (blending set by applyIconMaterial): opaque pass when routed, like blended bodies.
+    m.transparent = !route
+    return `film|${m.transparent}|${route}|true`
+  }
   // Blend modes only make sense for opaque, non-refractive bodies; glass always composites physically.
   const mode = m.transmission > 0 ? 'normal' : blend
   m.blending = THREE.NormalBlending
@@ -570,6 +611,7 @@ const BodyMesh = memo(function BodyMesh({
   castShadow,
   order,
   route,
+  film,
 }: BodyMeshProps) {
   const store = useViewportStore()
   const invalidate = useThree((s) => s.invalidate)
@@ -580,7 +622,14 @@ const BodyMesh = memo(function BodyMesh({
   useEffect(() => () => material.dispose(), [material])
 
   useLayoutEffect(() => {
-    applyIconMaterial(material, spec, { ...ctx, opacity: ctx.opacity * part.opacity, paintAlpha: part.alpha })
+    // Raster (alpha-traced) pieces: a weaker rim (scene.RASTER_RIM) and never a film.
+    applyIconMaterial(material, spec, {
+      ...ctx,
+      opacity: ctx.opacity * part.opacity,
+      paintAlpha: part.alpha,
+      rimScale: part.alpha ? RASTER_RIM : 1,
+      film: part.alpha ? null : film,
+    })
     const key = applyBlend(material, blend, route)
     if (key !== blendKey.current) {
       blendKey.current = key
@@ -588,7 +637,7 @@ const BodyMesh = memo(function BodyMesh({
     }
     if (meshRef.current) meshRef.current.renderOrder = key.endsWith('|true') ? order : 0
     invalidate()
-  }, [material, spec, ctx, part.opacity, part.alpha, blend, order, route, invalidate])
+  }, [material, spec, ctx, part.opacity, part.alpha, blend, order, route, film, invalidate])
 
   useLayoutEffect(() => {
     const m = meshRef.current
@@ -702,6 +751,7 @@ function RasterCardMesh({
   presets,
   rimDir,
   lumRange,
+  monoLut,
   displayPaint,
   order,
   route,
@@ -716,7 +766,8 @@ function RasterCardMesh({
   presets: Presets | null
   rimDir: THREE.Vector3
   lumRange: [number, number]
-  displayPaint: boolean
+  monoLut: THREE.Texture | null
+  displayPaint: PaintTransform
   order: number
   /** Opaque-pass routing (StackEntry.routeBlended). */
   route: boolean
@@ -735,7 +786,7 @@ function RasterCardMesh({
   const ready = !!asset?.ready
   useLayoutEffect(() => {
     applyIconMaterial(material, spec, {
-      paint: { map: ready ? asset!.texture : null, color: CARD_FALLBACK, lumRange, uv: placement.uv },
+      paint: { map: ready ? asset!.texture : null, color: CARD_FALLBACK, lumRange, uv: placement.uv, monoLut },
       thickness: 0.004,
       fake: null,
       rimDir,
@@ -753,7 +804,7 @@ function RasterCardMesh({
       material.needsUpdate = true
     }
     invalidate()
-  }, [material, spec, asset, ready, placement, lumRange, rimDir, opacity, card.opacity, route, displayPaint, invalidate])
+  }, [material, spec, asset, ready, placement, lumRange, monoLut, rimDir, opacity, card.opacity, route, displayPaint, invalidate])
   const show = !halo || assetSoftAlpha(ready ? asset : null) > HALO_SOFT_MIN
   useLayoutEffect(() => {
     const m = meshRef.current

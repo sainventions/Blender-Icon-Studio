@@ -14,7 +14,8 @@ from typing import Callable, Optional
 
 import bpy
 
-from . import VERSION, geometry, gpu
+from . import VERSION, geometry, gpu, materials
+from . import presets as P
 from . import render as R
 from . import swatches as SW
 from .defaults import APPEARANCE_IDS, QUALITIES, norm_project
@@ -69,7 +70,16 @@ def _project(args: dict) -> dict:
             p = json.load(fh)
     if not isinstance(p, dict):
         raise CommandError("missing 'project'")
-    return norm_project(p)
+    rs = p.get("render") if isinstance(p.get("render"), dict) else {}
+    proj = norm_project(p)
+    # a project without a colour mode renders in the worker's default (P.DEFAULT_COLOR_MODE, 'brand'); unknown
+    # modes fall back to it too (models.RenderSettings' own default is still 'neutral')
+    proj["render"]["colorMode"] = P.color_mode_id(rs.get("colorMode"))
+    return proj
+
+
+def _color_mode(project: dict) -> str:
+    return P.color_mode_id((project.get("render") or {}).get("colorMode"))
 
 
 def _appearance(args: dict, project: dict) -> str:
@@ -136,10 +146,11 @@ def _render_one(ctx: Context, project: dict, bundle: dict, args: dict, out: str,
                              backdrop=backdrop, overrides=overrides, engine=R.tier(quality)["engine"])
     scene = bpy.context.scene
     transparent = info["backdrop"] == "transparent"
+    cm = _color_mode(project)
     settings = R.configure(scene, quality, args.get("size") or project["render"].get("size"),
-                           transparent=transparent, color_mode=project["render"].get("colorMode", "neutral"),
+                           transparent=transparent, color_mode=cm,
                            max_frost=info["maxFrost"], volume=info["volume"], samples=args.get("samples"))
-    R.configure_compositor(scene, info["neonBloom"], transparent)
+    R.configure_compositor(scene, info["neonBloom"], transparent, P.soft_clip_knee(cm))
     build_s = time.perf_counter() - t0
     if progress:
         progress(lo + (hi - lo) * 0.05, "scene built")
@@ -153,7 +164,7 @@ def _render_one(ctx: Context, project: dict, bundle: dict, args: dict, out: str,
         "engine": "cycles" if settings["engine"] == "CYCLES" else "eevee",
         "device": gi["device"], "gpu": gi["gpu"], "samples": settings["samples"], "quality": settings["quality"],
         "appearance": info["appearance"], "backdrop": info["backdrop"], "fullBleed": full_bleed,
-        "colorMode": project["render"].get("colorMode", "neutral"), "wallpaper": info["wallpaper"],
+        "colorMode": cm, "wallpaper": info["wallpaper"],
         "light": info["light"], "stats": info["stats"], "warnings": info["warnings"],
         "memPeakMB": getattr(secs, "mem_peak_mb", 0.0),
     }
@@ -238,11 +249,12 @@ def cmd_save_blend(ctx: Context, args: dict, progress) -> dict:
                              full_bleed=bool(args.get("fullBleed", False)), backdrop=backdrop, editable=True,
                              engine=R.tier(quality)["engine"])
     scene = bpy.context.scene
+    cm = _color_mode(project)
     R.configure(scene, quality, args.get("size"), transparent=info["backdrop"] == "transparent",
-                color_mode=project["render"].get("colorMode", "neutral"), max_frost=info["maxFrost"],
-                volume=info["volume"])
-    R.configure_compositor(scene, info["neonBloom"], info["backdrop"] == "transparent")
+                color_mode=cm, max_frost=info["maxFrost"], volume=info["volume"])
+    R.configure_compositor(scene, info["neonBloom"], info["backdrop"] == "transparent", P.soft_clip_knee(cm))
     scene.render.filepath = "//render.png"
+    materials.layout_all()
     os.makedirs(os.path.dirname(os.path.abspath(out)) or ".", exist_ok=True)
     packed = []
     if args.get("pack", True):
@@ -307,8 +319,13 @@ def cmd_scene_info(ctx: Context, args: dict, progress) -> dict:
                                                              json.loads(cu["bis_outline"]))
     lights = {ob.name: round(float(ob.data.energy), 4) for ob in bpy.data.objects
               if ob.name.startswith("BIS") and ob.type == "LIGHT" and ob.data is not None}
+    sc = bpy.context.scene
+    comp = {"useCompositing": bool(sc.render.use_compositing), "viewTransform": sc.view_settings.view_transform,
+            "group": sc.compositing_node_group.name if sc.compositing_node_group else None}
+    props = {ob.name: {k: [round(float(v), 5) for v in ob[k]] for k in ("bis_blend_t", "bis_blend_e") if k in ob}
+             for ob in bpy.data.objects if ob.name.startswith("BIS") and "bis_blend_t" in ob}
     return {"materials": mats, "objects": objs, "curves": len(bpy.data.curves), "images": len(bpy.data.images),
-            "lights": lights,
+            "lights": lights, "compositor": comp, "film": props,
             "engine": bpy.context.scene.render.engine, "info": {k: v for k, v in ctx.builder.info.items()
                                                                 if k in ("appearance", "backdrop", "stats")}}
 
@@ -336,11 +353,19 @@ def warmup(ctx: Context, full: bool = True, cycles: bool = True) -> dict:
             _render_one(ctx, project, bundle, {"quality": q, "size": size, "samples": 4 if q == "preview" else 8},
                         tmp, None)
             timings[q] = round(time.perf_counter() - t, 3)
-        # second, dark-backdrop appearance variant compiles the clear/tinted (mono) node variants
         if full:
+            # projects saved before the 'brand' default carry render.colorMode 'neutral': its paint variants too
             t = time.perf_counter()
-            _render_one(ctx, project, bundle, {"quality": "draft", "size": 64, "appearance": "clear-dark"}, tmp, None)
-            _render_one(ctx, project, bundle, {"quality": "draft", "size": 64, "appearance": "tinted-dark"}, tmp, None)
+            neutral = dict(project, render=dict(project["render"], colorMode="neutral"))
+            _render_one(ctx, neutral, bundle, {"quality": "draft", "size": 64, "samples": 4}, tmp, None)
+            timings["neutral"] = round(time.perf_counter() - t, 3)
+            # the clear / tinted renditions turn every layer into Liquid Glass with its own (mono) node variants —
+            # the appearance strip renders all four: a reduced scene holds every Liquid Glass role / paint kind
+            t = time.perf_counter()
+            mproj, mbundle = SW.warmup_scene(full, mono=True)
+            for ap in ("clear-dark", "tinted-dark", "clear-light", "tinted-light"):
+                _render_one(ctx, mproj, mbundle, {"quality": "draft", "size": 64, "samples": 4, "appearance": ap},
+                            tmp, None)
             timings["mono"] = round(time.perf_counter() - t, 3)
     finally:
         try:

@@ -905,8 +905,15 @@
     }
   },
   "colorModes": {
+    "brand": {
+      "label": "Brand-exact",
+      "viewTransform": "Standard",
+      "look": "None",
+      "softClip": 0.9,
+      "description": "SVG colours exactly (Standard view transform) plus a highlight soft clip: identity below the knee (linear, per channel); rims and glints roll off smoothly toward white."
+    },
     "neutral": {
-      "label": "Neutral (brand-accurate)",
+      "label": "Neutral (PBR Neutral)",
       "viewTransform": "Khronos PBR Neutral",
       "look": "None"
     },

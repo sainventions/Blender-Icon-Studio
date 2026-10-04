@@ -8,8 +8,8 @@
 import type { RenderSettings } from '../../types'
 
 export type Vec3 = [number, number, number]
-/** 0 = linear (Standard), 1 = Khronos PBR Neutral, 2 = AgX. */
-export type ToneMode = 0 | 1 | 2
+/** 0 = linear (Standard), 1 = Khronos PBR Neutral, 2 = AgX, 3 = 'brand' (Standard + highlight soft clip). */
+export type ToneMode = 0 | 1 | 2 | 3
 
 export interface DisplayTransform {
   mode: ToneMode
@@ -17,12 +17,53 @@ export interface DisplayTransform {
   saturation: number
 }
 
+export type ColorModeId = RenderSettings['colorMode']
+/** The colour modes the viewport knows (shared/presets.json colorModes). */
+export const COLOR_MODES: readonly ColorModeId[] = ['brand', 'neutral', 'standard', 'agx', 'agx-punchy']
+/**
+ * blender_worker/presets.DEFAULT_COLOR_MODE: the mode the worker renders when a project carries no (or an unknown)
+ * render.colorMode — round 5's 'brand'. The live view resolves colour modes the same way.
+ */
+export const DEFAULT_COLOR_MODE: ColorModeId = 'brand'
+
+/** presets.color_mode_id: a known colour mode, else DEFAULT_COLOR_MODE (missing / unknown modes). */
+export function colorModeId(mode: string | null | undefined): ColorModeId {
+  return COLOR_MODES.includes(mode as ColorModeId) ? (mode as ColorModeId) : DEFAULT_COLOR_MODE
+}
+
 /** The display transform Effects.tsx applies for a project colour mode (keep in sync with it). */
-export function displayTransformFor(colorMode: RenderSettings['colorMode']): DisplayTransform {
-  if (colorMode === 'standard') return { mode: 0, saturation: 0 }
-  if (colorMode === 'agx') return { mode: 2, saturation: 0 }
-  if (colorMode === 'agx-punchy') return { mode: 2, saturation: AGX_PUNCHY_SATURATION }
+export function displayTransformFor(colorMode: string | null | undefined): DisplayTransform {
+  const cm = colorModeId(colorMode)
+  if (cm === 'standard') return { mode: 0, saturation: 0 }
+  if (cm === 'agx') return { mode: 2, saturation: 0 }
+  if (cm === 'agx-punchy') return { mode: 2, saturation: AGX_PUNCHY_SATURATION }
+  if (cm === 'brand') return { mode: 3, saturation: 0 }
   return { mode: 1, saturation: 0 }
+}
+
+// ------------------------------------------------------------------------------------------------ 'brand'
+/**
+ * blender_worker/util.BRAND_KNEE / BRAND_CAP ('brand' colour mode): the Standard view transform after a compositor
+ * highlight soft clip (render.configure_compositor), per channel in scene-linear light — identity up to the knee, then
+ * an exponential roll-off toward 1.0 (C1 at the knee):  y = x (x ≤ k),  y = 1 − (1 − k)·exp(−(x − k)/(1 − k)).
+ * Paints are pre-compensated with the exact inverse (targets capped at BRAND_CAP).
+ */
+export const BRAND_KNEE = 0.9
+export const BRAND_CAP = 0.998
+
+/** util.soft_clip: the 'brand' highlight roll-off (scene-linear → display-linear, per channel). */
+export function softClip(c: Vec3, knee = BRAND_KNEE): Vec3 {
+  const w = 1 - knee
+  return c.map((v) => (v <= knee ? v : 1 - w * Math.exp(-(v - knee) / w))) as Vec3
+}
+
+/** util.soft_clip_inverse: the radiance 'brand' displays as display-linear `c` (targets capped at `cap`). */
+export function softClipInverse(c: Vec3, knee = BRAND_KNEE, cap = BRAND_CAP): Vec3 {
+  const w = 1 - knee
+  return c.map((v) => {
+    const y = Math.min(Math.max(0, v), cap)
+    return y <= knee ? y : knee - w * Math.log(1 - (y - knee) / w)
+  }) as Vec3
 }
 
 /** HueSaturation saturation of the 'agx-punchy' colour mode (Effects.tsx). */
@@ -98,7 +139,14 @@ function saturate(c: Vec3, s: number): Vec3 {
 
 /** Scene-linear → display-linear, as the viewport's post-processing does it. */
 export function toDisplay(scene: Vec3, t: DisplayTransform): Vec3 {
-  const tm = t.mode === 2 ? agxToneMap(scene) : t.mode === 1 ? neutralToneMap(scene) : (scene.map(clamp01) as Vec3)
+  const tm =
+    t.mode === 2
+      ? agxToneMap(scene)
+      : t.mode === 1
+        ? neutralToneMap(scene)
+        : t.mode === 3
+          ? (softClip(scene.map((v) => Math.max(0, v)) as Vec3).map(clamp01) as Vec3)
+          : (scene.map(clamp01) as Vec3)
   return saturate(tm, t.saturation)
 }
 
@@ -123,6 +171,7 @@ export function toScene(display: Vec3, t: DisplayTransform): Vec3 {
     return o.map((v) => v + offset) as Vec3
   }
   if (t.mode === 0) return o
+  if (t.mode === 3) return softClipInverse(o)
   // AgX: Newton with a forward-difference Jacobian (converges in ≤ 4 steps for the backdrop's colours).
   let c: Vec3 = [...o]
   for (let it = 0; it < AGX_NEWTON_STEPS; it++) {
@@ -186,6 +235,11 @@ vec3 bisToScene(vec3 display) {
     return o + offset;
   }
   if (bisToneMode == 0) return o;
+  if (bisToneMode == 3) {
+    vec3 y = min(o, vec3(${BRAND_CAP}));
+    vec3 hi = ${BRAND_KNEE} - ${(1 - BRAND_KNEE).toFixed(6)} * log(1.0 - max(y - ${BRAND_KNEE}, vec3(0.0)) / ${(1 - BRAND_KNEE).toFixed(6)});
+    return mix(y, hi, step(vec3(${BRAND_KNEE}), y));
+  }
   vec3 c = o;
   for (int it = 0; it < ${AGX_NEWTON_STEPS}; it++) {
     vec3 f0 = bisAgx(c);

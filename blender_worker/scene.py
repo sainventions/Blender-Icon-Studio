@@ -25,7 +25,8 @@ import numpy as np
 from mathutils import Matrix, Vector
 
 from . import appearance as appearance_mod
-from . import framing, geometry, lighting, materials
+from . import framing, geometry, lighting, materials, overlay
+from . import presets
 from .defaults import norm_bundle, norm_camera, norm_project
 from .gpu import configure_scene
 from .util import gradient_samples, hex_to_linear, hex_to_srgb, log, srgb_to_linear, stable_hash
@@ -203,6 +204,9 @@ def image_quad(im: dict, fallback_bbox) -> list:
     return [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
 
 
+THIN_RATIO = 0.75            # a layer whose bevel is >= this x its safe radius is made of thin strokes ...
+THIN_SOLID = 0.85            # ... whose Liquid Glass body keeps this share across the bevel (materials 'solid_edge')
+RASTER_RIM = 0.4             # rim strength on raster (alpha-traced) pieces
 HALO_SOFT_MIN = 0.25         # share of the visible pixels that are soft (0.02 < alpha < 0.6)
 GLOW_SOFT_MIN = 0.5          # ... above this a raster region IS a glow (light, not an object): card only
 _SOFT_ALPHA: dict = {}
@@ -275,6 +279,10 @@ class SceneBuilder:
         self.editable = False
         self._hidden: set = set()
         self._cover_cache: dict = {}
+        self._film: dict = {}
+        self._film_cache: dict = {}
+        self._flush: dict = {}
+        self._flush_cache: dict = {}
 
     # -------------------------------------------------------------------------- setup
     @property
@@ -318,7 +326,7 @@ class SceneBuilder:
         backdrop = backdrop or rset.get("backdrop", "transparent")
         backdrop_color = backdrop_color or rset.get("backdropColor", "#1c1c22")
         # paints are pre-compensated for the view transform of the colour mode (materials.display_paint)
-        self._cm = str(rset.get("colorMode", "neutral") or "neutral")
+        self._cm = presets.color_mode_id(rset.get("colorMode"))
 
         icon_col, rig_col = self.collections()
         scene = self.scene
@@ -365,6 +373,12 @@ class SceneBuilder:
         # ---- pieces the SVG hides completely under opaque higher art (Translate's magenta shadow-caster under
         # the blue card): glass above must not reveal them (they still cast shadows / show their sides) --------
         self._hidden = self._covered_pieces(layers, geo_by_id, canvas["art"])
+
+        # ---- translucent Liquid Glass pieces blend like the SVG (display space): film coefficients -------------
+        self._film = self._film_params(eff, bnd, layers, presets_eff, env, shape)
+        # ---- art flush with the plate outline: no glass rim along it (materials._flush_keep) ---------------
+        plate_vis = canvas["plate"].get("visible", True) and (canvas["plate"]["fill"] or {}).get("type") != "none"
+        self._flush = self._flush_params(layers, geo_by_id, canvas, shape if plate_vis else "none", presets_eff)
 
         # ---- plate ---------------------------------------------------------------------------------
         plate = canvas["plate"]
@@ -682,6 +696,96 @@ class SceneBuilder:
         self._cover_cache[key] = hidden
         return hidden
 
+    def _film_params(self, eff: dict, bnd: dict, layers: list, presets_eff: dict, env: dict, shape: str) -> dict:
+        """{(layer id, region index): {'t', 'e'}} for translucent, solid-painted Liquid Glass pieces of the light /
+        dark renditions (overlay.py: the SVG blend over an estimate of what lies beneath, through the colour
+        mode's view transform). Clear / tinted renditions (mono paints over frosted glass) keep the alpha model."""
+        cm = getattr(self, "_cm", "neutral")
+        if env.get("mono") is not None or cm not in overlay.FILM_MODES:
+            return {}
+        cands = []
+        for L in layers:
+            g = bnd["layers"].get(L["id"])
+            fill = L.get("fill") or {"type": "auto"}
+            # combined bodies (mode or touching opaque pieces: one 'sil' piece) have no per-region pieces to film
+            if (g is None or presets_eff[L["id"]] != "liquid_glass" or L.get("mode") == "combined"
+                    or fill.get("type") not in ("auto", "solid") or touching_opaque(g)):
+                continue
+            # raster regions as _build_layer sees them (a missing PNG leaves its piece on the layer material)
+            imgs = {im.get("elementId") for im in g.get("images") or [] if im.get("path") and os.path.isfile(im["path"])}
+            lop = float(L.get("opacity", 1.0))
+            mine, blocked = [], False
+            for i, r in enumerate(g.get("regions") or []):
+                op = float(r.get("opacity", 1.0)) * lop
+                if op >= 0.999:
+                    continue
+                if r.get("elementId") in imgs and fill.get("type", "auto") == "auto":
+                    continue            # a raster piece: its own (alpha) material, never a film
+                paint = fill if fill.get("type") == "solid" else (r.get("paint") or {})
+                if r.get("elementId") not in imgs and paint.get("type") == "solid":
+                    mine.append((L["id"], i, paint.get("color", "#ffffff"), op))
+                else:
+                    # a translucent piece the film cannot express (gradient paint, a raster under a fill override)
+                    # shares the layer material: with film on it read black (no bis_blend_* on it) - the whole
+                    # layer keeps the alpha model instead (reviewer, round 5)
+                    blocked = True
+            if not blocked:
+                cands += mine
+        if not cands:
+            return {}
+        key = stable_hash([cm, shape, cands, eff["canvas"], [[L["id"], L.get("transform"), L.get("opacity", 1.0),
+                           L.get("fill"), geo_key(bnd["layers"][L["id"]], L["id"]) if L["id"] in bnd["layers"] else None]
+                           for L in layers]])
+        hit = self._film_cache.get(key)
+        if hit is not None:
+            return hit
+        out = {}
+        for lid, i, colour, op in cands:
+            try:
+                below = overlay.beneath_srgb(eff, bnd, lid, i, shape)
+            except Exception as ex:  # a heuristic never breaks a render
+                log("beneath estimate failed:", ex)
+                below = None
+            out[(lid, i)] = overlay.film_params(hex_to_srgb(colour), op, below, cm)
+        if len(self._film_cache) > 32:
+            self._film_cache.clear()
+        self._film_cache[key] = out
+        return out
+
+    def _flush_params(self, layers: list, geos: dict, canvas: dict, shape: str, presets_eff: dict) -> dict:
+        """{layer id: materials 'flush' spec} for Liquid Glass layers whose outline runs along the plate outline."""
+        if shape == "none":
+            return {}
+        art = canvas["art"]
+        key = stable_hash([shape, canvas.get("cornerRadius"), art, [[L["id"], geo_key(geos[L["id"]], L["id"]) if L["id"] in
+                           geos else None, L.get("transform"), L.get("depth"), presets_eff.get(L["id"])] for L in layers]])
+        hit = self._flush_cache.get(key)
+        if hit is not None:
+            return hit
+        out = {}
+        sa, ax, ay = float(art.get("scale", 1.0)), float(art.get("x", 0.0)), float(art.get("y", 0.0))
+        for L in layers:
+            g = geos.get(L["id"])
+            if g is None or presets_eff.get(L["id"]) != "liquid_glass":
+                continue
+            tr = L.get("transform") or {}
+            sl, tx, ty = float(tr.get("scale", 1.0)), float(tr.get("x", 0.0)), float(tr.get("y", 0.0))
+            spl = g.get("silhouette") or [s for r in g.get("regions") or [] for s in r.get("splines") or []]
+            rings = [(np.asarray(geometry._flatten_ring(s.get("points") or [], True, 6), np.float64) * sa
+                      + np.array([ax, ay])) * sl + np.array([tx, ty]) for s in spl if len(s.get("points") or []) >= 2]
+            bevel = min(float(L["depth"].get("bevel", 0.045)), 0.9 * float(g.get("safeRadius", 1.0)) * sa * sl)
+            try:
+                fs = overlay.flush_spec(rings, shape, float(canvas.get("cornerRadius", 0.225)), bevel)
+            except Exception as ex:  # a heuristic never breaks a render
+                log("flush test failed:", ex)
+                fs = None
+            if fs:
+                out[L["id"]] = fs
+        if len(self._flush_cache) > 32:
+            self._flush_cache.clear()
+        self._flush_cache[key] = out
+        return out
+
     @staticmethod
     def _canvas_bbox(bbox, art: dict, tr: dict):
         sa, ax, ay = float(art.get("scale", 1)), float(art.get("x", 0)), float(art.get("y", 0))
@@ -728,7 +832,8 @@ class SceneBuilder:
             else:       # a missing PNG would render Cycles' magenta "missing texture" colour
                 self.warnings.append(f"layer {lid}: raster image not found: {im['path']}")
         pieces = []        # (piece id, splines, z offset, opacity, rgb, raster image | None)
-        if Lr.get("mode") == "combined" or touching_opaque(g, images):
+        combined_body = Lr.get("mode") == "combined" or touching_opaque(g, images)
+        if combined_body:
             # touching opaque pieces of one layer (Gmail's M + its shading wedges, DJI's facets, CRD's chevron)
             # are one body painted by the layer texture: bevelled one by one, every shared edge became a
             # V-groove that showed the plate as a white sliver with a rim highlight (QA round 3 #5)
@@ -764,11 +869,14 @@ class SceneBuilder:
         mpar = dict(Lr["material"].get("params") or {})
         spec = materials.make_spec(
             preset, mpar if preset == Lr["material"]["preset"] else {}, paint,
-            mono=env.get("mono"), clear=bool(env.get("clear")), alpha=alpha,
+            mono=(env.get("monoCombined") or env.get("mono")) if combined_body else env.get("mono"),
+            clear=bool(env.get("clear")), alpha=alpha,
             edge_dark=float(env.get("edgeDark", 0.0) or 0.0),
             shadow=dict(Lr.get("shadow") or {}), role=role, thickness=th_local, light=L, bbox=bbox,
             inflate=float(dp.get("inflate", 0.0)), emission=boost, lit=getattr(self, "_lit", 1.0),
             preview_color=pieces[0][4] if pieces else (0.8, 0.8, 0.8), cm=getattr(self, "_cm", "neutral"),
+            film=any(k[0] == lid for k in self._film), flush=self._flush.get(lid),
+            solid_edge=THIN_SOLID if bevel_local >= THIN_RATIO * float(g.get("safeRadius", 1.0)) else 0.0,
         )
         if preset == "tinted_glass" and spec["shadow"].get("kind") == "neutral":
             spec["shadow"]["kind"] = "chromatic"
@@ -793,7 +901,10 @@ class SceneBuilder:
                 # placement (its alpha is honoured: traced contours may include soft, partly transparent pixels)
                 rpaint = {"kind": "texture", "image": raster["path"], "uv": image_uv(raster, bbox),
                           "has_alpha": True}
-                rspec = dict(spec, paint=rpaint, params=dict(spec["params"]), alpha=True)
+                # alpha-traced contours wobble: a full-strength rim drew a jagged white fringe (iMessage's tail)
+                rparams = dict(spec["params"])
+                rparams["rim"] = float(rparams.get("rim", 1.0) or 0.0) * RASTER_RIM
+                rspec = dict(spec, paint=rpaint, params=rparams, alpha=True, film=False)
                 rname = f"BIS Mat {lid} {pid}"
                 pmat = materials.ensure(rname, rspec)
                 self._specs.append(rspec)
@@ -816,6 +927,14 @@ class SceneBuilder:
             ob.location = (0.0, 0.0, (thickness / 2.0 + zoff) / S)
             ob.scale = (1.0, 1.0, 1.0)
             ob.color = (*rgb, max(0.0, min(1.0, op)))
+            fp = self._film.get((lid, int(pid[1:]))) if pid.startswith("r") else None
+            if fp is not None:     # display-space blend film (materials._film): per-piece transmission / emission
+                ob["bis_blend_t"] = [float(v) for v in fp["t"]]
+                ob["bis_blend_e"] = [float(v) for v in fp["e"]]
+            else:                  # objects are reused by name: no stale coefficients from an earlier build
+                for k in ("bis_blend_t", "bis_blend_e"):
+                    if k in ob:
+                        del ob[k]
             covered = pid.startswith("r") and (lid, int(pid[1:])) in self._hidden
             if ob.visible_transmission == covered:
                 ob.visible_transmission = not covered

@@ -153,6 +153,44 @@ def test_safe_radius():
     assert safe_radius([]) == 0.0
 
 
+def test_safe_radius_is_the_minimum_over_separate_parts():
+    """Round 5 (svg review #3): a 'combined' body is ONE geometry with separate parts. Its radius
+    used to come from √(union area/π) and a small part vanishing under the opening was not counted
+    (Ti84's keys: 0.326; Google Calendar's digits: 0.456). Every part must keep its inset outline."""
+    body = box(-0.6, -0.6, 0.6, 0.6)
+    key = box(0.8, 0.0, 0.92, 0.079)                       # Ti84-like key: 0.079 tall -> inradius 0.0395
+    union = body.union(key)                                # (a MultiPolygon, as a combined silhouette)
+    assert safe_radius([union]) == pytest.approx(0.0395, rel=0.05)
+    assert safe_radius([body, key]) == pytest.approx(0.0395, rel=0.05)   # individual pieces: same rule
+    assert safe_radius([body]) > 0.5 * 0.99                # (the body alone keeps its large radius)
+    # an elongated bar that vanishes whole (its extent < 2.5 r) is not a 'rounded corner' (Game Launcher)
+    from shapely import affinity
+    bar = affinity.rotate(box(0, 0, 0.45, 0.1), 45)
+    assert safe_radius([bar]) == pytest.approx(0.05, rel=0.05)
+
+
+def test_safe_radius_checks_thin_features_below_the_vanishing_radius():
+    """A lattice (Sheets' table): at the √(area/π) bound the whole part vanishes - and as it is
+    smaller than 2.5 r that loss was not counted, which ended the search there (0.135). Its 0.03 wide
+    bars invert under any bevel above ~0.015."""
+    lattice = box(0, 0, 0.30, 0.30)
+    for i in range(3):
+        for j in range(3):
+            lattice = lattice.difference(box(0.03 + i * 0.09, 0.03 + j * 0.09, 0.09 + i * 0.09, 0.09 + j * 0.09))
+    assert 2.5 * math.sqrt(lattice.area / math.pi) > 0.30          # the old early exit applies
+    assert 0.01 < safe_radius([lattice]) < 0.02
+
+
+def test_safe_radius_ignores_boolean_slivers():
+    """Separate hairline slivers (< 1 px wide, a share <= 2 %) are below the builders' resolution
+    (Health, Twitter, Weatherbug carry such boolean debris): they must not zero the radius."""
+    body = Point(0, 0).buffer(0.5, 64)
+    sliver = box(0.7, 0.0, 0.9, 0.001)
+    assert safe_radius([body.union(sliver)]) == pytest.approx(0.5, rel=0.02)
+    # ... but a layer made of hairlines keeps its tiny radius
+    assert 0.0 < safe_radius([sliver, box(0.7, 0.1, 0.9, 0.101)]) < 0.001
+
+
 def test_islands():
     sk = skia_from_d("M0 0h10v10h-10z M2 2v6h6v-6z M4 4h2v2h-2z M20 0h5v5h-5z")
     parts = islands(sk, 0.01)

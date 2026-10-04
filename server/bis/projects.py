@@ -141,7 +141,33 @@ class ProjectStore:
         path = self.dir(pid) / "project.json"
         if not path.is_file():
             raise ProjectNotFound(pid)
-        return Project.model_validate(read_json(path))
+        data = read_json(path)
+        broken = _drop_null_layer_modes(data)
+        project = Project.model_validate(data)
+        if broken:
+            self._repair_layer_modes(project, broken)
+        return project
+
+    def _repair_layer_modes(self, project: Project, layer_ids: set[str]) -> None:
+        """Layers saved with ``mode: null`` (a look applied by the round-4 server, whose looks had no mode yet)
+        get their art-derived mode back and the project is re-saved (quietly: no updatedAt / event).
+        load() reads without the project lock, so the re-save takes it and first checks that the file is still
+        the version that was read: a save that landed meanwhile (a PUT, a style apply) is never overwritten by
+        this older copy - that newer version is repaired by its own next load if it needs to be."""
+        auto = self.auto_modes(project) or {}
+        for layer in project.layers:
+            if layer.id in layer_ids:
+                layer.mode = auto.get(layer.id, "individual")  # type: ignore[assignment]
+        log.warning("project %s: repaired layer modes saved as null (%s)", project.id, ", ".join(sorted(layer_ids)))
+        try:
+            with self.lock(project.id):
+                current = read_json(self.dir(project.id) / "project.json")
+                if (not isinstance(current, dict) or current.get("updatedAt") != project.updatedAt
+                        or _drop_null_layer_modes(current) != layer_ids):
+                    return
+                self.save(project, touch=False, emit=False)
+        except (OSError, ValueError) as e:  # read-only workspace: the repaired copy is still returned
+            log.warning("could not save the repaired project %s: %s", project.id, e)
 
     def save(self, project: Project, touch: bool = True, emit: bool = True) -> Project:
         d = self.dir(project.id)
@@ -357,6 +383,15 @@ class ProjectStore:
         return self._mutate(pid, fn)
 
     # ------------------------------------------------------------------------------------------ geometry / thumbs
+    def auto_modes(self, project: Project) -> dict[str, str] | None:
+        """Layer id → the mode the SVG pipeline derives from the layer's art (None when unknown: no pipeline,
+        a broken element store). Used to tell a mode the user picked from an art-derived one."""
+        try:
+            return self.svg.layer_auto_modes(self.dir(project.id), project)
+        except Exception as e:  # noqa: BLE001 - a heuristic must never break a style copy
+            log.warning("auto layer modes of %s unavailable: %s", project.id, e)
+            return None
+
     def geometry(self, project: Project) -> tuple[GeometryBundle, Path]:
         d = self.dir(project.id)
         bundle = self.svg.build_geometry(d, project, project_url_prefix(project.id))
@@ -402,6 +437,17 @@ class ProjectStore:
 
 
 # ---------------------------------------------------------------------------------------------- helpers
+def _drop_null_layer_modes(data: Any) -> set[str]:
+    """Remove ``"mode": null`` from the layers of a raw project.json (in place) → the ids of those layers."""
+    out: set[str] = set()
+    layers = data.get("layers") if isinstance(data, dict) else None
+    for layer in layers if isinstance(layers, list) else ():
+        if isinstance(layer, dict) and "mode" in layer and layer["mode"] is None:
+            del layer["mode"]
+            out.add(str(layer.get("id")))
+    return out
+
+
 def _prune_overrides(project: Project) -> None:
     """Drop appearance overrides that point at layers which no longer exist."""
     ids = {l.id for l in project.layers}

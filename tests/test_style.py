@@ -81,6 +81,8 @@ def test_every_look_resolves(look_id):
         assert style.lighting is not None and style.lighting.preset == want["lighting"]["preset"]
         assert style.lighting.preset in PRESETS["lighting"]
     assert style.zGap == want.get("zGap", StyleSpec().zGap)
+    # round 5: looks never carry a layer mode - each icon keeps its art-derived ('combined' for tiles) mode
+    assert "mode" not in want["layerDefaults"] and style.layerDefaults.mode is None
 
 
 def test_resolve_look_merges_over_defaults_and_rejects_unknown():
@@ -143,7 +145,47 @@ def test_apply_style_rules():
     keep = apply_style(p, StyleSpec(zGap=None, plate={"fill": {"type": "system-dark"}, "shape": "circle"}))
     assert [l.depth.z for l in keep.layers] == [0.0, 0.2, 0.4]       # zGap None → keep z
     assert keep.canvas.plate.fill == FillSystem(type="system-dark") and keep.canvas.shape == "circle"
-    assert keep.lighting == p.lighting and keep.camera == p.camera and keep.render.colorMode == "neutral"
+    assert keep.lighting == p.lighting and keep.camera == p.camera and keep.render.colorMode == p.render.colorMode
+
+
+def test_style_without_mode_keeps_each_layers_mode():
+    """QA round 4 #8: a look (mode None) never turns a tiling-derived 'combined' layer back into 'individual'
+    (and never fuses an 'individual' one); the result stays a valid Project (round-4 HEAD wrote mode null)."""
+    p = _project(3)
+    p.layers[0].mode = "combined"
+    p.layers[2].mode = "combined"
+    for look_id in sorted(PRESETS["looks"]):
+        out = apply_style(p, resolve_look(PRESETS, look_id))
+        assert [l.mode for l in out.layers] == ["combined", "individual", "combined"], look_id
+        Project.model_validate(out.model_dump(mode="json"))          # never null
+    forced = apply_style(p, StyleSpec(layerDefaults={"mode": "individual"}))
+    assert {l.mode for l in forced.layers} == {"individual"}           # an explicit mode still applies
+    assert [l.mode for l in p.layers] == ["combined", "individual", "combined"]   # input untouched
+
+
+def test_extracted_mode_only_when_the_user_set_it():
+    p = _project(3)
+    auto = {"l0": "combined", "l1": "individual", "l2": "individual"}
+    p.layers[0].mode = "combined"
+    assert extract_style(p).layerDefaults.mode is None                       # auto modes unknown → never copied
+    assert extract_style(p, auto_modes=auto).layerDefaults.mode is None      # all art-derived (mixed)
+    for l in p.layers:
+        l.mode = "combined"                                                  # the user fused l1 + l2
+    assert extract_style(p, auto_modes=auto).layerDefaults.mode == "combined"
+    assert extract_style(p).layerDefaults.mode is None
+    p.layers[1].mode = "individual"                                          # mixed → None
+    assert extract_style(p, auto_modes=auto).layerDefaults.mode is None
+    for l in p.layers:
+        l.mode = "individual"   # the user split l0's body - or a pre-round-4 project: never copied (QA r4 #8)
+    assert extract_style(p, auto_modes=auto).layerDefaults.mode is None
+    q = _project(2)
+    for l in q.layers:
+        l.mode = "combined"
+    assert extract_style(q, auto_modes={"l0": "combined", "l1": "combined"}).layerDefaults.mode is None  # art-derived
+    assert extract_style(q, auto_modes={"zz": "individual"}).layerDefaults.mode is None   # unknown ids don't count
+    q.layers[1].visible = False
+    q.layers[1].mode = "individual"                                          # hidden layers are not the look
+    assert extract_style(q, auto_modes={"l0": "individual", "l1": "individual"}).layerDefaults.mode == "combined"
 
 
 def test_layer_materials_by_index_clamped():
@@ -206,6 +248,10 @@ def test_resolve_style_request_rules():
     assert resolve_style_request(StyleRequest(), PRESETS, loader, allow_none=True) is None
     with pytest.raises(LookNotFound):
         resolve_style_request(StyleRequest(look="zzz"), PRESETS, loader)
+    seen = []
+    custom = resolve_style_request(StyleRequest(fromProject="src"), PRESETS, loader,
+                                   extract=lambda pid: seen.append(pid) or StyleSpec(zGap=0.5))
+    assert seen == ["src"] and custom.zGap == 0.5
 
 
 # ---------------------------------------------------------------------------------------------- API
@@ -278,3 +324,111 @@ def test_style_endpoints_with_real_geometry(client):
     assert c.post("/api/projects/nope-123456/style", json={"look": "clay"}).status_code == 404
     assert c.get("/api/projects/nope-123456/style").status_code == 404
     assert c.post(f"/api/projects/{pid}/style", json={"style": {"zGap": "x"}}).status_code == 422
+
+
+@pytest.mark.skipif(not _real_svg(), reason="bis.svg not importable")
+def test_looks_and_copied_styles_keep_tiling_combined_layers(client):
+    """QA round 4 #8 (Maps / Gmail): their tiled pieces form ONE 'combined' body; applying any look, or the
+    copied style of an icon whose modes are art-derived, keeps it. A mode the user picked does travel."""
+    c = client
+    maps = c.post("/api/projects", json={"sample": "Maps"}).json()
+    gmail = c.post("/api/projects", json={"sample": "Gmail"}).json()
+    calc = c.post("/api/projects", json={"sample": "Calculator"}).json()
+    assert [l["mode"] for l in maps["layers"]] == ["combined"] and [l["mode"] for l in gmail["layers"]] == ["combined"]
+    assert {l["mode"] for l in calc["layers"]} == {"individual"}
+    for p in (maps, gmail):
+        for look in sorted(PRESETS["looks"]):
+            r = c.post(f"/api/projects/{p['id']}/style", json={"look": look})
+            assert r.status_code == 200, r.text
+            assert [l["mode"] for l in r.json()["layers"]] == ["combined"], (p["name"], look)
+        stored = c.get(f"/api/projects/{p['id']}")
+        assert stored.status_code == 200 and [l["mode"] for l in stored.json()["layers"]] == ["combined"]
+        geo = c.get(f"/api/projects/{p['id']}/geometry").json()
+        for l in stored.json()["layers"]:   # the bevel was clamped against the combined body's safe radius
+            assert l["depth"]["bevel"] <= 0.9 * geo["layers"][l["id"]]["safeRadius"] + 1e-9
+
+    # copy style: Calculator's modes are its own art's -> not copied; pasting it keeps Maps combined
+    s = c.get(f"/api/projects/{calc['id']}/style").json()
+    assert s["layerDefaults"]["mode"] is None
+    assert [l["mode"] for l in c.post(f"/api/projects/{maps['id']}/style",
+                                      json={"fromProject": calc["id"]}).json()["layers"]] == ["combined"]
+    assert [l["mode"] for l in c.post(f"/api/projects/{gmail['id']}/style",
+                                      json={"style": s}).json()["layers"]] == ["combined"]
+    # Maps' own (art-derived) combined mode is not copied onto Calculator's separate symbols either
+    assert c.get(f"/api/projects/{maps['id']}/style").json()["layerDefaults"]["mode"] is None
+    r = c.post(f"/api/projects/{calc['id']}/style", json={"fromProject": maps["id"]}).json()
+    assert {l["mode"] for l in r["layers"]} == {"individual"}
+    # Maps split into pieces by its user (or saved before round 4): 'individual' is never copied onto Gmail
+    split = c.get(f"/api/projects/{maps['id']}").json()
+    split["layers"][0]["mode"] = "individual"
+    assert c.put(f"/api/projects/{maps['id']}", json=split).status_code == 200
+    assert c.get(f"/api/projects/{maps['id']}/style").json()["layerDefaults"]["mode"] is None
+    assert [l["mode"] for l in c.post(f"/api/projects/{gmail['id']}/style",
+                                      json={"fromProject": maps["id"]}).json()["layers"]] == ["combined"]
+
+    # a mode the user set on purpose (Calculator fused into combined bodies) is part of the copied look
+    edited = c.get(f"/api/projects/{calc['id']}").json()
+    for l in edited["layers"]:
+        l["mode"] = "combined"
+    assert c.put(f"/api/projects/{calc['id']}", json=edited).status_code == 200
+    s2 = c.get(f"/api/projects/{calc['id']}/style").json()
+    assert s2["layerDefaults"]["mode"] == "combined"
+    other = c.post("/api/projects", json={"sample": "Find Device"}).json()
+    r = c.post(f"/api/projects/{other['id']}/style", json={"fromProject": calc["id"]}).json()
+    assert {l["mode"] for l in r["layers"]} == {"combined"}
+    geo = c.get(f"/api/projects/{other['id']}/geometry").json()
+    assert all(l["depth"]["bevel"] <= 0.9 * geo["layers"][l["id"]]["safeRadius"] + 1e-9 for l in r["layers"])
+
+
+@pytest.mark.skipif(not _real_svg(), reason="bis.svg not importable")
+def test_project_saved_with_null_layer_modes_is_repaired(client, tmp_path):
+    """The round-4 server wrote ``mode: null`` when a mode-less look was applied: such a project failed to load
+    (HTTP 500, and a batch failed every icon). Loading restores each layer's art-derived mode and re-saves."""
+    c = client
+    maps = c.post("/api/projects", json={"sample": "Maps"}).json()
+    calc = c.post("/api/projects", json={"sample": "Calculator"}).json()
+    store = c.app.state.store
+    for p in (maps, calc):
+        path = store.dir(p["id"]) / "project.json"
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        for l in raw["layers"]:
+            l["mode"] = None
+        path.write_text(json.dumps(raw), encoding="utf-8")
+    r = c.get(f"/api/projects/{maps['id']}")
+    assert r.status_code == 200 and [l["mode"] for l in r.json()["layers"]] == ["combined"]
+    assert r.json()["updatedAt"] == maps["updatedAt"]                 # a quiet repair, not an edit
+    assert {l["mode"] for l in c.get(f"/api/projects/{calc['id']}").json()["layers"]} == {"individual"}
+    saved = json.loads((store.dir(maps["id"]) / "project.json").read_text(encoding="utf-8"))
+    assert [l["mode"] for l in saved["layers"]] == ["combined"]
+
+@pytest.mark.skipif(not _real_svg(), reason="bis.svg not importable")
+def test_null_mode_repair_never_overwrites_a_newer_save(client):
+    """load() reads project.json without the project lock; its quiet re-save of repaired null modes must not
+    clobber a version saved while the modes were being derived (a PUT / style apply landing in that window)."""
+    c = client
+    maps = c.post("/api/projects", json={"sample": "Maps"}).json()
+    store = c.app.state.store
+    path = store.dir(maps["id"]) / "project.json"
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw["layers"][0]["mode"] = None
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    real_auto = store.auto_modes
+
+    def auto_with_concurrent_put(project):            # a PUT lands while the auto modes are derived
+        newer = dict(maps, name="Renamed meanwhile", updatedAt="2099-01-01T00:00:00.000Z")
+        path.write_text(json.dumps(newer), encoding="utf-8")
+        return real_auto(project)
+
+    store.auto_modes = auto_with_concurrent_put
+    try:
+        got = store.load(maps["id"])
+    finally:
+        store.auto_modes = real_auto
+    assert [l.mode for l in got.layers] == ["combined"]                       # the caller still gets a valid project
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["name"] == "Renamed meanwhile" and saved["updatedAt"] == "2099-01-01T00:00:00.000Z"
+    # without a concurrent save the repaired copy IS written back (quietly)
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    assert [l.mode for l in store.load(maps["id"]).layers] == ["combined"]
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert [l["mode"] for l in saved["layers"]] == ["combined"] and saved["updatedAt"] == raw["updatedAt"]

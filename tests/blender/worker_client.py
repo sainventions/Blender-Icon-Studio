@@ -12,7 +12,7 @@ from collections import deque
 from pathlib import Path
 from typing import Optional
 
-REPO = Path(__file__).resolve().parents[2]
+REPO = Path(os.environ.get("BIS_WORKER_ROOT") or Path(__file__).resolve().parents[2])   # env: A/B an older worker
 BLENDER = Path(os.environ.get("BIS_BLENDER", r"C:/Program Files/Blender Foundation/Blender 5.0/blender.exe"))
 
 

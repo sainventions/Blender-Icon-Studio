@@ -83,8 +83,61 @@ function flattenSpline(sp: Spline, tol: number, maxTurn: number): number[] {
       out.push(w0 * p0[0] + w1 * p1[0] + w2 * p2[0] + w3 * p3[0], w0 * p0[1] + w1 * p1[1] + w2 * p2[1] + w3 * p3[1])
     }
   }
-  return dedupe(out)
+  return removeSmallLoops(dedupe(out))
 }
+
+/** Intersection parameter of segments p0→p1 and q0→q1 (proper crossing only), or null. */
+function crossing(pts: number[], a: number, b: number, c: number, d: number): [number, number] | null {
+  const ax = pts[2 * a], ay = pts[2 * a + 1], bx = pts[2 * b], by = pts[2 * b + 1]
+  const cx = pts[2 * c], cy = pts[2 * c + 1], dx = pts[2 * d], dy = pts[2 * d + 1]
+  const rx = bx - ax, ry = by - ay, sx = dx - cx, sy = dy - cy
+  const den = rx * sy - ry * sx
+  if (Math.abs(den) < 1e-18) return null
+  const t = ((cx - ax) * sy - (cy - ay) * sx) / den
+  const u = ((cx - ax) * ry - (cy - ay) * rx) / den
+  if (t <= 1e-9 || t >= 1 - 1e-9 || u <= 1e-9 || u >= 1 - 1e-9) return null
+  return [ax + t * rx, ay + t * ry]
+}
+
+/**
+ * Cut tiny self-intersection loops out of a flattened ring (a crossing whose loop encloses < SMALL_LOOP of the ring's
+ * area). The SVG pipeline's clip / plate-edge snap can leave such hairpin knots where art meets the plate outline
+ * (Earth's waves): Blender's curve fill ignores them, but the cap triangulation (earcut) turned them into a wedge across
+ * the whole layer.
+ */
+export function removeSmallLoops(src: number[]): number[] {
+  let pts = src
+  for (let pass = 0; pass < 32; pass++) {
+    const n = pts.length / 2
+    if (n < 5) return pts
+    const total = Math.abs(signedArea(pts))
+    const limit = Math.max(2e-4, SMALL_LOOP * total)
+    let cut: number[] | null = null
+    for (let i = 0; i < n && !cut; i++) {
+      const i1 = (i + 1) % n
+      for (let k = 2; k <= n >> 1 && !cut; k++) {
+        const j = (i + k) % n
+        const j1 = (j + 1) % n
+        if (j1 === i) continue
+        const hit = crossing(pts, i, i1, j, j1)
+        if (!hit) continue
+        // loop = i1 … j (k vertices) closed through the crossing point
+        const loop: number[] = [hit[0], hit[1]]
+        for (let m = 0; m < k; m++) loop.push(pts[2 * ((i1 + m) % n)], pts[2 * ((i1 + m) % n) + 1])
+        if (Math.abs(signedArea(loop)) > limit) continue
+        const next: number[] = [hit[0], hit[1]]
+        for (let m = 0; m < n - k; m++) next.push(pts[2 * ((j1 + m) % n)], pts[2 * ((j1 + m) % n) + 1])
+        cut = next
+      }
+    }
+    if (!cut) return pts
+    pts = cut
+  }
+  return pts
+}
+
+/** Largest loop (share of the ring's area) removeSmallLoops cuts. */
+const SMALL_LOOP = 0.002
 
 function dedupe(src: number[]): number[] {
   const out: number[] = []

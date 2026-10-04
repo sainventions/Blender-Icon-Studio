@@ -242,7 +242,7 @@ Quality = Literal["draft", "preview", "final", "ultra"]
 class RenderSettings(_Model):
     quality: Quality = "draft"
     size: Optional[int] = None           # None = tier default
-    colorMode: Literal["neutral", "standard", "agx", "agx-punchy"] = "neutral"
+    colorMode: Literal["brand", "neutral", "standard", "agx", "agx-punchy"] = "brand"   # brand = Standard + highlight soft-clip
     backdrop: Literal["transparent", "color", "wallpaper"] = "transparent"
     backdropColor: ColorHex = "#1c1c22"
     autoPreview: bool = True             # UI: auto Cycles preview after edits settle
@@ -382,7 +382,7 @@ class StyleSpec(_Model):
     plate: StylePlate = StylePlate()
     lighting: Optional[Lighting] = None
     camera: Optional[CameraSpec] = None
-    colorMode: Optional[Literal["neutral", "standard", "agx", "agx-punchy"]] = None
+    colorMode: Optional[Literal["brand", "neutral", "standard", "agx", "agx-punchy"]] = None
     tint: Optional[Tint] = None
 
 

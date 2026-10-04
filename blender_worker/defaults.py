@@ -23,7 +23,7 @@ LIGHTING = {"preset": "studio", "angle": -45.0, "elevation": 50.0, "intensity": 
             "environment": 1.0, "shadowSoftness": 0.5}
 CAMERA = {"view": "front", "tiltX": 0.0, "tiltY": 0.0, "fov": 30.0, "zoom": 1.0, "explode": 1.0}
 TINT = {"color": "#3b82f6", "strength": 0.8}
-RENDER_SETTINGS = {"quality": "draft", "size": None, "colorMode": "neutral", "backdrop": "transparent",
+RENDER_SETTINGS = {"quality": "draft", "size": None, "colorMode": "brand", "backdrop": "transparent",
                    "backdropColor": "#1c1c22", "autoPreview": True}
 
 FILL_TYPES = ("auto", "none", "solid", "linear", "radial", "system-light", "system-dark")

@@ -16,6 +16,8 @@ Two decisions are made here:
   Curved or kinked shared edges are left alone: they are the outline of one object lying on
   another (Earth's waves, the plates of Stack, a ring around a planet) and read best as stacked
   layers; so are inlays (a piece set into a notch of another: Wallet's window).
+  :func:`lining_pairs` (an edge line drawn under a piece) and :func:`print_pairs` (round 5: a print
+  on a card that another object lies across - Translate's 文 under the G card) join the same way.
 * :func:`auto_mode` - a layer is 'combined' when its occlusion-cut regions share a substantial part
   of their outlines with each other (their own bevels would otherwise cut grooves between them), or
   when a translucent region overlays other regions of the layer (a shading overlay is paint, not a
@@ -52,6 +54,7 @@ OVERLAY_MIN_COVER = 0.95    # a translucent region with >= this share of its are
 LINING_MAX_WIDTH = 0.03     # lining: the visible rest of a piece mostly covered by another is a band
 LINING_MIN_COVER = 0.3      # ... this thin, the coverer hides >= this share of it ...
 LINING_MIN_SHARED = 0.45    # ... and the band shares >= this share of its outline with the coverer
+PRINT_MIN_VISIBLE = 0.5     # print on a card under an object lying across it: >= this share stays visible
 OPAQUE = 0.99
 
 
@@ -193,6 +196,50 @@ def lining_pairs(elems: Sequence[Elem], idxs: Sequence[int], edges: Sequence[Tup
         except shapely.errors.GEOSException:
             continue
     out.sort(key=lambda t: -t[2])
+    return out
+
+
+def print_pairs(elems: Sequence[Elem], idxs: Sequence[int], edges: Sequence[Tuple[int, int]],
+                inside: Sequence[Tuple[int, int]], tol: float) -> List[Tuple[int, int, float]]:
+    """(i, j, 0.0) for an opaque element j PRINTED on an opaque card i (j lies inside i - the
+    analysis' 'inside' relation, i = the top-most such card) that another opaque object lying ACROSS
+    the card partly covers: painted above j, overlapping j and i, but not itself on i (Translate's 文
+    on the back card, under the front G card). On a plane of its own such a print floats between the
+    two cards as a glass slab with bright rims (QA round 4 #5: "the 文 card reads as pale glass"); on
+    its card's plane - one 'combined' body painted from the layer art - it stays the card's print. A
+    print that nothing from outside its card covers keeps its own plane (the white G on the front
+    card, a keypad's keys under keys of the same body, Settings' gear); so does a piece the covering
+    objects mostly hide (< PRINT_MIN_VISIBLE of it shows: Translate's pink under-layer of the G card
+    belongs with the G card)."""
+    cand = set(i for i in idxs if _opaque(elems[i]))
+    ins = set(inside)
+    on: dict = {}
+    for i, j in inside:
+        if i in cand and j in cand:
+            on.setdefault(j, []).append(i)
+    over: dict = {}
+    for a, b in edges:
+        if a in cand and b in cand:
+            over.setdefault(a, []).append(b)
+    edge_set = set(edges)
+    out = []
+    for j, cards in on.items():
+        i = max(cards)                                  # the card it is printed on (painted last)
+        across = [k for k in over.get(j, ()) if k > j and (i, k) not in ins and (j, k) not in ins
+                  and (i, k) in edge_set]
+        if not across:
+            continue
+        gj = _polys(elems[j].geom(tol))
+        if gj.is_empty:
+            continue
+        try:
+            hidden = gj.intersection(shapely.union_all([_polys(elems[k].geom(tol)) for k in over[j] if k > j]))
+            visible = 1.0 - hidden.area / gj.area
+        except shapely.errors.GEOSException:
+            continue
+        if visible >= PRINT_MIN_VISIBLE:
+            out.append((i, j, 0.0))
+    out.sort()
     return out
 
 

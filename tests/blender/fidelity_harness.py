@@ -70,6 +70,7 @@ def load_rgba(path) -> np.ndarray:
 
 
 _FLOOR: dict = {}
+COLOR_MODE = ""             # --color-mode: render.colorMode forced on every icon ('' = the project's own)
 
 
 def gamut_floor(rgb, color_mode: str = "neutral") -> float:
@@ -379,7 +380,8 @@ def analyse_icon(name: str, entry: dict, out: Path, qualities: list, size: int) 
                             dL=round(float(dl[m].mean()), 2),
                             ref=[int(v) for v in ref[..., :3][m].mean(0).round()],
                             got=[int(v) for v in img[..., :3][m].mean(0).round()])
-                item["floor"] = gamut_floor(item["ref"], (project.get("render") or {}).get("colorMode", "neutral"))
+                item["floor"] = gamut_floor(item["ref"], COLOR_MODE or (project.get("render") or {}).get("colorMode",
+                                                                                                         "neutral"))
                 meas |= m
             if inf["kind"] == "plate":
                 plate = item
@@ -521,7 +523,10 @@ def main(argv=None) -> int:
     ap.add_argument("--worst", type=int, default=16, help="rows in the worst-offender sheet")
     ap.add_argument("--label", default="")
     ap.add_argument("--worker-root", default="", help="run the worker from another checkout (A/B against old code)")
+    ap.add_argument("--color-mode", default="", help="render.colorMode for every icon (default: the project's own)")
     a = ap.parse_args(argv)
+    global COLOR_MODE
+    COLOR_MODE = a.color_mode
     size = max(64, min(256, a.size))
     out = Path(a.out)
     for sub in ["ref", "ws"] + [f"renders/{q}{t}" for q in a.qualities for t in ("", "_ns")]:
@@ -552,6 +557,8 @@ def main(argv=None) -> int:
                 if not e:
                     continue
                 proj = json.loads(Path(e["project"]).read_text(encoding="utf-8"))
+                if COLOR_MODE:
+                    proj.setdefault("render", {})["colorMode"] = COLOR_MODE
                 proj_ns = json.loads(json.dumps(proj))
                 for L in proj_ns.get("layers") or []:
                     L["shadow"] = {"kind": "none", "opacity": 0.0}
@@ -598,7 +605,7 @@ def main(argv=None) -> int:
     order = sorted(results, key=icon_score, reverse=True)
     sheets = contact_sheets(results, out, a.qualities, order[:a.worst], size)
     clean = {n: {k: v for k, v in rec.items() if not k.startswith("_")} for n, rec in results.items()}
-    report = {"label": a.label, "size": size, "qualities": a.qualities, "targets": {"region": TARGET_REGION,
+    report = {"label": a.label, "colorMode": a.color_mode or "project", "size": size, "qualities": a.qualities, "targets": {"region": TARGET_REGION,
               "plate": TARGET_PLATE}, "summary": summary, "worst": worst, "errors": errors,
               "iconOrder": order, "icons": clean}
     (out / "fidelity.json").write_text(json.dumps(report, indent=1), encoding="utf-8")

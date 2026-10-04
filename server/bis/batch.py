@@ -36,7 +36,7 @@ from .blender.base import JobCancelled, use_oneshot
 from .jobs import PRIORITY_BACKGROUND, JobContext
 from .models import BatchRequest, BatchSource, Job, StyleSpec
 from .schemas import BatchItemResult
-from .style import resolve_look, resolve_style_request, restyle_project
+from .style import project_style, resolve_look, resolve_style_request, restyle_project
 from .util import safe_filename
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -137,6 +137,9 @@ def _font(size: int, bold: bool = False):
 
 
 def _fit_text(draw, text: str, font, width: int) -> str:
+    """`text` on ONE line, ellipsised to `width` px (Pillow cannot measure multi-line text, and error messages
+    - pydantic validation errors - span several lines: the whole contact sheet used to fail on one)."""
+    text = " ".join(str(text).split())
     if draw.textlength(text, font=font) <= width:
         return text
     while text and draw.textlength(text + "…", font=font) > width:
@@ -290,7 +293,8 @@ class BatchService:
         out_dir = self.settings.batches_dir / ctx.job.id
         out_dir.mkdir(parents=True, exist_ok=True)
         style: Optional[StyleSpec] = await asyncio.to_thread(
-            resolve_style_request, req, self.presets, self.store.load, allow_none=True)
+            resolve_style_request, req, self.presets, self.store.load, allow_none=True,
+            extract=lambda src: project_style(self.store, src))
         n = len(req.sources)
         size = self.render_size(req)
         oneshot = use_oneshot("render", req.quality)

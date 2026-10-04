@@ -2,16 +2,27 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
-import type { AppearanceId, Fill, GeometryBundle, LayerTransform, Presets, Project } from '../../types'
-import { appearanceWallpaper, isDarkAppearance } from '../../lib/appearance'
+import type { AppearanceId, Fill, GeometryBundle, LayerTransform, Paint, Presets, Project } from '../../types'
+import { appearanceWallpaper, isDarkAppearance, monoLutsFor } from '../../lib/appearance'
 import { plateOutline } from '../../lib/shapes'
-import { liquidGlassLit, type FakeGlassBinding } from '../../lib/materials3d'
+import { liquidGlassLit, monoLutTexture, paintTransformFor, type FakeGlassBinding } from '../../lib/materials3d'
+import { filmParamsFor, flushParams } from '../../lib/overlay3d'
+import { touchingOpaque } from '../geometry/layerGeometry'
 import { Backdrop, useBackdropBinding, useWallpaperBehind, type BackdropSpec, type StageElementGetter } from './Backdrop'
 import { CameraRig } from './CameraRig'
-import { displayTransformFor } from './displayTransform'
+import { colorModeId, displayTransformFor } from './displayTransform'
 import { Effects } from './Effects'
 import { GridOverlay } from './GridOverlay'
-import { LayerBody, buildStack, iconLumRange, stackFramePoints, stackTop, type PlateFrame } from './LayerStack'
+import {
+  LayerBody,
+  buildStack,
+  iconLumRange,
+  stackFramePoints,
+  stackTop,
+  type MonoLutTextures,
+  type PlateFrame,
+  type StackEntry,
+} from './LayerStack'
 import { Plate } from './Plate'
 import { lightDir, resolveRig } from './rig'
 import { StudioLighting } from './StudioLighting'
@@ -32,6 +43,47 @@ export interface SceneRootProps {
   showGrid: boolean
   /** Element whose CSS background the transparent (checker) backdrop continues — see Backdrop.tsx. */
   stage?: StageElementGetter
+}
+
+/** Representative linear paint of a layer (fill override or the mean of its region paints), as the worker's paint_rgb. */
+function layerPaintLinear(entry: StackEntry): [number, number, number] {
+  const f = entry.layer.fill
+  const cols: string[] = []
+  const add = (p: Fill | Paint | null | undefined) => {
+    if (!p) return
+    if (p.type === 'solid') cols.push(p.color)
+    else if (p.type === 'linear' || p.type === 'radial') p.stops.forEach((st) => cols.push(st.color))
+  }
+  if (f.type === 'auto') entry.lg.regions.forEach((r) => add(r.paint))
+  else add(f)
+  if (!cols.length) return [1, 1, 1]
+  const c = new THREE.Color()
+  const sum = [0, 0, 0]
+  for (const h of cols) {
+    c.setStyle(h)
+    sum[0] += c.r
+    sum[1] += c.g
+    sum[2] += c.b
+  }
+  return [sum[0] / cols.length, sum[1] / cols.length, sum[2] / cols.length]
+}
+
+/** Worker _shadow_color as a grey shadow strength: opacity × (1 − Y(target)) (see shadowStrength). */
+export function shadowAmount(entry: StackEntry): number {
+  const sh = entry.layer.shadow
+  if (sh.kind === 'none') return 0
+  let op = Math.max(0, Math.min(1, sh.opacity))
+  if (entry.spec.unlit) op *= 0.6
+  const strength = entry.spec.transmission > 0 ? 0.85 : 0.95
+  let y = 1 - strength
+  if (sh.kind === 'chromatic') {
+    // HSV(hue, saturation, 0.72) of the paint = the paint scaled to a peak of 0.72 (black: grey 0.72)
+    const c = layerPaintLinear(entry)
+    const mx = Math.max(...c)
+    const t = mx > 1e-6 ? c.map((v) => (0.72 * v) / mx) : [0.72, 0.72, 0.72]
+    y = 0.2126 * t[0] + 0.7152 * t[1] + 0.0722 * t[2]
+  }
+  return op * (1 - y)
 }
 
 function ExplodeDriver({ target }: { target: number }) {
@@ -87,8 +139,9 @@ export function SceneRoot(p: SceneRootProps) {
   // Backdrop + plate paint (shared: the plate fill is what lower "fake glass" layers show through themselves).
   const bspec = backdropSpec(project, p.appearance)
   const display = useMemo(() => displayTransformFor(project.render.colorMode), [project.render.colorMode])
-  // Worker display_paint: in the 'neutral' colour mode paints are pre-compensated for Khronos PBR Neutral.
-  const displayPaint = (project.render.colorMode ?? 'neutral') === 'neutral'
+  // Worker display_paint: paints are pre-compensated for the colour mode's view transform ('brand': the inverse soft
+  // clip; 'neutral': inverse Khronos PBR Neutral). Missing / unknown modes are the worker's default, 'brand'.
+  const displayPaint = paintTransformFor(project.render.colorMode)
   const backdrop = useBackdropBinding(bspec, display)
   const rawPlateFill = canvas.plate.fill
   const plateFill = useMemo<Fill>(
@@ -115,6 +168,25 @@ export function SceneRoot(p: SceneRootProps) {
   const top = useCallback((e: number) => stackTop(stack, e), [stack])
   const lumRange = useMemo(() => iconLumRange(stack), [stack])
   const intentLum = useMemo<[number, number]>(() => lumRange, [lumRange[0], lumRange[1]]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Round 5 mono maps (worker env mono / monoCombined `lut`) of the clear / tinted renditions, over every visible paint.
+  const effAppearance = canvas.platform === 'watchos' ? 'light' : p.appearance // watchOS ignores appearances
+  const monoLuts = useMemo<MonoLutTextures | null>(() => {
+    const luts = monoLutsFor(effAppearance, project.layers, geometry?.layers)
+    return luts ? { mono: monoLutTexture(luts.mono), combined: monoLutTexture(luts.combined) } : null
+  }, [effAppearance, project.layers, geometry])
+  // Round 5 (worker scene._flush_params / _film_params): Liquid Glass flush with the plate outline, and translucent
+  // Liquid Glass pieces as display-space blend films (light / dark renditions).
+  const flushShape = plateVisible ? canvas.shape : 'none'
+  const flush = useMemo(
+    () => flushParams(project.layers, geometry?.layers, canvas, flushShape),
+    [project.layers, geometry, canvas, flushShape],
+  )
+  const cm = colorModeId(project.render.colorMode)
+  const films = useMemo(
+    () => filmParamsFor(project, geometry?.layers, cm, monoLuts !== null, touchingOpaque, canvas.shape),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [project.layers, project.canvas, geometry, cm, monoLuts],
+  )
   // Camera framing hull: the plate outline (front + back face) and every layer box at a given explode amount.
   const plateFrame = useMemo<PlateFrame | null>(
     () =>
@@ -127,15 +199,13 @@ export function SceneRoot(p: SceneRootProps) {
     (e: number, out: number[]) => stackFramePoints(stack, e, plateFrame, out),
     [stack, plateFrame],
   )
-  // Worker _shadow_color: a shadow ray loses opacity × 0.85 (glass) / 0.95 (solids) of the light, × 0.6 for unlit
-  // `flat` layers. One shadow map serves all layers, so the strongest caster sets the darkness.
+  // Worker _shadow_color: a shadow ray loses opacity × (1 − luminance of the target transmittance) of the light —
+  // neutral: 0.85 (glass) / 0.95 (solids); chromatic: the paint's hue at HSV value 0.72 (light paints cast faint
+  // coloured shadows) — × 0.6 for unlit `flat` layers. One (grey) shadow map serves all layers: the strongest caster
+  // sets the darkness.
   const shadowStrength = useMemo(() => {
     let k = 0
-    for (const s of stack) {
-      if (s.layer.shadow.kind === 'none') continue
-      const op = Math.max(0, Math.min(1, s.layer.shadow.opacity))
-      k = Math.max(k, op * (s.spec.transmission > 0 ? 0.85 : 0.95) * (s.spec.unlit ? 0.6 : 1))
-    }
+    for (const s of stack) k = Math.max(k, shadowAmount(s))
     return k
   }, [stack])
   const bloom = useMemo(() => Math.max(0, ...stack.map((s) => s.spec.bloom)), [stack])
@@ -178,6 +248,9 @@ export function SceneRoot(p: SceneRootProps) {
             onSelect={onSelect}
             onTransform={onTransform}
             intentLum={intentLum}
+            monoLuts={monoLuts}
+            flush={flush.get(entry.layer.id) ?? null}
+            films={films}
             presets={presets}
             lit={lit}
             displayPaint={displayPaint}

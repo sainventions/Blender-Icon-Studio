@@ -64,7 +64,7 @@ def swatch_scene(preset: str) -> tuple[dict, dict]:
                              "material": {"preset": "satin"}, "thickness": 0.14, "bevel": 0.05}},
         "lighting": {"preset": "studio", "angle": -45.0},
         "camera": {"view": "front", "zoom": 1.06},
-        "render": {"colorMode": "neutral", "backdrop": "transparent"},
+        "render": {"colorMode": P.DEFAULT_COLOR_MODE, "backdrop": "transparent"},
     }
     bundle = {"projectId": "swatch", "hash": "swatch", "viewBox": [0, 0, 1, 1], "layers": {
         "bars": _geo("bars", bars, {"type": "solid", "color": "#1f2937", "opacity": 1.0}, 0.05),
@@ -90,14 +90,18 @@ def warmup_texture() -> str:
     return path
 
 
-def warmup_scene(full: bool = True) -> tuple[dict, dict]:
+def warmup_scene(full: bool = True, mono: bool = False) -> tuple[dict, dict]:
     """Every shader variant the app generates in one scene: top raytraced glass, fake glass under it,
-    opaque presets, texture paint, gradient paint, object-colour paint and an alpha (opacity) variant."""
+    opaque presets, texture paint, gradient paint, object-colour paint and an alpha (opacity) variant.
+    ``mono``: the reduced scene for the clear / tinted renditions (every layer becomes Liquid Glass there): one
+    Liquid Glass layer per paint kind (texture / gradient / solid) plus the Liquid Glass roles below."""
     tex = warmup_texture()
     glass_presets = ["liquid_glass"] + (["clear_glass", "frosted_glass", "dispersive_crystal", "tinted_glass"]
                                         if full else [])
     solid_presets = ["satin", "flat"] + (["glossy_plastic", "candy", "gummy", "jelly", "chrome", "brushed_metal",
                                           "matte_clay", "iridescent", "neon"] if full else [])
+    if mono:
+        glass_presets, solid_presets = ["liquid_glass", "liquid_glass", "liquid_glass"], []
     layers, geos = [], {}
     n = 0
     # bottom: opaque presets in a grid, then glass presets, then the top glass covering everything
@@ -112,6 +116,35 @@ def warmup_scene(full: bool = True) -> tuple[dict, dict]:
         layers.append(L)
         geos[lid] = _geo(lid, [circle_spline(x, y, 0.15)], SWATCH_PAINT, 0.1, tex)
         n += 1
+    # Liquid Glass (the default material) in every role a corpus icon produces under the top glass (round 5: the
+    # first draft of Find Device / Calculator compiled these for ~6 s): texture-painted fake glass, a translucent
+    # piece (display-space blend film), a raster region (UV affine + alpha) and a combined body (mono LUT variant
+    # in the clear renditions)
+    lg = [("lgfake", -0.45, 0.05, {"type": "solid", "color": "#3366ff", "opacity": 1.0}, 1.0, "card"),
+          ("lgfilm", 0.0, 0.05, {"type": "solid", "color": "#000000", "opacity": 1.0}, 0.4, None),
+          ("lgraster", 0.45, 0.05, {"type": "solid", "color": "#ff8800", "opacity": 1.0}, 1.0, "img"),
+          ("lgcomb", 0.0, -0.35, {"type": "solid", "color": "#22aa55", "opacity": 1.0}, 1.0, "combined")]
+    for k, (lid, x, y, paint, op, extra) in enumerate(lg):
+        L = _layer(lid, 0.3 + 0.01 * k, "liquid_glass", {"type": "auto"}, 0.08, 0.03)
+        g = _geo(lid, [circle_spline(x, y, 0.14)], paint, 0.1, tex)
+        g["regions"][0]["opacity"] = op
+        if extra == "img":
+            g["regions"][0]["elementId"] = f"{lid}img"
+            g["images"] = [{"elementId": f"{lid}img", "path": tex, "bbox": [x - 0.14, y - 0.14, x + 0.14, y + 0.14],
+                            "width": 16, "height": 16, "matrix": [0.0175, 0.0, 0.0, -0.0175, x - 0.14, y + 0.14]}]
+        if extra == "card":         # a flat raster card (glow halo / unextruded <image>)
+            g["images"] = [{"elementId": f"{lid}card", "path": tex, "bbox": [x - 0.1, y - 0.1, x + 0.1, y + 0.1],
+                            "width": 16, "height": 16, "matrix": [0.0125, 0.0, 0.0, -0.0125, x - 0.1, y + 0.1]}]
+        if extra == "combined":
+            L["mode"] = "combined"
+        layers.append(L)
+        geos[lid] = g
+    # a combined body that is the top-most glass where it sits (raytraced refraction + its mono LUT variant)
+    L = _layer("lgcombtop", 0.7, "liquid_glass", {"type": "auto"}, 0.08, 0.03)
+    L["mode"] = "combined"
+    layers.append(L)
+    geos["lgcombtop"] = _geo("lgcombtop", [circle_spline(0.84, -0.84, 0.09)],
+                             {"type": "solid", "color": "#aa2255", "opacity": 1.0}, 0.06, tex)
     lid = "top"
     layers.append(_layer(lid, 0.5, "liquid_glass", {"type": "auto"}, 0.1, 0.045))
     geos[lid] = _geo(lid, [circle_spline(0.0, 0.0, 0.9)], SWATCH_PAINT, 0.3, tex)
@@ -122,7 +155,7 @@ def warmup_scene(full: bool = True) -> tuple[dict, dict]:
     geos[lid]["images"] = [{"elementId": "img0", "path": tex, "bbox": [-0.2, -0.7, 0.2, -0.3],
                             "width": 16, "height": 16, "matrix": [0.025, 0.0, 0.0, -0.025, -0.2, -0.3]}]
     project = {"id": "warmup", "name": "warmup", "layers": layers,
-               "canvas": {"shape": "squircle"}, "render": {"backdrop": "transparent"}}
+               "canvas": {"shape": "squircle"}, "render": {"backdrop": "transparent", "colorMode": P.DEFAULT_COLOR_MODE}}
     bundle = {"projectId": "warmup", "hash": "warmup", "layers": geos}
     return project, bundle
 
@@ -136,9 +169,10 @@ def render_swatches(builder, out_dir: str, size: int = 192, quality: str = "prev
     for i, preset in enumerate(ids):
         project, bundle = swatch_scene(preset)
         info = builder.build(project, bundle, "light", engine=R.tier(quality)["engine"])
-        R.configure(scene, quality, size, transparent=True, color_mode="neutral",
+        cm = P.color_mode_id(project["render"]["colorMode"])
+        R.configure(scene, quality, size, transparent=True, color_mode=cm,
                     max_frost=info["maxFrost"], volume=info["volume"])
-        R.configure_compositor(scene, info["neonBloom"], True)
+        R.configure_compositor(scene, info["neonBloom"], True, P.soft_clip_knee(cm))
         out = os.path.join(out_dir, f"{preset}.png")
         R.render_still(scene, out)
         files.append(out)

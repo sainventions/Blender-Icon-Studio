@@ -14,7 +14,7 @@
 
 Public API (PLAN.md §4 A): :func:`import_svg`, :func:`split_layers`, :func:`merge_layers`,
 :func:`split_layer`, :func:`move_elements`, :func:`build_geometry`, :func:`geometry_path`,
-:func:`thumbnail_png`, :func:`layer_thumbnail_png`. Invalid edits raise ``ValueError``
+:func:`thumbnail_png`, :func:`layer_thumbnail_png` (+ :func:`layer_auto_modes`). Invalid edits raise ``ValueError``
 (:class:`ZOrderError` for stacking-order violations)."""
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ import gzip
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 from bis.models import Canvas, Element, GeometryBundle, Layer, Project, SourceInfo, SplitStrategy
 from .common import PIPELINE_VERSION, ArtSpace, atomic_write_bytes, atomic_write_text, dedupe, sha1
@@ -37,12 +37,13 @@ from .plate import (CLIP_WARN_FRACTION, clipped_fraction, detect_full_bleed, det
                     plate_record)
 from .prepass import Options, auto_name, prepass
 from .split import compute_analysis
+from .tiling import auto_mode
 from . import raster, textures
 
 __all__ = [
     "ImportResult", "ZOrderError", "import_svg", "split_layers", "merge_layers", "split_layer",
-    "move_elements", "build_geometry", "geometry_path", "thumbnail_png", "layer_thumbnail_png",
-    "read_store", "PIPELINE_VERSION",
+    "move_elements", "layer_auto_modes", "build_geometry", "geometry_path", "thumbnail_png",
+    "layer_thumbnail_png", "read_store", "PIPELINE_VERSION",
 ]
 
 SOURCE_FILE = "source.svg"
@@ -202,6 +203,14 @@ def move_elements(project_dir: Path, project: Project, element_ids: List[str],
     """Move elements to another layer (None = a new layer). Emptied layers are removed; the
     result is re-ordered to stay z-order consistent. Raises ZOrderError if impossible."""
     return _ops.move(read_store(project_dir), project, element_ids, to_layer_id)
+
+
+def layer_auto_modes(project_dir: Path, project: Project) -> Dict[str, str]:
+    """{layer id: the mode the tiling heuristic picks for the layer's elements}
+    (:func:`bis.svg.tiling.auto_mode`: 'combined' for tiles of one shape / shading overlays). A layer
+    whose ``mode`` differs was set by the user (the server's style copy only transfers such modes)."""
+    store = read_store(project_dir)
+    return {L.id: auto_mode(store, L.elementIds) for L in project.layers}
 
 
 # ----------------------------------------------------------------------------------------------

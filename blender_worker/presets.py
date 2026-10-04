@@ -76,6 +76,27 @@ def quality(tier: str) -> dict:
     return q.get(tier) or q["draft"]
 
 
+# render.colorMode the worker uses when a project carries none (commands._project). models.RenderSettings still
+# defaults to 'neutral' (a contract change the server owns); this is the round-5 'brand' decision.
+DEFAULT_COLOR_MODE = "brand"
+
+
 def color_mode(mode: str) -> dict:
     cm = load()["colorModes"]
-    return cm.get(mode) or cm["neutral"]
+    return cm.get(mode) or cm.get(DEFAULT_COLOR_MODE) or cm["neutral"]
+
+
+def color_mode_id(mode: Optional[str]) -> str:
+    """A known colour-mode id: ``mode`` itself, else DEFAULT_COLOR_MODE (missing / unknown modes)."""
+    cm = load()["colorModes"]
+    if mode in cm:
+        return str(mode)
+    return DEFAULT_COLOR_MODE if DEFAULT_COLOR_MODE in cm else "neutral"
+
+
+def soft_clip_knee(mode: Optional[str]) -> float:
+    """Knee of the compositor highlight soft clip of a colour mode (presets.json ``softClip``), 0 = none."""
+    try:
+        return float(color_mode(color_mode_id(mode)).get("softClip") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0

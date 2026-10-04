@@ -5,7 +5,7 @@
 // The environment is rendered for light angle 0 (light from the top) into a 256² cube target once per parameter
 // change; the light angle itself is applied as scene.environmentRotation, so dragging the light dial costs nothing.
 import * as THREE from 'three'
-import { COOL, DIFFUSE_CAL, WARM, WORLD_CAL, lightDir, type Rig } from './rig'
+import { COOL, DIFFUSE_CAL, LIVE_LIGHT_CAL, WARM, WORLD_CAL, lightDir, type Rig } from './rig'
 
 const DOME_VERT = /* glsl */ `
 varying vec3 vDir;
@@ -143,26 +143,27 @@ export class StudioEnvironment {
     const zUp = new THREE.Vector3(0, 0, 1)
     const env = rig.environment
     const domeU = this.dome.material.uniforms
-    // Worker calibration: the world (dome, front term and the key softbox spot of its graph) × WORLD_CAL, the fill
-    // area light × DIFFUSE_CAL; the rim strips and side kickers keep their energy.
-    domeU.strength.value = 0.75 * WORLD_CAL * env
-    domeU.front.value = 0.5 * Math.max(0.3, rig.fill)
+    // Worker _world_graph: (gradient + key softbox spot · max(0.2, key) + front · max(0.3, fill)) × 0.6 · WORLD_CAL ·
+    // environment — every term linear in the environment, like the worker — the fill area light × DIFFUSE_CAL; the rim
+    // strips and side kickers keep their energy. LIVE_LIGHT_CAL: per-component live calibration (rig.ts).
+    domeU.strength.value = 0.6 * WORLD_CAL * env * LIVE_LIGHT_CAL.dome
+    domeU.front.value = (0.5 * Math.max(0.3, rig.fill) * LIVE_LIGHT_CAL.front) / LIVE_LIGHT_CAL.dome
     domeU.tint.value.copy(white).lerp(WARM.clone().lerp(white, 0.5), rig.warmth * 0.6)
 
     const keyColor = white.clone().lerp(WARM, rig.warmth)
     place(this.softbox.mesh, lightDir(0, rig.elevation), 10, zUp)
-    this.softbox.set(6 * WORLD_CAL * Math.max(0.2, rig.key) * (0.55 + 0.45 * Math.min(1.5, env)), keyColor)
+    this.softbox.set(6 * WORLD_CAL * Math.max(0.2, rig.key) * env * LIVE_LIGHT_CAL.softbox, keyColor)
 
     const rimA = rig.rimColors[0] ? new THREE.Color(rig.rimColors[0]) : white
     const rimB = rig.rimColors[1] ? new THREE.Color(rig.rimColors[1]) : rimA
-    const rimScale = rig.rim * Math.max(0.4, rig.intensity)
+    const rimScale = rig.rim * Math.max(0.4, rig.intensity) * LIVE_LIGHT_CAL.rim
     place(this.rimTop.mesh, lightDir(0, 82), 10, zUp)
     this.rimTop.set(30 * rimScale, rimA)
     place(this.rimOpp.mesh, lightDir(180, 82), 10, zUp)
     this.rimOpp.set(8 * rimScale, rimB)
 
     place(this.fillCard.mesh, lightDir(160, 55), 10, zUp)
-    this.fillCard.set(0.85 * DIFFUSE_CAL * rig.fill, white.clone().lerp(COOL, rig.warmth))
+    this.fillCard.set(0.85 * DIFFUSE_CAL * rig.fill * LIVE_LIGHT_CAL.fill, white.clone().lerp(COOL, rig.warmth))
 
     place(this.kickL.mesh, lightDir(-90, 80), 10, up)
     this.kickL.set(4 * rimScale, rimB)

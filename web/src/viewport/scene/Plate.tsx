@@ -12,6 +12,7 @@ import {
   describeMaterial,
   IconMaterial,
   type FakeGlassBinding,
+  type PaintTransform,
 } from '../../lib/materials3d'
 import { useCached } from '../refCache'
 import { buildPlateGeometry, geometryCache, plateGeometryKey, plateParams } from '../geometry/layerGeometry'
@@ -27,8 +28,8 @@ interface Props {
   rimDir: THREE.Vector3
   /** Liquid Glass self-illumination (worker `lit`). */
   lit: number
-  /** Colour mode 'neutral': paints pre-compensated for Khronos PBR Neutral (worker display_paint). */
-  displayPaint: boolean
+  /** Paint pre-compensation for the colour mode's view transform (worker display_paint). */
+  displayPaint: PaintTransform
 }
 
 export const Plate = memo(function Plate({ canvas, presets, paint, behind, rimDir, lit, displayPaint }: Props) {
@@ -65,6 +66,7 @@ export const Plate = memo(function Plate({ canvas, presets, paint, behind, rimDi
       opacity: paint.opacity,
       lit,
       displayPaint,
+      plate: true, // worker spec 'plate': no white-ice / white-milk body
     })
     // A semi-transparent plate fill must stay in the opaque pass, or glass layers would neither show nor refract it.
     material.blending = THREE.NormalBlending // undo an earlier routing (fill opacity back to 1)

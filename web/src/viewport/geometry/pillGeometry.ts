@@ -376,7 +376,11 @@ function triangulateCap(
   }
   const consistent = covered <= Math.max(expected, 0) * 1.01 + 1e-9
   if (!consistent && !allowFallback) return false
-  if (!consistent && contourO.length === contourV.length) {
+  // A self-crossing inset ring has no meaningful shoelace area (Earth's waves: hairpins where the art meets the plate
+  // outline; earcut fanned a wedge across the whole layer while its coverage still looked plausible): triangulate with
+  // the outline's connectivity at the full bevel instead.
+  const crossed = consistent && ringsCross([contourV, ...holesV])
+  if ((!consistent || crossed) && contourO.length === contourV.length) {
     // The inset contour still crosses itself (a fold the clamp / untangle could not resolve): earcut overlapped
     // triangles. Use the connectivity of the outline (a simple polygon; the inset is a deformation of it).
     try {
@@ -400,6 +404,46 @@ function triangulateCap(
     else B.idx.push(indices[a], indices[c], indices[b])
   }
   return consistent
+}
+
+/** Whether any two non-adjacent edges of the closed rings cross (proper intersections; a uniform grid keeps it fast). */
+export function ringsCross(rings: THREE.Vector2[][]): boolean {
+  const segs: [THREE.Vector2, THREE.Vector2, number, number, number][] = [] // a, b, ring, index, ring length
+  rings.forEach((r, ri) => {
+    for (let i = 0; i < r.length; i++) segs.push([r[i], r[(i + 1) % r.length], ri, i, r.length])
+  })
+  if (segs.length < 4) return false
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
+  for (const [a] of segs) {
+    x0 = Math.min(x0, a.x); y0 = Math.min(y0, a.y); x1 = Math.max(x1, a.x); y1 = Math.max(y1, a.y)
+  }
+  const G = Math.max(1, Math.min(64, Math.round(Math.sqrt(segs.length))))
+  const cw = Math.max((x1 - x0) / G, 1e-9)
+  const ch = Math.max((y1 - y0) / G, 1e-9)
+  const cell = (v: number, lo: number, s: number) => Math.max(0, Math.min(G - 1, Math.floor((v - lo) / s)))
+  const grid: number[][] = Array.from({ length: G * G }, () => [])
+  segs.forEach(([a, b], k) => {
+    for (let ix = cell(Math.min(a.x, b.x), x0, cw); ix <= cell(Math.max(a.x, b.x), x0, cw); ix++)
+      for (let iy = cell(Math.min(a.y, b.y), y0, ch); iy <= cell(Math.max(a.y, b.y), y0, ch); iy++) grid[ix * G + iy].push(k)
+  })
+  const cross = (p: THREE.Vector2, q: THREE.Vector2, r: THREE.Vector2, s: THREE.Vector2) => {
+    const d = (q.x - p.x) * (s.y - r.y) - (q.y - p.y) * (s.x - r.x)
+    if (Math.abs(d) < 1e-18) return false
+    const t = ((r.x - p.x) * (s.y - r.y) - (r.y - p.y) * (s.x - r.x)) / d
+    const u = ((r.x - p.x) * (q.y - p.y) - (r.y - p.y) * (q.x - p.x)) / d
+    return t > 1e-9 && t < 1 - 1e-9 && u > 1e-9 && u < 1 - 1e-9
+  }
+  for (const list of grid) {
+    for (let m = 0; m < list.length; m++) {
+      const [a, b, ra, ia, na] = segs[list[m]]
+      for (let o = m + 1; o < list.length; o++) {
+        const [c, d, rc, ic] = segs[list[o]]
+        if (ra === rc && (Math.abs(ia - ic) <= 1 || Math.abs(ia - ic) === na - 1)) continue
+        if (cross(a, b, c, d)) return true
+      }
+    }
+  }
+  return false
 }
 
 /** Halvings of the bevel tried for a piece whose inset caps fold (see buildPillGeometry). */

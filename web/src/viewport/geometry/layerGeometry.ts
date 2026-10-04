@@ -76,6 +76,8 @@ export interface BodyPart {
   zSub: number
   /** Raster-image region painted from the layer texture: honour the texture's alpha (worker: image alpha). */
   alpha: boolean
+  /** Index of the region in LayerGeometry.regions (individual pieces), null for the silhouette body. */
+  regionIndex: number | null
   build: () => THREE.BufferGeometry
 }
 
@@ -85,14 +87,38 @@ export function regionOffset(zSub: number | null | undefined): number {
   return z >= 1 ? Math.min(z, 40) * 0.001 : z
 }
 
-/** The meshes of one layer: one per region ('individual') or the union silhouette ('combined'). */
+/**
+ * Worker scene.touching_opaque (round 4): some regions of the layer share edges (the union silhouette has fewer outer
+ * contours than the regions together) and every region is opaque vector paint with no sub-layer offset — the layer then
+ * renders as ONE body painted by the layer texture (bevelled one by one, every shared edge became a V-groove showing
+ * the plate as a white sliver with a rim highlight).
+ */
+export function touchingOpaque(lg: LayerGeometry | null | undefined): boolean {
+  const regions = lg?.regions ?? []
+  const sil = lg?.silhouette ?? []
+  if (regions.length < 2 || !sil.length) return false
+  if ((lg?.images ?? []).length) return false
+  if (regions.some((r) => (r.opacity ?? 1) < 0.999 || Number(r.zSub ?? 0) !== 0)) return false
+  if (regions.some((r) => (r.paint.type === 'linear' || r.paint.type === 'radial') && r.paint.stops.some((s) => (s.opacity ?? 1) < 0.999)))
+    return false
+  const silOuter = sil.filter((s) => !s.hole).length
+  const regOuter = regions.reduce((n, r) => n + (r.splines ?? []).filter((s) => !s.hole).length, 0)
+  return silOuter > 0 && silOuter < regOuter
+}
+
+/** One body (silhouette) instead of one per region: layer mode 'combined' or touching opaque pieces (worker). */
+export function isCombinedBody(layer: Layer, lg: LayerGeometry): boolean {
+  return layer.mode === 'combined' || touchingOpaque(lg)
+}
+
+/** The meshes of one layer: one per region ('individual') or the union silhouette ('combined' / touching pieces). */
 export function layerBodyParts(layer: Layer, lg: LayerGeometry, d: DepthParams): BodyPart[] {
   const dk = depthKey(d)
   const base = `${lg.layerId}:${lg.hash}`
   const silhouette = lg.silhouette ?? []
   const regions = lg.regions ?? []
   if (!silhouette.length && !regions.length) return [] // raster-only layer (cards)
-  if (layer.mode === 'combined' || regions.length === 0) {
+  if (isCombinedBody(layer, lg) || regions.length === 0) {
     const splines = silhouette.length ? silhouette : regions.flatMap((r) => r.splines)
     return [
       {
@@ -101,6 +127,7 @@ export function layerBodyParts(layer: Layer, lg: LayerGeometry, d: DepthParams):
         opacity: 1,
         zSub: 0,
         alpha: false,
+        regionIndex: null,
         build: () => buildFromSplines(splines, d),
       },
     ]
@@ -113,6 +140,7 @@ export function layerBodyParts(layer: Layer, lg: LayerGeometry, d: DepthParams):
     opacity: region.opacity ?? 1,
     zSub: regionOffset(region.zSub),
     alpha: autoPaint && rasters.has(region.elementId),
+    regionIndex: i,
     build: () => buildFromSplines(region.splines ?? [], d),
   }))
 }
