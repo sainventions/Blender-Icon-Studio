@@ -21,8 +21,12 @@ stackGap) - so layers that sit side by side share the base::
 
     z(i) = max(stackLift, max over overlapped lower j of z(j) + H(j) + gap)     gap = StyleSpec.zGap or stackGap
 
-EVERY layer takes part (a hidden one keeps its slot so toggling it never moves the others). A layer whose footprint is
-unknown (only a maxRadius number was given) overlaps every other layer, which gives the round-7 sequential stack
+HIDDEN layers take no stack slot (QA r11 N12): no layer stacks above a hidden one (j ranges over the VISIBLE lower layers
+only, :func:`stack_lower`), so nothing floats over the gap a hidden layer (Find Device's baked sweep) would leave; a
+hidden layer's own z is still computed by the rule - stacked over the visible layers it overlaps - so unhiding puts it
+where it belongs (the editor then re-stacks a recognised stack: the layers above it that it overlaps move up). Hidden
+layers are not rendered and never collide (:func:`interpenetrations`). A layer whose footprint is unknown (only a
+maxRadius number was given) overlaps every other layer, which gives the round-7 sequential stack
 z(i+1) = z(i) + H(i) + gap - never lower than the overlap-aware one.
 
 Used by the SVG pipeline's import defaults and structural edits (``bis.svg.layers`` / ``bis.svg.ops``, footprints from
@@ -350,6 +354,18 @@ def overlap_lists(layers: Sequence[Any], shapes: Mapping[str, Any] | Sequence[An
     return out
 
 
+def is_visible(layer: Any) -> bool:
+    """A layer takes a stack slot unless it is hidden (``visible`` False; a missing attribute = shown)."""
+    return getattr(layer, "visible", True) is not False
+
+
+def stack_lower(layers: Sequence[Any], lower: Sequence[Sequence[int]]) -> list[list[int]]:
+    """The overlap lists the stack uses (QA r11 N12): only the VISIBLE lower layers - no layer stacks above a hidden
+    one. Every layer keeps its list (a hidden layer's own z is stacked over the visible layers it overlaps)."""
+    shown = [is_visible(L) for L in layers]
+    return [[j for j in low if j < len(shown) and shown[j]] for low in lower]
+
+
 def overlap_z(hs: Sequence[float], lower: Sequence[Sequence[int]], gap: float, lift: float = 0.0) -> list[float]:
     """z of every layer: z(i) = max(lift, max over j in lower[i] of z(j) + H(j) + gap) (unrounded running values,
     the output rounded to Z_DECIMALS)."""
@@ -372,13 +388,13 @@ def restack(layers: Sequence[Any], radii: Mapping[str, Any] | Sequence[Any] | No
     """Set ``depth.z`` of every layer (in place) to the overlap-aware real-height stack; returns the z values.
     `radii`: layer id → LayerShape (footprint + maxRadius) / maxRadius number (footprint unknown: stacks on every
     lower layer) / LayerGeometry. `gap` / `lift` / `clearance` None → presets.json "geometry" (stackGap /
-    stackLift / stackGap)."""
+    stackLift / stackGap). Hidden layers take no slot (:func:`stack_lower`)."""
     rules = geometry_rules(presets)
     g = rules["stackGap"] if gap is None else gap
     l0 = rules["stackLift"] if lift is None else lift
     lower = overlap_lists(layers, radii, art_scale=art_scale, art_offset=art_offset,
                           clearance=rules["stackGap"] if clearance is None else clearance)
-    zs = overlap_z(heights(layers, radii, art_scale), lower, g, l0)
+    zs = overlap_z(heights(layers, radii, art_scale), stack_lower(layers, lower), g, l0)
     for L, z in zip(layers, zs):
         L.depth.z = z
     return zs
@@ -395,25 +411,33 @@ def stack_gaps(layers: Sequence[Any], radii: Mapping[str, Any] | Sequence[Any] |
 def stack_clearances(layers: Sequence[Any], radii: Mapping[str, Any] | Sequence[Any] | None, *,
                      art_scale: float = 1.0, art_offset: Any = (0.0, 0.0), clearance: Optional[float] = None,
                      presets: Any = None) -> list[Optional[float]]:
-    """For every layer: z(i) − max over its overlapped lower layers j of (z(j) + H(j)) - the gap it was stacked
-    with; None for a layer that overlaps no lower layer (it sits on the base)."""
+    """For every layer: z(i) − max over its overlapped VISIBLE lower layers j of (z(j) + H(j)) - the gap it was
+    stacked with (hidden layers take no slot: :func:`stack_lower`); None for a layer that overlaps no visible lower
+    layer (it sits on the base)."""
     hs = heights(layers, radii, art_scale)
     lower = overlap_lists(layers, radii, art_scale=art_scale, art_offset=art_offset, clearance=clearance,
                           presets=presets)
-    zs = [_num(L.depth.z) for L in layers]
-    return [None if not lower[i] else zs[i] - max(zs[j] + hs[j] for j in lower[i]) for i in range(len(layers))]
+    return _clearances([_num(L.depth.z) for L in layers], hs, stack_lower(layers, lower))
+
+
+def _clearances(zs: Sequence[float], hs: Sequence[float], lower: Sequence[Sequence[int]]) -> list[Optional[float]]:
+    return [None if not lower[i] else zs[i] - max(zs[j] + hs[j] for j in lower[i]) for i in range(len(zs))]
 
 
 def interpenetrations(layers: Sequence[Any], radii: Mapping[str, Any] | Sequence[Any] | None, *,
                       art_scale: float = 1.0, art_offset: Any = (0.0, 0.0),
                       tol: float = Z_TOL) -> list[tuple[int, int, float]]:
     """Pairs of layers (j, i), j < i, whose bodies may cut into each other: footprints that touch or intersect in XY
-    and z ranges [z, z + H] that overlap by more than `tol` → [(j, i, overlap depth)]. Hidden layers count too."""
+    and z ranges [z, z + H] that overlap by more than `tol` → [(j, i, overlap depth)]. Hidden layers are not rendered
+    and take no stack slot (QA r11 N12): they never collide."""
     hs = heights(layers, radii, art_scale)
-    lower = overlap_lists(layers, radii, art_scale=art_scale, art_offset=art_offset, clearance=1e-9)
+    lower = stack_lower(layers, overlap_lists(layers, radii, art_scale=art_scale, art_offset=art_offset,
+                                              clearance=1e-9))
     zs = [_num(L.depth.z) for L in layers]
     out = []
     for i, low in enumerate(lower):
+        if not is_visible(layers[i]):
+            continue
         for j in low:
             d = min(zs[i] + hs[i], zs[j] + hs[j]) - max(zs[i], zs[j])
             if d > tol:
@@ -428,8 +452,10 @@ def stack_gap(layers: Sequence[Any], radii: Mapping[str, Any] | Sequence[Any] | 
     overlap-aware real-height stack (round 8: base layers at stackLift, every other layer one gap above its
     overlapped lower layers), the round-7 sequential real-height stack (one gap between every pair of neighbours) -
     both return their gap - and the pre-round-7 default stack (z_i = i × 0.13) and a stack with no overlapping
-    layers at all (every layer at stackLift) - both return the presets' stackGap. Structural edits re-stack a rule
-    stack (so round-7 / legacy stacks convert to the overlap-aware one)."""
+    layers at all (every layer at stackLift) - both return the presets' stackGap. The overlap-aware stack is the
+    current one (hidden layers take no slot, :func:`stack_lower`) or the round-9 one, where hidden layers kept their
+    slot (projects saved before QA r11 N12). Structural edits re-stack a rule stack (so round-7 / round-9 / legacy
+    stacks convert to the current one)."""
     if not layers:
         return None
     rules = geometry_rules(presets)
@@ -438,16 +464,20 @@ def stack_gap(layers: Sequence[Any], radii: Mapping[str, Any] | Sequence[Any] | 
         return rules["stackGap"]
     if abs(zs[0] - rules["stackLift"]) > Z_TOL:
         return None
-    cl = stack_clearances(layers, radii, art_scale=art_scale, art_offset=art_offset, clearance=clearance,
+    hs = heights(layers, radii, art_scale)
+    lower = overlap_lists(layers, radii, art_scale=art_scale, art_offset=art_offset, clearance=clearance,
                           presets=presets)
-    gaps = [g for g in cl if g is not None]
-    base_ok = all(abs(zs[i] - rules["stackLift"]) <= Z_TOL for i, g in enumerate(cl) if g is None)
-    if base_ok:
+    shown = stack_lower(layers, lower)
+    for low in ([shown, lower] if shown != lower else [shown]):    # current rule, then round 9 (hidden kept slots)
+        cl = _clearances(zs, hs, low)
+        gaps = [g for g in cl if g is not None]
+        if not all(abs(zs[i] - rules["stackLift"]) <= Z_TOL for i, g in enumerate(cl) if g is None):
+            continue
         if not gaps:
             return rules["stackGap"]
         if max(gaps) - min(gaps) <= 2 * Z_TOL and min(gaps) >= -Z_TOL:
             return round(max(0.0, sum(gaps) / len(gaps)), Z_DECIMALS)
-    seq = stack_gaps(layers, radii, art_scale)     # the round-7 sequential stack
+    seq = [b - (a + h) for a, b, h in zip(zs, zs[1:], hs)]     # the round-7 sequential stack (stack_gaps)
     if not seq:
         return rules["stackGap"]
     if max(seq) - min(seq) > 2 * Z_TOL or min(seq) < -Z_TOL:
@@ -458,13 +488,13 @@ def stack_gap(layers: Sequence[Any], radii: Mapping[str, Any] | Sequence[Any] | 
 def lift_overlaps(layers: Sequence[Any], radii: Mapping[str, Any] | Sequence[Any] | None, *,
                   gap: Optional[float] = None, art_scale: float = 1.0, presets: Any = None,
                   art_offset: Any = (0.0, 0.0), clearance: Optional[float] = None) -> None:
-    """A custom stack after a structural edit: keep every z, except that a layer starting below the top of a lower
-    layer it overlaps in XY (a new layer slotted in, a layer that grew) is lifted to sit `gap` above the highest
-    such top. In place (bottom → top, so lifts propagate)."""
+    """A custom stack after a structural edit: keep every z, except that a layer starting below the top of a VISIBLE
+    lower layer it overlaps in XY (a new layer slotted in, a layer that grew) is lifted to sit `gap` above the highest
+    such top (hidden layers take no slot: :func:`stack_lower`). In place (bottom → top, so lifts propagate)."""
     g = geometry_rules(presets)["stackGap"] if gap is None else gap
     hs = heights(layers, radii, art_scale)
-    lower = overlap_lists(layers, radii, art_scale=art_scale, art_offset=art_offset, clearance=clearance,
-                          presets=presets)
+    lower = stack_lower(layers, overlap_lists(layers, radii, art_scale=art_scale, art_offset=art_offset,
+                                              clearance=clearance, presets=presets))
     for i in range(1, len(layers)):
         if not lower[i]:
             continue

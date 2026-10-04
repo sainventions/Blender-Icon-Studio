@@ -1010,9 +1010,12 @@ class SceneBuilder:
         The viewport draws the studio behind the icon in its transmission pass instead. Limits: a capture is a single
         EEVEE sample with the bodies' (transparent) shadows on the plate in it, noisy — flat glass that would read it
         through a large magnification stays raytraced (materials.art_alpha_is_soft); EEVEE's frosted glass has no
-        multiple scattering, so clear-dark glyphs stay darker than Cycles' milky ones."""
+        multiple scattering, so clear-dark glyphs stay darker than Cycles' milky ones.
+        The plate probe exists whenever something reads it: layer bodies over a plate, or a GLASS plate on its own (QA r11
+        N11: an icon with no visible layer - Template, or every layer hidden - lost the probe, and its frosted plate
+        refracted the dark studio world: clear-light L* 35 vs Cycles' 91). The glyph probe only with layers."""
         layers = [Lr for Lr in eff["layers"] if Lr.get("visible", True) and Lr["id"] in bnd["layers"]]
-        want = bool(plate_ok and layers)
+        want = bool(plate_ok and (layers or glass_plate))
         dark_glass = bool(glass_plate and wp_kind == "dark")
         pob = bpy.data.objects.get("BIS Plate")
         hide = bool(glass_plate and not dark_glass)
@@ -1022,7 +1025,7 @@ class SceneBuilder:
             if bob.hide_probe_sphere == dark_glass:
                 bob.hide_probe_sphere = not dark_glass
         ob = self._sphere_probe(PROBE_NAME, col, want)
-        gob = self._sphere_probe(GLYPH_PROBE_NAME, col, want and dark_glass)
+        gob = self._sphere_probe(GLYPH_PROBE_NAME, col, bool(want and dark_glass and layers))
         if not want:
             return
         layer_z = layer_z or {}
@@ -1040,6 +1043,8 @@ class SceneBuilder:
             return
         th = max(0.0, float((plate or {}).get("thickness", 0.16)))
         self._set_probe(ob, {**reach, "clip_start": th / 2.0 + PLATE_PROBE_CLIP}, (0.0, 0.0, -th / 2.0))
+        if gob is None:   # no layer bodies: nothing reads a glyph probe
+            return
         # the glyph probe: a box from GLYPH_PROBE_FLOOR to above the highest body; captured from its centre (unit
         # influence distance: the box's size is the object's scale)
         z0, z1 = GLYPH_PROBE_FLOOR, max(top, GLYPH_PROBE_FLOOR) + GLYPH_PROBE_MARGIN

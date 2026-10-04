@@ -33,7 +33,7 @@ import { FillEditor } from './FillEditor'
 import { MaterialGallery, MaterialSwatch } from './MaterialGallery'
 import { PrincipledEditor, type MaterialEditKeys } from './PrincipledEditor'
 import { overriddenElements, updateElementMaterials } from './principled'
-import { bevelLimit, roundnessOf, withRoundness, withThickness } from './depth'
+import { bevelLimit, rasterLayerKind, roundnessOf, withRoundness, withThickness } from './depth'
 import { collisionText, restackProject, useStackStatus } from '../stacking'
 import { rimBevel } from '../viewportBridge'
 import { OverrideRows, ScopePicker, useScope } from './scope'
@@ -301,14 +301,7 @@ export function LayerInspector() {
           }
         >
           <StackHint />
-          {isImageLayer(project, primary) && (
-            <div className="flex items-start gap-1.5 rounded-md border border-line bg-surface-0/50 px-2 py-1.5 text-3xs leading-snug text-fg-3">
-              <ImageIcon className="mt-px h-3 w-3 shrink-0 text-fg-4" />
-              <span className="min-w-0 flex-1">
-                Raster image: a flat card (imported thin, no dome; looks keep it flat). Inflate still works if you want a pillow.
-              </span>
-            </div>
-          )}
+          <RasterNote kind={rasterLayerKind(project.elements, primary)} />
           <SliderRow
             label="Z position"
             hint="Height of the layer's back face above the plate (art units). The camera's View control shows the real distances."
@@ -426,11 +419,21 @@ export function LayerInspector() {
   )
 }
 
-/** Every element of the layer is a raster image (server stacking.is_image_layer): imported as a flat card (PLAN §11 r8). */
-function isImageLayer(project: Project, layer: Layer): boolean {
-  if (!layer.elementIds.length) return false
-  const kinds = new Map(project.elements.map((e) => [e.id, e.kind]))
-  return layer.elementIds.every((id) => kinds.get(id) === 'image')
+/** The Depth section's note on a raster layer (PLAN §11 round 9, rasterLayerKind = server stacking.is_card_layer): a
+ *  SOFT raster (glow / shine / shadow) is a flat card; a crisp one (iMessage's bubble, Vanced Neon's logo) is a real
+ *  body like vector art. */
+function RasterNote({ kind }: { kind: 'card' | 'body' | null }) {
+  if (!kind) return null
+  return (
+    <div className="flex items-start gap-1.5 rounded-md border border-line bg-surface-0/50 px-2 py-1.5 text-3xs leading-snug text-fg-3">
+      <ImageIcon className="mt-px h-3 w-3 shrink-0 text-fg-4" />
+      <span className="min-w-0 flex-1">
+        {kind === 'card'
+          ? 'Soft raster (a glow, shine or shadow): a flat card — imported thin, no dome; looks keep it flat. Inflate still works if you want a pillow.'
+          : 'Raster with a crisp outline: a real body like vector art — its traced silhouette gets the normal thickness, round edge and dome.'}
+      </span>
+    </div>
+  )
 }
 
 /** Re-stack hint of a HAND-PLACED stack whose bodies cut into each other (QA N5: a recognised stack re-stacks itself on

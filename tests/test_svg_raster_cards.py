@@ -190,7 +190,8 @@ def test_corpus_raster_softness(name, import_icon):
 def test_corpus_raster_layers(name, import_icon):
     """Crisp rasters import as bodies with the vector defaults, soft ones as flat cards; Find Device's sweep (soft, on
     the green dome and the white outline below it) imports hidden with the warning; Vanced Neon's glow (under the
-    logo) stays a visible card. The stack is the overlap-aware rule stack (hidden layers keep their slot)."""
+    logo) stays a visible card. The stack is the overlap-aware rule stack; hidden layers take no slot (QA r11 N12:
+    Find Device's dot sits on the green dome, not one sweep higher)."""
     res, project, pdir = import_icon(CORPUS_DIR / f"{name}.svg")
     want, warned = LAYERS[name]
     kinds = {e.id: e.kind for e in project.elements}
@@ -215,6 +216,12 @@ def test_corpus_raster_layers(name, import_icon):
             assert H > DEFAULT_THICKNESS + 0.005, (name, L.name, H)
     if name == "Vanced Neon":   # the logo body stacks on the glow card it overlaps
         assert project.layers[1].depth.z == pytest.approx(CARD[0] + stacking.geometry_rules()["stackGap"])
+    if name == "Find Device":   # dome, ring (on the dome), hidden sweep (on both), dot (in the ring's hole, on the dome)
+        gap = stacking.geometry_rules()["stackGap"]
+        z = [L.depth.z for L in project.layers]
+        assert z[2] == pytest.approx(z[1] + hs[1] + gap, abs=1e-5)          # unhiding shows the sweep on the ring
+        assert z[3] == pytest.approx(z[0] + hs[0] + gap, abs=1e-5)          # the dot: one gap over the dome
+        assert z[3] < z[2]                                                  # ... not over the hidden sweep
 
 
 def test_synthetic_soft_and_crisp_rasters(import_icon):

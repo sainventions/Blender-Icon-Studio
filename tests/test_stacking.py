@@ -171,6 +171,48 @@ def test_lift_overlaps_and_interpenetrations_are_overlap_aware():
     assert stacking.interpenetrations(layers, shapes) == []
 
 
+def test_hidden_layers_take_no_stack_slot():
+    """QA r11 N12 (Find Device: the dot floated over the hidden baked sweep): no layer stacks above a HIDDEN layer; the
+    hidden layer's own z is still stacked over the visible layers it overlaps (unhiding puts it there, and a re-stack
+    then lifts the layers above it); hidden layers never collide. A round-9 stack (hidden layers kept their slot) is
+    still recognised as a rule stack, so the next edit converts it."""
+    g = 0.03
+    rules = {"geometry": {"stackGap": g, "stackLift": 0.0}}
+    layers = _layers({"thickness": 0.3}, {"thickness": 0.02}, {"thickness": 0.1})
+    layers[1].visible = False                                       # the baked sweep over the dome
+    shapes = _shapes(l0=(0.0, (-0.8, -0.8, 0.8, 0.8)), l1=(0.0, (-0.6, -0.2, 0.6, 0.4)),
+                     l2=(0.0, (-0.1, -0.1, 0.1, 0.1)))              # the dot: on the dome and under the sweep
+    assert stacking.overlap_lists(layers, shapes, clearance=g) == [[], [0], [0, 1]]
+    assert stacking.stack_lower(layers, [[], [0], [0, 1]]) == [[], [0], [0]]
+    zs = stacking.restack(layers, shapes, presets=rules)
+    assert zs == pytest.approx([0.0, 0.33, 0.33])                   # the dot sits on the dome, not on the sweep
+    assert stacking.stack_clearances(layers, shapes, presets=rules) == pytest.approx([None, g, g])
+    assert stacking.stack_gap(layers, shapes, presets=rules) == pytest.approx(g)
+    assert stacking.interpenetrations(layers, shapes) == []        # the hidden sweep shares the dot's z range
+    layers[1].visible = True                                        # unhidden: it sits on the dome, the dot cuts it
+    assert [L.depth.z for L in layers] == pytest.approx([0.0, 0.33, 0.33])
+    assert stacking.interpenetrations(layers, shapes) == [(1, 2, pytest.approx(0.02))]
+    assert stacking.restack(layers, shapes, presets=rules) == pytest.approx([0.0, 0.33, 0.38])
+    assert stacking.interpenetrations(layers, shapes) == []
+    # a round-9 stack (the hidden sweep kept its slot: the dot floats 0.05 higher) is still a rule stack
+    layers[1].visible = False
+    assert stacking.stack_gap(layers, shapes, presets=rules) == pytest.approx(g)
+    assert stacking.restack(layers, shapes, presets=rules) == pytest.approx([0.0, 0.33, 0.33])
+    layers[2].depth.z = 0.5                                         # neither rule: hand-placed
+    assert stacking.stack_gap(layers, shapes, presets=rules) is None
+    # a hand-placed stack after a structural edit: a layer reaching into a hidden one is not lifted, one reaching into a
+    # visible one is (and a hidden layer is lifted onto the visible ones below it too)
+    layers[2].depth.z = 0.34
+    stacking.lift_overlaps(layers, shapes, gap=g)
+    assert [L.depth.z for L in layers] == pytest.approx([0.0, 0.33, 0.34])
+    layers[1].depth.z, layers[2].depth.z = 0.1, 0.2
+    stacking.lift_overlaps(layers, shapes, gap=g)
+    assert [L.depth.z for L in layers] == pytest.approx([0.0, 0.33, 0.33])
+    # a hidden layer at the bottom: the layers above stack on the visible ones only (here: on the base)
+    layers[0].visible, layers[1].visible = False, True
+    assert stacking.restack(layers, shapes, presets=rules) == pytest.approx([0.0, 0.0, 0.05])
+
+
 def _pieces_shape(*boxes, r=0.0, S=1.0):
     from shapely import union_all
 

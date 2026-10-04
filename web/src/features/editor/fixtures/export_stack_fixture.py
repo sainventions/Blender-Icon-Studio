@@ -3,7 +3,9 @@
 For every icon: import with the server's SVG pipeline (round 8), build the geometry bundle, and record what the web sees
 (layers + the bundle's splines / images / maxRadius) together with the server's bis.stacking results computed from
 the BUNDLE (shapes_from_bundle - the same input the web has): heights H, overlap lists, the import z, re-stacks of
-several edited variants, stack_gap recognition and interpenetrations.
+several edited variants, stack_gap recognition and interpenetrations. QA r11 N12: hidden layers take no stack slot -
+variants with layers hidden / all shown, a round-9 stack (hidden layers kept their slot) and the collisions of a flat
+stack with hidden layers.
 
 Run from the repository root with the server venv (imports go to a temporary directory):
     .venv/Scripts/python.exe web/src/features/editor/fixtures/export_stack_fixture.py
@@ -48,7 +50,7 @@ def spl(s):
 
 
 def layer_json(L):
-    return {"id": L.id, "mode": L.mode, "visible": L.visible, "locked": False,
+    return {"id": L.id, "elementIds": list(L.elementIds), "mode": L.mode, "visible": L.visible, "locked": False,
             "transform": {"x": r6(L.transform.x), "y": r6(L.transform.y), "scale": r6(L.transform.scale)},
             "depth": {"z": L.depth.z, "thickness": L.depth.thickness, "bevel": L.depth.bevel,
                       "bevelSegments": L.depth.bevelSegments, "inflate": L.depth.inflate}}
@@ -56,6 +58,14 @@ def layer_json(L):
 
 def zs(layers):
     return [float(L.depth.z) for L in layers]
+
+
+def hidden(layers, idx):
+    """A copy of `layers` with the layers at `idx` hidden and every other layer shown."""
+    v = [L.model_copy(deep=True) for L in layers]
+    for i, L in enumerate(v):
+        L.visible = i not in set(idx)
+    return v
 
 
 def restacked(layers, shapes, art, **kw):
@@ -108,6 +118,10 @@ def record(name, project, pdir, pid, rules):
     for L in v:
         L.mode = "combined"
     variants["combined"] = v
+    # QA r11 N12: hidden layers take no slot - every other layer hidden, the bottom one hidden, every layer shown
+    variants["hideOdd"] = hidden(layers, range(1, len(layers), 2))
+    variants["hide0"] = hidden(layers, [0])
+    variants["showAll"] = hidden(layers, [])
     var_out = {}
     for key, vl in variants.items():
         sh = stacking.shapes_from_bundle(bundle, vl, art.scale) if key != "move0" else stacking.shapes_from_bundle(bundle, vl, art.scale)
@@ -138,6 +152,22 @@ def record(name, project, pdir, pid, rules):
                    "interpenetrations": [[j, i, r6(d)] for j, i, d in
                                          stacking.interpenetrations(flat, shapes, art_scale=art.scale,
                                                                     art_offset=art)]}
+    # QA r11 N12: hidden layers never collide (a flat stack with every other layer hidden)
+    fh = hidden(flat, range(1, len(flat), 2))
+    rec["flatHidden"] = {"layers": [layer_json(L) for L in fh],
+                         "gap": stacking.stack_gap(fh, shapes, art_scale=art.scale, art_offset=art),
+                         "interpenetrations": [[j, i, r6(d)] for j, i, d in
+                                               stacking.interpenetrations(fh, shapes, art_scale=art.scale,
+                                                                          art_offset=art)]}
+    # a round-9 stack: every other layer hidden, the hidden ones KEEPING their slot (projects saved before N12) - still
+    # recognised as a rule stack (stack_gap), so the next edit converts it
+    r9 = hidden(layers, range(1, len(layers), 2))
+    z9 = stacking.overlap_z(hs, lower, rules["stackGap"], rules["stackLift"])
+    for L, z in zip(r9, z9):
+        L.depth.z = z
+    rec["round9"] = {"layers": [layer_json(L) for L in r9],
+                     "gap": stacking.stack_gap(r9, shapes, art_scale=art.scale, art_offset=art),
+                     "z": restacked(r9, shapes, art)}
     # a hand-placed stack whose bottom layer then got thicker (QA N5): server lift_overlaps result + collisions
     n5 = [L.model_copy(deep=True) for L in hand]
     if n5:
@@ -148,9 +178,14 @@ def record(name, project, pdir, pid, rules):
                  "interpenetrations": [[j, i, r6(d)] for j, i, d in
                                        stacking.interpenetrations(n5, sh5, art_scale=art.scale, art_offset=art)]}
     kinds = {e.id: e.kind for e in project.elements}
+    cards = stacking.card_elements(project.elements)
     return {
         "art": {"scale": art.scale, "x": art.x, "y": art.y},
-        "layers": [dict(layer_json(L), image=stacking.is_image_layer(L, kinds)) for L in layers],
+        "layers": [dict(layer_json(L), image=stacking.is_image_layer(L, kinds), card=stacking.is_card_layer(L, cards))
+                   for L in layers],
+        # the rasters' softness (round 9: the inspector's card / body note = server is_card_layer)
+        "elements": [{"id": e.id, "kind": e.kind, "softAlpha": e.softAlpha} for e in project.elements
+                     if e.kind == "image"],
         "geometry": geo,
         "H": hs, "inLayer": inl, "lower": lower, "dist": dist,
         "z": cases, "variants": var_out, "recognise": rec,

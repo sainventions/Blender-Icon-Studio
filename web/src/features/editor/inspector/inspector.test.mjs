@@ -21,12 +21,14 @@ import {
   bevelLimit,
   interpenetrations,
   DEFAULT_STACK_RULES,
+  isShown,
   keepStack,
   restack,
   roundnessOf,
   ruleHeight,
   stackAffected,
   stackGapOf,
+  stackLower,
   stackRules,
   withRoundness,
   withThickness,
@@ -224,6 +226,42 @@ test('overlap-aware Re-stack (round 8): layers side by side share the base; a la
   const flat = mk(3).map((l) => ({ ...l, depth: { ...l.depth, z: 0 } }))
   assert.deepEqual(interpenetrations(flat, H, [[], [0], []]).map(([j, i]) => [j, i]), [[0, 1]])
   assert.deepEqual(interpenetrations(out, H, lower), [])
+})
+
+test('QA r11 N12: hidden layers take no stack slot (server tests/test_stacking.py, same numbers)', () => {
+  // the dome (0.3), the hidden baked sweep over it (0.02), the dot on the dome and under the sweep (0.1)
+  const H = (l) => ({ D: 0.3, S: 0.02, P: 0.1 })[l.id]
+  const lower = [[], [0], [0, 1]]
+  const mk = (zs, hidden = ['S']) => ['D', 'S', 'P'].map((id, i) => layer({ id, visible: !hidden.includes(id), depth: { ...layer().depth, z: zs[i] } }))
+  const zOf = (ls) => ls.map((l) => Math.round(l.depth.z * 1e5) / 1e5)
+  const stacked = restack(mk([0.5, 0.5, 0.5]), H, DEFAULT_STACK_RULES, 0.03, lower)
+  assert.deepEqual(zOf(stacked), [0, 0.33, 0.33], 'the dot sits on the dome, not on the hidden sweep')
+  assert.deepEqual(stackLower(stacked, lower), [[], [0], [0]])
+  assert.equal(stackLower(mk([0, 0, 0], []), lower), lower, 'nothing hidden: the same lists')
+  assert.equal(isShown({}), true, 'no visible flag: shown')
+  assert.equal(stackGapOf(stacked, H, DEFAULT_STACK_RULES, lower), 0.03)
+  assert.deepEqual(interpenetrations(stacked, H, lower), [], 'the hidden sweep never collides')
+  // unhiding is a stack edit: the keeper lifts the dot onto the sweep (no collisions after unhide)
+  const shown = stacked.map((l) => ({ ...l, visible: true }))
+  assert.equal(stackAffected(stacked, shown, 1, 1), true)
+  assert.deepEqual(interpenetrations(shown, H, lower).map(([j, i]) => [j, i]), [[1, 2]], 'shown without a re-stack: they cut')
+  const kept = keepStack(stacked, shown, H, H, DEFAULT_STACK_RULES, lower, lower)
+  assert.deepEqual(zOf(kept), [0, 0.33, 0.38])
+  assert.deepEqual(interpenetrations(kept, H, lower), [])
+  // hiding again lets the dot back down
+  assert.deepEqual(zOf(keepStack(kept, kept.map((l) => (l.id === 'S' ? { ...l, visible: false } : l)), H, H, DEFAULT_STACK_RULES, lower, lower)), [0, 0.33, 0.33])
+  // a round-9 stack (the hidden sweep kept its slot) is still a rule stack, so the next edit converts it
+  const r9 = mk([0, 0.33, 0.38])
+  assert.equal(stackGapOf(r9, H, DEFAULT_STACK_RULES, lower), 0.03)
+  const thicker = r9.map((l) => (l.id === 'D' ? { ...l, depth: { ...l.depth, thickness: 0.2 } } : l))
+  assert.deepEqual(zOf(keepStack(r9, thicker, H, H, DEFAULT_STACK_RULES, lower, lower)), [0, 0.33, 0.33])
+  assert.equal(stackGapOf(mk([0, 0.33, 0.5]), H, DEFAULT_STACK_RULES, lower), null, 'neither rule: hand-placed')
+  // a hand-placed stack is left alone on unhide: the Depth section's collision hint shows instead
+  const hand = mk([0, 0.33, 0.5])
+  const handShown = hand.map((l) => ({ ...l, visible: true }))
+  assert.equal(keepStack(hand, handShown, H, H, DEFAULT_STACK_RULES, lower, lower), handShown)
+  // a hidden bottom layer: the layers above stack on the visible ones only
+  assert.deepEqual(zOf(restack(mk([0, 0, 0], ['D']), H, DEFAULT_STACK_RULES, 0.03, lower)), [0, 0, 0.05])
 })
 
 test('a recognised real-height stack is kept across edits (server stack_gap); custom stacks are left alone', () => {

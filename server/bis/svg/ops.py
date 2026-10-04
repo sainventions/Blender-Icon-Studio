@@ -64,12 +64,13 @@ def fresh_layers(store: ElementStore, strategy: str, params: Optional[SplitParam
         mode, _mr = layer_defaults(store, [m.id for m in members])
         layers.append(make_layer(f"L{i + 1}", members, mode=mode))
         shapes[layers[-1].id] = layer_shape(store, layers[-1].elementIds, mode, S=art_scale)
-    stacking.restack(layers, shapes, art_scale=art_scale)
     info["combined"] = [L.id for L in layers if L.mode == "combined"]
     info["maxRadius"] = {lid: sh.maxRadius for lid, sh in shapes.items()}
     dedupe_names(layers)
     info["warnings"] = hide_baked_overlays(store, layers, shapes, art_scale)
     info["bakedHidden"] = [L.id for L in layers if not L.visible]
+    # stacked once the baked overlays are hidden: hidden layers take no stack slot (QA r11 N12)
+    stacking.restack(layers, shapes, art_scale=art_scale)
     return layers, info
 
 

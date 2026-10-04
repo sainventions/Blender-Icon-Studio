@@ -345,3 +345,9 @@ viewport and Blender renders; animation kind `iso` = head-on → iso → head-on
   Find Device's sweep) import hidden (`visible: false`) with a source warning ("baked highlight hidden — Blender lighting
   replaces it"); the user can unhide. Soft rasters that don't sit on other art (e.g. a neon glow halo) stay visible cards.
 - Clear/tinted EEVEE drafts must not render glyph glass near-black (glyphs must see the frosted plate, like Cycles).
+
+**Round 10 (polish):** hidden layers take no stack slot — nothing stacks on a hidden layer; a hidden layer still gets its
+own z over the visible layers it overlaps, and unhiding re-stacks detected stacks (hand-placed stacks show the collision
+badge). The draft plate probe exists whenever the plate is glass, even with no visible layers. Known limits: stacking
+uses base visibility (a layer shown only in one appearance can cut into the layers above in that rendition); projects
+saved before this rule convert on their next stack edit / Re-stack.

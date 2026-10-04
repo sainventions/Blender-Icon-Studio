@@ -541,6 +541,31 @@ def _lstar(rgb) -> float:
 
 
 @needs_blender
+@pytest.mark.parametrize("appearance", ["clear-light", "tinted-light", "clear-dark"])
+def test_glass_plate_without_layers_keeps_its_probe(worker, outdir, appearance):
+    """QA r11 N11: an icon with no visible layer (Template; every layer hidden) lost the plate probe, so its frosted
+    glass plate refracted the dark studio world in drafts (Template clear-light L* 35 vs Cycles' 91, tinted-light the
+    same). The plate probe exists whenever the plate is glass (no glyph probe without bodies); the draft plate stays
+    within a few L* of the Cycles preview."""
+    hidden = T.layer("A", preset="liquid_glass", bevel=0.08, thickness=0.16)
+    hidden["visible"] = False
+    cases = {"empty": T.scene([], {}, color_mode="brand"),
+             "hidden": T.scene([hidden], {"A": T.geo([("e", [T.circle(0.3)], "#ffffff", 1.0)])}, color_mode="brand")}
+    for case, scn in cases.items():
+        got = {}
+        for q in ("draft", "preview"):
+            out = outdir / f"bare_plate_{appearance}_{case}_{q}.png"
+            render(worker, scn, out, quality=q, appearance=appearance)
+            got[q] = [_lstar(rgb_at(out, x, y, r=6)) for x, y in ((-0.5, 0.4), (0.0, 0.0), (0.45, -0.45))]
+            if q == "draft":
+                probes = worker.result("scene_info")["probes"]
+                assert "BIS Probe" in probes and "BIS Glyph Probe" not in probes, (case, probes)
+        tol = 10.0 if appearance == "clear-dark" else 5.0
+        for d, p in zip(got["draft"], got["preview"]):
+            assert abs(d - p) < tol, (case, got)
+
+
+@needs_blender
 @pytest.mark.parametrize("appearance", ["clear-dark", "clear-light", "tinted-light"])
 def test_clear_glyph_drafts_see_the_frosted_plate(worker, outdir, appearance):
     """QA r10 N7: clear-dark drafts rendered glass glyphs near-black — they refracted the dark wallpaper straight through

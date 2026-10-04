@@ -206,8 +206,9 @@ def baked_warning(layer: Layer) -> str:
 def hide_baked_overlays(store: ElementStore, layers: Sequence[Layer], shapes: "Radii",
                         art_scale: float = 1.0) -> List[str]:
     """Fresh layers (import / re-split, in place): hide every baked overlay (:func:`baked_overlays`); returns the
-    source warnings (one per hidden layer). The hidden layer keeps its slot in the stack (toggling it never moves the
-    others)."""
+    source warnings (one per hidden layer). Stack the layers AFTER this: a hidden layer takes no stack slot (QA r11
+    N12, :func:`bis.stacking.stack_lower`) - nothing floats over a hidden sweep - while its own z stays where unhiding
+    shows it (stacked over the visible layers it overlaps)."""
     out = []
     for i in baked_overlays(store, layers, shapes, art_scale):
         layers[i].visible = False

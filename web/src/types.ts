@@ -35,6 +35,9 @@ export interface SvgElement {
   shadow?: DropShadow | null
   wasStroke: boolean
   role: 'fill' | 'stroke' | 'image'
+  // rasters (kind 'image', PLAN §11 round 9): true = SOFT alpha (a glow / shine / shadow → a flat card), false = a crisp
+  // alpha silhouette (a real body like vector art); null / absent = not a raster (or not measured yet)
+  softAlpha?: boolean | null
 }
 
 // ---------------------------------------------------------------- layers

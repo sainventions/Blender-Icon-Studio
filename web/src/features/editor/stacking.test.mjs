@@ -162,17 +162,22 @@ test('collisions of a hand-placed stack = server interpenetrations (touching foo
     const ic = fx.icons[name]
     const g = geometry(name)
     const p = project(ic)
-    for (const k of ['flat', 'n5']) {
+    for (const k of ['flat', 'n5', 'flatHidden']) {
       const pk =
         k === 'flat'
           ? { ...p, layers: p.layers.map((l) => ({ ...l, depth: { ...l.depth, z: 0 } })) }
-          : project(ic, ic.recognise.n5.layers)
+          : project(ic, ic.recognise[k].layers)
+      if (k === 'flatHidden') {
+        const [a, b] = [SM.stackStatus(pk, g, presets).gap, ic.recognise[k].gap]
+        assert.ok(a === null || b === null ? a === b : Math.abs(a - b) <= 1e-5, `${name} ${k} gap: ${a} vs ${b}`)
+      }
       const got = SM.stackStatus(pk, g, presets).collisions
       // footprints that share an edge are ~1e-6 apart on the exact outlines (the server tests 1e-9 on outlines
       // simplified by 0.002): pairs the server measures closer than the web's TOUCH_CLEARANCE count as touching
       const want = ic.recognise[k].interpenetrations.map(([j, i]) => `${j},${i}`)
       for (const [key, dist] of Object.entries(ic.dist)) {
         const [j, i] = key.split(',').map(Number)
+        if (pk.layers[j].visible === false || pk.layers[i].visible === false) continue // hidden layers never collide
         const zr = (l) => [l.depth.z, l.depth.z + SM.bodyHeights(pk, g)(l)]
         const [a0, a1] = zr(pk.layers[j])
         const [b0, b1] = zr(pk.layers[i])
@@ -227,6 +232,95 @@ test('N5: a hand-placed stack stays as placed, reports its collisions, and Re-st
     assert.equal(sf.gap, fx.rules.stackGap, `${name}: …and makes it a rule stack again`)
   }
   assert.ok(hinted >= 10, `hand-placed collisions covered (${hinted})`)
+})
+
+// ------------------------------------------------------------------------------------------------ N12: hidden layers
+test('N12: hidden layers take no stack slot — hide / unhide on a detected stack re-stacks it like the server', () => {
+  // the import (Find Device's baked sweep is hidden: the dot sits on the dome, not on the sweep), then every layer shown,
+  // every other layer hidden, the bottom one hidden, every layer shown again: each a client-side visibility commit that
+  // the stack keeper re-stacks to the server's restack of those layers — no collisions, still a rule stack
+  let moved = 0
+  let importHidden = 0
+  for (const name of ICONS) {
+    const ic = fx.icons[name]
+    const g = geometry(name)
+    const p = project(ic)
+    if (p.layers.some((l) => l.visible === false)) importHidden++
+    assert.deepEqual(SM.stackStatus(p, g, presets).collisions, [], `${name}: import`)
+    let cur = p
+    for (const key of ['showAll', 'hideOdd', 'hide0', 'showAll']) {
+      const v = ic.variants[key]
+      const after = { ...cur, layers: cur.layers.map((l, i) => ({ ...l, visible: v.layers[i].visible })) }
+      const kept = SM.keepProjectStack(cur, after, g, presets)
+      zOf(kept).forEach((z, i) => near(z, v.z[i], 1e-5, `${name} → ${key} layer ${i}`))
+      const st = SM.stackStatus(kept, g, presets)
+      assert.deepEqual(st.collisions, [], `${name} → ${key}: no bodies cutting into each other`)
+      assert.ok(st.gap !== null && Math.abs(st.gap - fx.rules.stackGap) <= 1e-5, `${name} → ${key}: still a rule stack (${st.gap})`)
+      if (zOf(kept).some((z, i) => Math.abs(z - zOf(cur)[i]) > 1e-6)) moved++
+      cur = kept
+    }
+  }
+  assert.ok(importHidden >= 1, `imports with a hidden baked overlay covered (${importHidden})`)
+  assert.ok(moved >= 20, `visibility edits that moved layers covered (${moved})`)
+})
+
+test('N12: a round-9 stack (hidden layers kept their slot) is recognised like the server, and the next edit converts it', () => {
+  let converted = 0
+  for (const name of ICONS) {
+    const ic = fx.icons[name]
+    const g = geometry(name)
+    const r9 = ic.recognise.round9
+    const p9 = project(ic, r9.layers)
+    const gap = SM.stackStatus(p9, g, presets).gap
+    assert.ok(r9.gap !== null && gap !== null && Math.abs(gap - r9.gap) <= 1e-5, `${name}: ${gap} vs ${r9.gap}`)
+    zOf(SM.restackProject(p9, g, presets)).forEach((z, i) => near(z, r9.z[i], 1e-5, `${name} re-stack ${i}`))
+    const shown = { ...p9, layers: p9.layers.map((l) => ({ ...l, visible: true })) }
+    const kept = SM.keepProjectStack(p9, shown, g, presets)
+    zOf(kept).forEach((z, i) => near(z, ic.variants.showAll.z[i], 1e-5, `${name} unhide ${i}`))
+    assert.deepEqual(SM.stackStatus(kept, g, presets).collisions, [], `${name}: converted without collisions`)
+    if (r9.z.some((z, i) => Math.abs(z - r9.layers[i].depth.z) > 1e-6)) converted++
+  }
+  assert.ok(converted >= 10, `round-9 stacks that the new rule changes covered (${converted})`)
+})
+
+test('N12: unhiding a layer of a HAND-PLACED stack leaves it as placed and shows the collision (Find Device)', () => {
+  const ic = fx.icons['Find Device']
+  const g = geometry('Find Device')
+  const hand = project(ic, ic.layers.map((l, i) => ({ ...l, depth: { ...l.depth, z: ic.recognise.hand.z[i] } })))
+  const st = SM.stackStatus(hand, g, presets)
+  assert.equal(st.gap, null, 'hand-placed (the dot lifted by 0.1)')
+  assert.deepEqual(st.collisions, [], 'the hidden sweep does not collide')
+  const k = hand.layers.findIndex((l) => l.visible === false)
+  assert.ok(k >= 0, 'the baked sweep imports hidden')
+  const shown = { ...hand, layers: hand.layers.map((l) => ({ ...l, visible: true })) }
+  assert.equal(SM.keepProjectStack(hand, shown, g, presets), shown, 'a custom stack is left alone')
+  assert.ok(SM.stackStatus(shown, g, presets).collisions.some(([j, i]) => j === k || i === k), 'the collision badge shows')
+})
+
+// ------------------------------------------------------------------------------------------------ raster notes
+test('the inspector calls a raster layer a flat card only when it is one: rasterLayerKind = server is_card_layer', () => {
+  // (QA r11: iMessage's bubble and Vanced Neon's logo are crisp rasters — real bodies — but were called "flat card")
+  const seen = { card: [], body: [] }
+  for (const name of ICONS.filter((n) => !n.includes('+'))) {
+    const ic = fx.icons[name]
+    for (const l of ic.layers) {
+      const kind = D.rasterLayerKind(ic.elements, l)
+      assert.equal(kind === 'card', l.card, `${name} ${l.id}: card = server is_card_layer`)
+      assert.equal(kind !== null, l.image, `${name} ${l.id}: raster layer = server is_image_layer`)
+      if (kind) seen[kind].push(name)
+    }
+  }
+  for (const n of ['iMessage', 'Vanced Neon', 'Feit', 'Outlook']) assert.ok(seen.body.includes(n), `${n}: a crisp raster body`)
+  for (const n of ['Find Device', 'Vanced Neon']) assert.ok(seen.card.includes(n), `${n}: a soft raster card`)
+  // not measured yet (a project imported before round 9): a card, as it was imported; a vector element: no note
+  assert.equal(D.rasterLayerKind([{ id: 'i', kind: 'image' }], { elementIds: ['i'] }), 'card')
+  assert.equal(D.rasterLayerKind([{ id: 'i', kind: 'image', softAlpha: true }, { id: 'j', kind: 'image', softAlpha: false }], { elementIds: ['i', 'j'] }), 'body')
+  assert.equal(D.rasterLayerKind([{ id: 'i', kind: 'image', softAlpha: true }, { id: 'p', kind: 'path' }], { elementIds: ['i', 'p'] }), null)
+  assert.equal(D.rasterLayerKind([], { elementIds: [] }), null)
+  // the Depth section shows the note of that kind (no more "flat card" for every raster)
+  const inspector = readFileSync(new URL('./inspector/LayerInspector.tsx', import.meta.url), 'utf8')
+  assert.match(inspector, /<RasterNote kind=\{rasterLayerKind\(project\.elements, primary\)\} \/>/)
+  assert.ok(!/isImageLayer/.test(inspector), 'the old every-raster-is-a-card test is gone')
 })
 
 test('editing depth re-uses the cached footprint overlaps (slider drags stay cheap)', () => {
