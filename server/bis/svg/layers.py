@@ -7,8 +7,13 @@ thickness / 2 only - no safe-radius clamp), a gentle Poisson dome (inflate 0.25)
 OVERLAP-AWARE stacking (:mod:`bis.stacking`, round 8): a layer stacks only above the lower layers it overlaps in XY,
 z(i) = max(stackLift, max over overlapped lower j of z(j) + H(j) + stackGap) with H = max(thickness + 2 · inflate ·
 maxRadius · S, the in-layer stacked height) (footprints + radii: :func:`bis.svg.geometry.layer_shape`).
-Raster image layers (every member an <image>) are flat cards (round 8, ``bis.stacking.IMAGE_CARD``): no dome,
-thickness 0.02, round edge 0.006."""
+
+Rasters (round 9): a raster with a CRISP alpha silhouette (iMessage's bubble, Feit's house, Outlook, Vanced Neon's
+logo) is a real body like vector art - traced outline, the default depth above. Only layers whose members are all
+SOFT-alpha rasters (glows, shines, shadows: :func:`bis.svg.elements.soft_alpha`, the worker's ``art_alpha_is_soft``)
+are flat cards (``bis.stacking.IMAGE_CARD``: no dome, thickness 0.02, round edge 0.006). A soft card that sits on
+vector / body layers BELOW it (a baked shine, e.g. Find Device's sweep) imports HIDDEN with a source warning
+(:func:`hide_baked_overlays`): Blender's lighting replaces it; the user can unhide it."""
 from __future__ import annotations
 
 import re
@@ -17,7 +22,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 from bis import stacking
 from bis.models import Layer, LayerDepth, LayerShadow, MaterialSpec
 from .colors import color_name
-from .elements import ElementStore, Elem
+from .elements import ElementStore, Elem, soft_alpha
 from .prepass import auto_name
 
 DEFAULT_THICKNESS = 0.16
@@ -26,6 +31,10 @@ DEFAULT_INFLATE = 0.25
 DEFAULT_SEGMENTS = 8
 DEFAULT_MATERIAL = "liquid_glass"
 DEFAULT_SHADOW_OPACITY = 0.5
+#: a soft card is a baked overlay when at least this share of its footprint lies on body layers below it
+BAKED_OVERLAP = 0.5
+#: the source warning of a soft card hidden at import (PLAN §11 round 9)
+BAKED_WARNING = "baked highlight hidden — Blender lighting replaces it"
 
 
 def default_depth() -> LayerDepth:
@@ -125,16 +134,23 @@ def next_layer_ids(existing: Iterable[str], n: int) -> List[str]:
 
 
 def is_image_only(members: Sequence[Elem]) -> bool:
-    """Every member is a raster <image>: the layer is a flat card (round 8)."""
+    """Every member is a raster <image> (crisp or soft; round 8's card test - round 9 cards: :func:`is_card`)."""
     return bool(members) and all(m.image for m in members)
+
+
+def is_card(members: Sequence[Elem]) -> bool:
+    """Every member is a SOFT-alpha raster (round 9, :func:`bis.svg.elements.soft_alpha`): the layer is a flat card.
+    A crisp raster (or any vector art) makes the layer a real body."""
+    return bool(members) and all(m.image and soft_alpha(m) for m in members)
 
 
 def make_layer(lid: str, members: Sequence[Elem], template: Optional[Layer] = None,
                mode: Optional[str] = None) -> Layer:
     """A default layer (or a copy of `template`) holding `members`. `mode` ('individual' / 'combined', see
     :func:`bis.svg.tiling.auto_mode`) overrides the template's. ``depth.z`` is left for the stack
-    (:func:`restack`). A layer of raster images only is a flat card (:func:`bis.stacking.card_depth`: no dome, at
-    most 0.02 thick) - also when it is split off a vector layer."""
+    (:func:`restack`). A layer of soft-alpha rasters only is a flat card (:func:`is_card`,
+    :func:`bis.stacking.card_depth`: no dome, at most 0.02 thick) - also when it is split off a vector layer; crisp
+    rasters keep the default (or template) body depth."""
     ids = [m.id for m in members]
     name = layer_name(members)
     if template is None:
@@ -147,10 +163,56 @@ def make_layer(lid: str, members: Sequence[Elem], template: Optional[Layer] = No
         lay.elementIds = ids
         if mode is not None:
             lay.mode = mode
-    if is_image_only(members):
+    if is_card(members):
         stacking.card_depth(lay.depth)
     clamp_bevel(lay)
     return lay
+
+
+def baked_overlays(store: ElementStore, layers: Sequence[Layer], shapes: "Radii", art_scale: float = 1.0,
+                   min_share: float = BAKED_OVERLAP) -> List[int]:
+    """Positions of the soft cards (:func:`is_card`) that sit on vector / body layers BELOW them (PLAN §11 round 9):
+    at least `min_share` of the card's footprint lies on the union of the footprints of the lower non-card layers
+    (canvas units, after the art / layer transforms - :func:`bis.stacking.footprints`). Baked shines / highlights
+    (Find Device's sweep); a glow halo under the art (Vanced Neon) or beside it is not one."""
+    import shapely
+
+    cards = [is_card(members_for(store, L.elementIds)) for L in layers]
+    if not any(cards):
+        return []
+    fps = stacking.footprints(layers, shapes, art_scale)
+    out: List[int] = []
+    for i, L in enumerate(layers):
+        fi = fps[i]
+        if not cards[i] or fi is None or fi.is_empty or fi.area <= 0:
+            continue
+        below = [fps[j] for j in range(i) if not cards[j] and fps[j] is not None and not fps[j].is_empty]
+        if not below:
+            continue
+        try:
+            on = shapely.intersection(fi, shapely.union_all(below)).area
+        except Exception:  # noqa: BLE001 - GEOS trouble: a bounding-box estimate
+            on = sum(shapely.box(*fi.bounds).intersection(shapely.box(*b.bounds)).area for b in below)
+        if on >= min_share * fi.area:
+            out.append(i)
+    return out
+
+
+def baked_warning(layer: Layer) -> str:
+    """The source warning of a baked overlay hidden at import / re-split."""
+    return f"layer '{layer.name}': {BAKED_WARNING} (unhide the layer to keep it)"
+
+
+def hide_baked_overlays(store: ElementStore, layers: Sequence[Layer], shapes: "Radii",
+                        art_scale: float = 1.0) -> List[str]:
+    """Fresh layers (import / re-split, in place): hide every baked overlay (:func:`baked_overlays`); returns the
+    source warnings (one per hidden layer). The hidden layer keeps its slot in the stack (toggling it never moves the
+    others)."""
+    out = []
+    for i in baked_overlays(store, layers, shapes, art_scale):
+        layers[i].visible = False
+        out.append(baked_warning(layers[i]))
+    return out
 
 
 Radii = Mapping[str, Any]   # layer id -> bis.stacking.LayerShape (or a bare maxRadius)

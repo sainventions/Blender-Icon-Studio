@@ -4,7 +4,7 @@ Tiers (OptiX everywhere, OptiX denoiser, persistent data off):
 
 | tier    | engine | size | samples | bounces max/trans/transp/glossy/diffuse |
 |---------|--------|------|---------|------------------------------------------|
-| draft   | EEVEE  | 512  | 16 TAA  | raytracing SCREEN, trace_max_roughness 0.2, overscan |
+| draft   | EEVEE  | 512  | 16 TAA  | raytracing SCREEN, trace_max_roughness 0.2 (glass plate over a light wallpaper 0.3), overscan |
 | preview | Cycles | 512  | 48      | 16/16/16/6/2, adaptive 0.05             |
 | final   | Cycles | 1024 | 384     | 32/32/32/8/4, adaptive 0.01 (min 64)    |
 | ultra   | Cycles | 2048 | 1024    | 32/32/32/8/4, adaptive 0.005            |
@@ -34,6 +34,7 @@ TIERS = {
               "bounces": (32, 32, 32, 8, 4)},
 }
 MAX_SIZE = 4096
+TRACE_MAX_ROUGHNESS = 0.2          # drafts: rougher surfaces read the light probes (scene._probe), smoother ones trace
 BLOOM_THRESHOLD = 0.35
 EEVEE_FILTER = 1.15
 ProgressFn = Callable[[float, str], None]
@@ -52,9 +53,10 @@ def tier(quality: str) -> dict:
 
 def configure(scene: bpy.types.Scene, quality: str, size: Optional[int], *, transparent: bool,
               color_mode: str = "neutral", max_glass_roughness: float = 0.0,
-              samples: Optional[int] = None) -> dict:
+              samples: Optional[int] = None, trace_max_roughness: Optional[float] = None) -> dict:
     """Apply a quality tier + output settings. Returns the effective settings. ``max_glass_roughness``: the
-    roughest transmissive surface (a transparent backdrop keeps glass up to it see-through)."""
+    roughest transmissive surface (a transparent backdrop keeps glass up to it see-through). ``trace_max_roughness``
+    (EEVEE; scene info 'traceMaxRoughness'): None = TRACE_MAX_ROUGHNESS."""
     t = tier(quality)
     px = int(size or t["size"])
     px = max(16, min(MAX_SIZE, px))
@@ -133,8 +135,11 @@ def configure(scene: bpy.types.Scene, quality: str, size: Optional[int], *, tran
         rto.resolution_scale = "1" if px <= 512 else "2"
         # rougher surfaces (satin plates 0.45, frosted glass 0.27) read the light probes — the plate probe
         # (scene._probe) / the world — instead of noisy screen traces: smoother plates, draft-vs-preview glyph dE
-        # 12.3 -> 11.9 on 16 icons (round 8), and a little faster; clear glass / coats (≤ 0.05) still trace
-        rto.trace_max_roughness = 0.2
+        # 12.3 -> 11.9 on 16 icons (round 8), and a little faster; clear glass / coats (≤ 0.05) still trace.
+        # A glass plate over a light wallpaper (clear-light / tinted-light) traces up to 0.3: the frosted clear glyphs
+        # (0.22) refract the plate on screen (glyph and plate within 3 L* of Cycles, round 9; at 0.2 the plate read
+        # 9 L* darker)
+        rto.trace_max_roughness = float(TRACE_MAX_ROUGHNESS if trace_max_roughness is None else trace_max_roughness)
         rto.screen_trace_quality = 0.25
         rto.screen_trace_thickness = 0.2
         rto.use_denoise = True

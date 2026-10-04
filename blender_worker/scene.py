@@ -14,6 +14,7 @@ Layout (PLAN §3, D1): icon in the XY plane, camera on +Z looking −Z, 1 BU = 1
     BIS Rig (collection)              camera (front / CAD iso orthographic / perspective), then the light rig and
                                       the world turned with the camera (camera-relative lighting, round 7), wallpaper,
                                       BIS Probe: EEVEE sphere probe of the plate (refraction fallback, round 8)
+                                      BIS Glyph Probe: glass plates — the EEVEE probe of the layers' space (round 9)
 
 Everything is updated in place between renders: objects/empties are reused by name, piece meshes come from
 heightfield's cache (layer hash + depth params), materials update their node values in place.
@@ -44,6 +45,12 @@ TOUCH_TOL = 0.0018         # world: pieces closer than this (3 x heightfield.CHO
 PROBE_NAME = "BIS Probe"   # EEVEE sphere light probe of the plate (see SceneBuilder._probe)
 PROBE_Z = 0.02             # world: its capture point, just above the plate's front face (z = 0)
 PROBE_REACH = 1.5          # its influence radius beyond the subject's top / the plate (world units)
+GLYPH_PROBE_NAME = "BIS Glyph Probe"   # glass plates: the probe of the space above the plate (SceneBuilder._probe)
+PLATE_PROBE_CLIP = 0.4     # glass plates: the plate probe sits mid-plate and clips this far past the plate's faces
+GLYPH_PROBE_MARGIN = 0.1   # the glyph probe's box reaches this far beyond the layers' tops / sides (world)
+GLYPH_PROBE_FALLOFF = 0.02  # its box influence fades over this fraction of its size (a sharp floor above the plate)
+GLYPH_PROBE_FLOOR = 0.03   # world z of its floor: flat cards (0.02 thick) and the bodies' lowest rims stay with the plate
+LIGHT_GLASS_TRACE = 0.3    # drafts with a glass plate over a LIGHT wallpaper: EEVEE trace_max_roughness (_probe)
 FRONT_TILT = 2e-4          # rad: head-on cameras are pitched this much about the world origin (see SceneBuilder._camera)
 
 
@@ -342,8 +349,9 @@ class SceneBuilder:
         plate = canvas["plate"]
         plate_ok = plate.get("visible", True) and shape != "none" and (plate["fill"].get("type") != "none")
         wp_kind = env.get("wallpaper") or (("dark" if env.get("dark") else "light") if backdrop == "wallpaper" else None)
+        glass_plate = False
         if plate_ok:
-            self._plate(icon_col, plate, shape, canvas.get("cornerRadius", 0.225), full_bleed)
+            glass_plate = self._plate(icon_col, plate, shape, canvas.get("cornerRadius", 0.225), full_bleed)
             keep.add("BIS Plate")
             used_mats.add(PLATE_MATERIAL)
 
@@ -373,8 +381,9 @@ class SceneBuilder:
             self._wallpaper(rig_col, wp_kind, plate["thickness"], camera_visible=(backdrop == "wallpaper"))
             keep.add("BIS Wallpaper")
 
-        # ---- EEVEE: the plate's sphere light probe (what refraction falls back to) ---------------------------
-        self._probe(rig_col, eff, bnd, sa, plate_ok)
+        # ---- EEVEE: the plate's sphere light probe (what refraction falls back to) [+ a glass plate's glyph probe] ----
+        bodies = [ob for ob in icon_col.objects if ob.name in keep and ob.type == "MESH" and ob.name != "BIS Plate"]
+        self._probe(rig_col, eff, bnd, sa, plate_ok, glass_plate, layer_z, plate, wp_kind, bodies)
 
         # ---- cleanup stale BIS objects / materials ---------------------------------------------------
         for ob in list(icon_col.objects) + [o for o in rig_col.objects if o.name == "BIS Wallpaper"]:
@@ -396,6 +405,9 @@ class SceneBuilder:
             "wallpaper": appearance_mod.wallpaper(wp_kind) if wp_kind else None,
             # transparent backdrops: Cycles keeps glass up to this roughness see-through (film_transparent_roughness)
             "maxGlassRoughness": materials.max_glass_roughness(all_specs),
+            # EEVEE drafts: trace_max_roughness (None = render.TRACE_MAX_ROUGHNESS). Over a LIGHT wallpaper a glass
+            # plate's frosted glyphs trace the plate on screen; over a dark one they read the glyph probe (_probe)
+            "traceMaxRoughness": LIGHT_GLASS_TRACE if glass_plate and wp_kind == "light" else None,
             # compositor bloom (a render setting): glowing emission above the flat-art level (strength 1) blooms
             "bloom": max(0.0, min(1.0, (materials.max_emission(all_specs) - 1.0) / 4.0)),
             "fullBleed": bool(full_bleed),
@@ -611,7 +623,8 @@ class SceneBuilder:
         return None
 
     # -------------------------------------------------------------------------- plate
-    def _plate(self, col, plate: dict, shape: str, corner_radius: float, full_bleed: bool = False) -> None:
+    def _plate(self, col, plate: dict, shape: str, corner_radius: float, full_bleed: bool = False) -> bool:
+        """The plate body. -> True when it is glass (transmissive: the clear / tinted-light renditions)."""
         th = max(0.0, float(plate.get("thickness", 0.16)))
         bevel = min(max(0.0, float(plate.get("bevel", 0.04))), th / 2.0)
         splines = geometry.plate_outline(shape, corner_radius)
@@ -625,18 +638,18 @@ class SceneBuilder:
         ob.color = (1.0, 1.0, 1.0, 1.0)
         preset, params = materials.resolve(plate["material"])
         paint = paint_spec(plate["fill"], None, (-1.0, -1.0, 1.0, 1.0))
+        # EEVEE: the plate refracts the light probes only (raytrace=False: its frosted glass is rougher than drafts
+        # trace anyway), which draws it in EEVEE's opaque layer — the one glass glyphs' screen-space refraction traces
+        # see (surfaces with raytraced transmission are invisible to each other's traces): glass glyphs refract the
+        # frosted plate, like Cycles, instead of the wallpaper beneath it (QA r10 N7). Cycles ignores the setting.
         spec = materials.make_spec(preset, params, paint, thickness=th, shape="plate",
-                                   preview_color=paint.get("color", (0.9, 0.9, 0.9)))
+                                   preview_color=paint.get("color", (0.9, 0.9, 0.9)), raytrace=False)
         mat = materials.ensure(PLATE_MATERIAL, spec)
         _set_material(ob, mat)
         self._specs.append(spec)
         ob.visible_shadow = True
-        # the plate is what the plate probe captures (_probe) — unless it is glass itself (clear / tinted renditions:
-        # frosted glass over the wallpaper): then the probe sees the wallpaper beneath it, which is what Cycles' rays
-        # reach through it (a probe of the glass plate itself left the plate a flat grey in drafts, round-8 review)
-        hide = materials.is_transmissive(spec["params"])
-        if ob.hide_probe_sphere != hide:
-            ob.hide_probe_sphere = hide
+        # what the light probes see of the plate: _probe
+        return materials.is_transmissive(spec["params"])
 
     # -------------------------------------------------------------------------- layers
     def _covered_pieces(self, layers: list, geos: dict, art: dict) -> set:
@@ -810,6 +823,12 @@ class SceneBuilder:
                 splines = rel["inset"][n_piece]
                 kp["inset"] = INSET_GAP
                 stats["insetPieces"] = stats.get("insetPieces", 0) + 1
+                if not splines:
+                    # a sliver no wider than 2 × INSET_GAP along the piece it touches: nothing of it is left once it
+                    # pulls back (kept, it cut into that piece) — heightfield.inset_rings
+                    log(f"layer {lid} {pid}: sliver along a touching piece dropped")
+                    stats["insetSlivers"] = stats.get("insetSlivers", 0) + 1
+                    continue
             data, _hinfo = heightfield.piece_mesh(kp, splines, th_local, bevel_local, inflate, segments, S)
             if data is None:
                 self.warnings.append(f"layer {lid} {pid}: degenerate outline skipped")
@@ -834,9 +853,7 @@ class SceneBuilder:
             _set_material(ob, pmat)
             if ob.visible_shadow != cast:
                 ob.visible_shadow = cast
-            if not ob.hide_probe_sphere:
-                ob.hide_probe_sphere = True     # the plate probe sees the plate only (_probe)
-            names.add(ob.name)
+            names.add(ob.name)                  # (what the light probes see of it: _probe)
             stats["pieces"] += 1
         # every body of the layer shares one mid-plane at z + thickness/2; an inflated layer is lifted so that its
         # lowest point stays on z (the dome is mirrored below the mid-plane)
@@ -870,8 +887,6 @@ class SceneBuilder:
             _set_material(ob, cmat)
             if ob.visible_shadow != cast:
                 ob.visible_shadow = cast
-            if not ob.hide_probe_sphere:
-                ob.hide_probe_sphere = True
             names.add(ob.name)
         return names, mats
 
@@ -929,48 +944,109 @@ class SceneBuilder:
             ob.data.materials[0] = mat
 
     # -------------------------------------------------------------------------- EEVEE plate probe
-    def _probe(self, col, eff: dict, bnd: dict, sa: float, plate_ok: bool) -> None:
-        """EEVEE sphere light probe of the PLATE (Cycles ignores light probes; QA r9 N1 / N2).
-
-        EEVEE refracts by screen-space ray tracing; a ray that finds nothing behind the glass on screen — glass floating
-        above the plate in iso / perspective views, glass beyond the plate's silhouette — and every alpha-BLENDED surface
-        (translucent glass cannot trace) falls back to the light probes. Without this probe that was the studio world
-        behind the icon, which is dark: Photos' floating petals at iso read (76,65,50) against Cycles' (155,126,85), and a
-        66 % Contacts head rendered near-black. The probe captures the scene from just above the plate's front face with
-        every layer body hidden from it (Object.hide_probe_sphere), so its lower hemisphere is the lit plate (and the
-        wallpaper / world beyond its edge) — what Cycles' rays reach through the glass; a glass plate (clear / tinted
-        renditions) is hidden too, so the probe shows the wallpaper beneath it (:meth:`_plate`). The viewport does the
-        same by drawing the studio behind the icon in its transmission pass. Scene-level only: materials are untouched.
-        Limit: the capture is a single EEVEE sample and the bodies' (transparent) shadows on the plate are in it, noisy —
-        flat glass that would read it through a large magnification stays raytraced (materials.art_alpha_is_soft)."""
-        ob = bpy.data.objects.get(PROBE_NAME)
-        layers = [Lr for Lr in eff["layers"] if Lr.get("visible", True) and Lr["id"] in bnd["layers"]]
-        if ob is not None and (not (plate_ok and layers) or ob.type != "LIGHT_PROBE"):
+    @staticmethod
+    def _sphere_probe(name: str, col, want: bool) -> Optional[bpy.types.Object]:
+        """The sphere light probe object ``name`` (created / linked when ``want``, else removed)."""
+        ob = bpy.data.objects.get(name)
+        if ob is not None and (not want or ob.type != "LIGHT_PROBE"):
             bpy.data.objects.remove(ob, do_unlink=True)
             ob = None
-        if not (plate_ok and layers):
-            return
+        if not want:
+            return None
         if ob is None:
-            lp = bpy.data.lightprobes.get(PROBE_NAME)
+            lp = bpy.data.lightprobes.get(name)
             if lp is None or lp.type != "SPHERE":
-                lp = bpy.data.lightprobes.new(PROBE_NAME, "SPHERE")
-            ob = bpy.data.objects.new(PROBE_NAME, lp)
+                lp = bpy.data.lightprobes.new(name, "SPHERE")
+            ob = bpy.data.objects.new(name, lp)
         if ob.name not in col.objects:
             col.objects.link(ob)
-        top = 0.0
-        for Lr in layers:
-            sl = float(Lr["transform"].get("scale", 1.0))
-            top = max(top, float(Lr["depth"].get("z", 0.0)) + LAYER_EPS
-                      + self._body_height(Lr, bnd["layers"][Lr["id"]], sa * sl))
+        return ob
+
+    @staticmethod
+    def _set_probe(ob, settings: dict, location: tuple, scale: tuple = (1.0, 1.0, 1.0)) -> None:
+        """Assign only on change (every write re-captures the probe)."""
         lp = ob.data
-        settings = {"influence_type": "ELIPSOID", "influence_distance": max(1.5, top) + PROBE_REACH,
-                    "falloff": 0.2, "clip_start": 0.002, "clip_end": 100.0}
         for k, v in settings.items():
             cur = getattr(lp, k)
             if (abs(cur - v) > 1e-6) if isinstance(v, float) else cur != v:
                 setattr(lp, k, v)
-        if tuple(ob.location) != (0.0, 0.0, PROBE_Z):
-            ob.location = (0.0, 0.0, PROBE_Z)
+        if (Vector(ob.location) - Vector(location)).length > 1e-7:
+            ob.location = location
+        if (Vector(ob.scale) - Vector(scale)).length > 1e-7:
+            ob.scale = scale
+
+    def _probe(self, col, eff: dict, bnd: dict, sa: float, plate_ok: bool, glass_plate: bool = False,
+               layer_z: Optional[dict] = None, plate: Optional[dict] = None, wp_kind: Optional[str] = None,
+               bodies: Optional[list] = None) -> None:
+        """EEVEE sphere light probes (Cycles ignores light probes; QA r9 N1 / N2, QA r10 N7). Scene-level only: no
+        material reads a probe on purpose — they are what EEVEE's refraction falls back to.
+
+        EEVEE refracts by screen-space ray tracing; a ray that finds nothing behind the glass on screen — glass floating
+        above the plate in iso / perspective views, glass beyond the plate's silhouette — every alpha-BLENDED surface
+        (translucent glass cannot trace) and every surface rougher than the draft's trace_max_roughness falls back to the
+        light probes. Without a probe that was the studio world behind the icon, which is dark: Photos' floating petals at
+        iso read (76,65,50) against Cycles' (155,126,85), and a 66 % Contacts head rendered near-black.
+
+        ``BIS Probe`` (the plate probe) captures the scene from just above the plate's front face with the layer bodies
+        hidden from it (Object.hide_probe_sphere: their undersides would cover the plate): its lower hemisphere is the lit
+        plate (and the wallpaper / world beyond its edge), what Cycles' rays reach through the glass. A GLASS plate
+        (clear / tinted-light renditions: frosted glass over the wallpaper) must not capture itself — the frosted plate
+        refracted a flat grey copy of itself (round-8 review); it refracts the wallpaper beneath it. What the glyphs above
+        it should read differs with the wallpaper — in Cycles a frosted glyph is
+        * over a LIGHT wallpaper: the wallpaper seen through the plate. The plate is hidden from the probe (which shows
+          the wallpaper), and drafts trace frosted glyphs against the plate on screen (``traceMaxRoughness``; the plate
+          is drawn in EEVEE's opaque layer for that, :meth:`_plate`).
+        * over a DARK wallpaper: studio light scattered inside the frosted glass (Cycles keeps ~98 % of a clear-dark
+          glyph's brightness with the wallpaper switched off); reading the dark wallpaper straight through the plate,
+          the glyphs rendered near-black ((32,35,46) vs Cycles' (70,71,79), QA r10 N7). The plate probe moves to the
+          plate's middle with its near clip PLATE_PROBE_CLIP past the plate's faces (it still sees the wallpaper and the
+          studio, not the plate), and ``BIS Glyph Probe`` captures the space above the plate WITH the studio-lit plate
+          and the glass bodies themselves (glass seen through glass, as in Cycles: clear-dark glyph L* 5.7 below Cycles
+          instead of 8.2 with them hidden, Ti84 8.8 instead of 15.7); its BOX influence holds the layer bodies above
+          GLYPH_PROBE_FLOOR (EEVEE picks the smallest influence first), so glass glyphs read the lit frosted plate and
+          glass, the plate the wallpaper. Flat cards stay below the floor with the plate: in the glyph probe a flat
+          soft-alpha card refracted the single-sample capture of the bodies' transparent shadows on the plate (Vanced
+          Neon's glow halo, dashed).
+        The viewport draws the studio behind the icon in its transmission pass instead. Limits: a capture is a single
+        EEVEE sample with the bodies' (transparent) shadows on the plate in it, noisy — flat glass that would read it
+        through a large magnification stays raytraced (materials.art_alpha_is_soft); EEVEE's frosted glass has no
+        multiple scattering, so clear-dark glyphs stay darker than Cycles' milky ones."""
+        layers = [Lr for Lr in eff["layers"] if Lr.get("visible", True) and Lr["id"] in bnd["layers"]]
+        want = bool(plate_ok and layers)
+        dark_glass = bool(glass_plate and wp_kind == "dark")
+        pob = bpy.data.objects.get("BIS Plate")
+        hide = bool(glass_plate and not dark_glass)
+        if pob is not None and pob.hide_probe_sphere != hide:
+            pob.hide_probe_sphere = hide
+        for bob in bodies or []:
+            if bob.hide_probe_sphere == dark_glass:
+                bob.hide_probe_sphere = not dark_glass
+        ob = self._sphere_probe(PROBE_NAME, col, want)
+        gob = self._sphere_probe(GLYPH_PROBE_NAME, col, want and dark_glass)
+        if not want:
+            return
+        layer_z = layer_z or {}
+        top, ext = 0.0, 1.0
+        for hull, z0, z1, lid in self.subject_hulls(eff, bnd):
+            if lid is None:
+                continue
+            top = max(top, z1 + float(layer_z.get(lid, 0.0)))
+            if len(hull):
+                ext = max(ext, float(np.abs(hull).max()))
+        reach = {"influence_type": "ELIPSOID", "influence_distance": max(1.5, top) + PROBE_REACH, "falloff": 0.2,
+                 "clip_end": 100.0}
+        if not dark_glass:
+            self._set_probe(ob, {**reach, "clip_start": 0.002}, (0.0, 0.0, PROBE_Z))
+            return
+        th = max(0.0, float((plate or {}).get("thickness", 0.16)))
+        self._set_probe(ob, {**reach, "clip_start": th / 2.0 + PLATE_PROBE_CLIP}, (0.0, 0.0, -th / 2.0))
+        # the glyph probe: a box from GLYPH_PROBE_FLOOR to above the highest body; captured from its centre (unit
+        # influence distance: the box's size is the object's scale)
+        z0, z1 = GLYPH_PROBE_FLOOR, max(top, GLYPH_PROBE_FLOOR) + GLYPH_PROBE_MARGIN
+        half = (z1 - z0) / 2.0
+        xy = ext + GLYPH_PROBE_MARGIN
+        self._set_probe(gob, {"influence_type": "BOX", "influence_distance": 1.0, "falloff": GLYPH_PROBE_FALLOFF,
+                              "clip_start": 0.002, "clip_end": 100.0}, (0.0, 0.0, z0 + half), (xy, xy, half))
 
     def specs(self) -> list:
         return list(self._specs)

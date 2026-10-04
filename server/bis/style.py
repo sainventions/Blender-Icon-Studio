@@ -8,8 +8,9 @@
 
 Apply rules (StyleSpec): every layer gets ``layerDefaults`` (material/depth/shadow) or
 ``layerMaterials[i]`` (by index from the bottom, clamped to the last entry); the bevel is clamped to thickness / 2
-(the only clamp - height-field bodies taper thin parts; round 7 dropped the safe-radius clamp); raster image
-layers stay flat cards (round 8: no dome, at most ``bis.stacking.IMAGE_CARD`` thick); layers are re-stacked at
+(the only clamp - height-field bodies taper thin parts; round 7 dropped the safe-radius clamp); layers of soft-alpha
+rasters stay flat cards (rounds 8 + 9: no dome, at most ``bis.stacking.IMAGE_CARD`` thick; ``Element.softAlpha`` -
+crisp rasters take the look's depth like vector art); layers are re-stacked at
 their REAL heights, overlap-aware (PLAN §11 rounds 7 + 8, :mod:`bis.stacking`): a layer stacks only above the lower
 layers it overlaps in XY, z(i) = max(stackLift, max over overlapped lower j of z(j) + H(j) + gap) with
 H = max(thickness + 2 · inflate · maxRadius · S, in-layer stacked height) and gap = ``zGap`` (None → the presets'
@@ -133,8 +134,8 @@ def extract_style(project: Project, *, plate_fill: Optional[bool] = None, plate_
 
     * layerDefaults: material/shadow of the dominant material among the visible layers (most layers, ties →
       the higher one; its top-most layer is the representative). The bevel is the largest bevel among those
-      layers (builder clamping only ever lowers a bevel, so the largest is closest to what was requested). Raster
-      image layers (flat cards) only give the depth when the project has no other layer.
+      layers (builder clamping only ever lowers a bevel, so the largest is closest to what was requested). Flat
+      cards (soft-alpha raster layers) only give the depth when the project has no other layer.
       ``mode`` is None unless the user fused the visible layers into 'combined' bodies on purpose — see
       :func:`extracted_mode`; `auto_modes` (layer id → the pipeline's auto mode, :meth:`ProjectStore.auto_modes`)
       tells the two apart. Without it the mode is never copied.
@@ -158,8 +159,8 @@ def extract_style(project: Project, *, plate_fill: Optional[bool] = None, plate_
         preset = max(counts, key=lambda k: (counts[k], top_index[k]))
         same = [l for l in visible if l.material.preset == preset]
         rep = same[-1]
-        kinds = element_kinds(project)
-        shaped = [l for l in same if not stacking.is_image_layer(l, kinds)] or same   # cards are not the look's depth
+        cards = stacking.card_elements(project.elements)
+        shaped = [l for l in same if not stacking.is_card_layer(l, cards)] or same   # cards are not the look's depth
         depth = shaped[-1].depth.model_copy(deep=True)
         depth.z = 0.0
         depth.bevel = max(l.depth.bevel for l in shaped)
@@ -235,18 +236,19 @@ def apply_style(project: Project, style: StyleSpec, max_radii: Optional[Mapping[
     ``bis.stacking.LayerShape`` (maxRadius + XY footprint + pieces of the mode each layer ends up with) or a bare
     ``LayerGeometry.maxRadius`` (footprint unknown); missing layers use a bbox bound - for the overlap-aware
     real-height stack; `presets` (PresetStore / dict / None = shared/presets.json) gives stackLift / stackGap.
-    ``layerDefaults.mode`` None keeps every layer's own mode. Raster image layers stay flat cards."""
+    ``layerDefaults.mode`` None keeps every layer's own mode. Layers of soft-alpha rasters stay flat cards (crisp
+    rasters are bodies: the look's depth)."""
     p = project.model_copy(deep=True)
     ld = style.layerDefaults
     mats = list(style.layerMaterials or [])
-    kinds = element_kinds(p)
+    cards = stacking.card_elements(p.elements)
     for i, layer in enumerate(p.layers):
         material = mats[min(i, len(mats) - 1)] if mats else ld.material
         layer.material = material.model_copy(deep=True)
         layer.elementMaterials = {}   # the look replaces per-shape tweaks too (element ids are icon-specific)
         depth = ld.depth.model_copy(deep=True)
-        if stacking.is_image_layer(layer, kinds):
-            stacking.card_depth(depth)   # a raster is a flat card under every look (PLAN §11 round 8)
+        if stacking.is_card_layer(layer, cards):
+            stacking.card_depth(depth)   # a soft raster is a flat card under every look (PLAN §11 rounds 8 + 9)
         depth.bevel = clamp_bevel(depth.bevel, depth.thickness)
         layer.depth = depth
         layer.shadow = ld.shadow.model_copy(deep=True)

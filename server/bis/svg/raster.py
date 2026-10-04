@@ -243,6 +243,63 @@ def path_to_mask(path: pathops.Path, inv_matrix: Affine2D, shape: Tuple[int, int
 # raster images
 # ----------------------------------------------------------------------------------------------
 MAX_TRACE_PX = 1024
+#: a raster whose covered pixels (alpha > 0.02) are at least this often partly transparent (alpha < 0.98) has SOFT
+#: alpha - a glow / shine / shadow, not a coverage mask (PLAN §11 round 9). KEEP IDENTICAL to the worker's
+#: ``blender_worker/materials.py`` SOFT_ALPHA / ``art_alpha_is_soft``.
+SOFT_ALPHA = 0.25
+
+
+def alpha_softness(rgba: np.ndarray) -> float:
+    """Share of an image's COVERED pixels (alpha > 0.02) that are partly transparent (alpha < 0.98), over the whole
+    image (straight alpha) - a port of the worker's ``materials.art_alpha_is_soft`` measure (Blender reads an 8-bit
+    alpha a as a · (1/255) in float32; the same here). Find Device's shine 1.0, Vanced Neon's glow 0.99; iMessage
+    0.02, Outlook 0.003, Feit 0. No alpha channel → 0 (opaque)."""
+    if rgba is None or rgba.ndim != 3 or rgba.shape[2] < 4 or rgba.size == 0:
+        return 0.0
+    a = rgba[:, :, 3]
+    if a.dtype == np.uint8:
+        a = a.astype(np.float32) * np.float32(1.0 / 255.0)
+    elif a.dtype == np.uint16:
+        a = a.astype(np.float32) * np.float32(1.0 / 65535.0)
+    else:
+        a = a.astype(np.float32)
+    cov = a > 0.02
+    n = int(np.count_nonzero(cov))
+    return float(np.count_nonzero(cov & (a < 0.98))) / max(1, n)
+
+
+def is_soft_alpha(softness: Optional[float]) -> bool:
+    """:func:`alpha_softness` ≥ SOFT_ALPHA (the worker's ``art_alpha_is_soft``); None (unknown) → False."""
+    return softness is not None and float(softness) >= SOFT_ALPHA
+
+
+def _png_bit_depth(data: bytes) -> int:
+    """Bit depth from a PNG's IHDR; 0 when `data` is not a PNG."""
+    if len(data) >= 26 and data[:8] == b"\x89PNG\r\n\x1a\n" and data[12:16] == b"IHDR":
+        return int(data[24])
+    return 0
+
+
+def data_alpha_softness(data: bytes, rgba: Optional[np.ndarray] = None) -> float:
+    """:func:`alpha_softness` of encoded image bytes, read like Blender reads the stored file: a 16-bit PNG's alpha at
+    full precision (PIL keeps only its high byte: an alpha of 0.9796 became 250/255 = 0.9804, crisp, where the worker
+    measured it partly transparent), everything else as 8-bit RGBA (`rgba` = the already decoded
+    :func:`decode_rgba` of `data`, if at hand)."""
+    if _png_bit_depth(data) == 16:
+        arr = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_UNCHANGED)   # BGRA / BGR uint16 (gray+α → BGRA)
+        if arr is not None and arr.dtype == np.uint16:
+            return alpha_softness(arr) if arr.ndim == 3 and arr.shape[2] == 4 else 0.0
+    return alpha_softness(decode_rgba(data) if rgba is None else rgba)
+
+
+def file_alpha_softness(path) -> Optional[float]:
+    """:func:`alpha_softness` of an image file (the PNG / JPEG the worker loads); None when it cannot be read."""
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+        return data_alpha_softness(data)
+    except Exception:  # noqa: BLE001 - missing / undecodable file: the worker cannot load it either
+        return None
 
 
 @dataclass

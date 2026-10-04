@@ -1,6 +1,6 @@
 """Rounds 7 + 8 (PLAN §11): ``LayerGeometry.maxRadius`` (max inscribed radius of the bodies the worker builds),
 real-height OVERLAP-AWARE stacking of the import defaults and of structural edits (a layer only stacks above the lower
-layers it overlaps in XY; H includes the in-layer stack of overlapping pieces), raster image layers as flat cards,
+layers it overlaps in XY; H includes the in-layer stack of overlapping pieces), soft-alpha raster layers as flat cards,
 the thickness/2-only bevel clamp, and the plate fill's pad-only end stops (Twitter's red sliver)."""
 from __future__ import annotations
 
@@ -324,12 +324,14 @@ def test_legacy_default_stack_restacks_on_edit(import_icon):
 # ---------------------------------------------------------------------------------------------- raster cards
 @pytest.mark.parametrize("name", ["Find Device", "iMessage", "Vanced Neon"])
 def test_raster_image_layers_import_as_flat_cards(name, import_icon):
-    """Round 8: a layer of raster images only is a flat card (no dome, 0.02 thick, round edge 0.006) - Find
-    Device's traced shine image used to become a 0.38-tall glass dome; vector layers keep the defaults."""
+    """Rounds 8 + 9: a layer of SOFT-alpha raster images only is a flat card (no dome, 0.02 thick, round edge 0.006)
+    - Find Device's traced shine image used to become a 0.38-tall glass dome; vector layers and crisp rasters
+    (iMessage's bubble, Vanced Neon's logo) keep the body defaults (more: tests/test_svg_raster_cards.py)."""
     res, project, pdir = import_icon(CORPUS_DIR / f"{name}.svg")
     kinds = {e.id: e.kind for e in project.elements}
-    cards = [L for L in project.layers if stacking.is_image_layer(L, kinds)]
-    assert cards
+    cards = [L for L in project.layers if stacking.is_card_layer(L, stacking.card_elements(project.elements))]
+    assert bool(cards) == (name != "iMessage")
+    assert all(stacking.is_image_layer(L, kinds) for L in cards)
     for L in project.layers:
         want = ((stacking.IMAGE_CARD["thickness"], stacking.IMAGE_CARD["bevel"], 0.0) if L in cards
                 else (DEFAULT_THICKNESS, DEFAULT_BEVEL, DEFAULT_INFLATE))
@@ -350,10 +352,12 @@ def test_raster_image_layers_import_as_flat_cards(name, import_icon):
 def test_cards_across_structural_edits(import_icon):
     """A flat card merged with (or receiving) vector art gets a full body back - the vector layer's depth, never a
     0.02 card that flattens the vector art; a layer left with raster images only becomes a card; cards merged
-    together stay a card. The stack stays the overlap-aware rule stack."""
+    together stay a card (round 9: only soft-alpha rasters are cards - a crisp raster merged in makes a body). The stack
+    stays the overlap-aware rule stack."""
     res, project, pdir = import_icon(CORPUS_DIR / "Find Device.svg")
     kinds = {e.id: e.kind for e in project.elements}
     card = next(L for L in project.layers if stacking.is_image_layer(L, kinds))
+    assert not card.visible                                       # round 9: the baked sweep imports hidden
     k = [L.id for L in project.layers].index(card.id)
     vec = project.layers[k + 1]                                   # the vector layer right above the card
     full = (vec.depth.thickness, vec.depth.bevel, vec.depth.inflate)
@@ -364,7 +368,7 @@ def test_cards_across_structural_edits(import_icon):
 
     merged = svg.merge_layers(pdir, project, [card.id, vec.id])
     m = next(L for L in merged if card.elementIds[0] in L.elementIds)
-    assert depth(m) == full
+    assert depth(m) == full and m.visible                         # the vector art merged in is shown
     _check(pdir, project, merged)
     moved = svg.move_elements(pdir, project, [vec.elementIds[0]], card.id)     # vector art into the card
     t = next(L for L in moved if L.id == card.id)
@@ -379,10 +383,12 @@ def test_cards_across_structural_edits(import_icon):
     left = next(L for L in out if L.elementIds == card.elementIds)
     assert depth(left) == flat
     _check(pdir, project, out)
-    # cards merged together stay a card
+    # round 9: Vanced Neon's soft glow card merged with its CRISP logo body is a body (the logo's depth); soft cards
+    # merged together stay a card (tests/test_svg_raster_cards.py)
     res, vn, vdir = import_icon(CORPUS_DIR / "Vanced Neon.svg")
+    assert [depth(L) for L in vn.layers] == [flat, (DEFAULT_THICKNESS, DEFAULT_BEVEL, DEFAULT_INFLATE)]
     one = svg.merge_layers(vdir, vn, [L.id for L in vn.layers])
-    assert len(one) == 1 and depth(one[0]) == flat
+    assert len(one) == 1 and depth(one[0]) == depth(vn.layers[1])
 
 
 def test_template_layers_clamp_bevel_to_half_thickness(import_icon):

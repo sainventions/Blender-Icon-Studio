@@ -54,15 +54,17 @@ def test_icon(path, import_icon):
         assert 0 <= L.depth.bevel <= L.depth.thickness / 2 + 1e-9
         assert lg.maxRadius > 0
     # rounds 7 + 8: the import stack is the overlap-aware real-height stack for the bundle's geometry (footprints +
-    # max radii measured from the exported splines): reproduced exactly, no interpenetrating layers; raster-only
-    # layers are flat cards
+    # max radii measured from the exported splines): reproduced exactly, no interpenetrating layers; layers of
+    # soft-alpha rasters are flat cards, crisp rasters bodies (round 9); only soft cards on body layers below are hidden
     assert_rule_stack(project, bundle)
-    kinds = {e.id: e.kind for e in project.elements}
+    cards = stacking.card_elements(project.elements)
     for L in project.layers:
-        if stacking.is_image_layer(L, kinds):
+        if stacking.is_card_layer(L, cards):
             assert (L.depth.thickness, L.depth.bevel, L.depth.inflate) == (0.02, 0.006, 0.0), L.name
         else:
             assert (L.depth.thickness, L.depth.bevel, L.depth.inflate) == (0.16, 0.08, 0.25), L.name
+            assert L.visible, L.name
+    assert all(e.softAlpha is not None for e in project.elements if e.kind == "image")
     vb = res.source.viewBox
     w = 160
     h = max(1, int(round(w * vb[3] / vb[2])))

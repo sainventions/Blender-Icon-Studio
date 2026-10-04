@@ -185,9 +185,16 @@ WALL_MIN = 0.15           # the round edge keeps at least this fraction of the h
 WIDTH_BISECT = 10         # bisection steps of the local half-width at every outline vertex (local_width)
 WIDTH_TOL = 2.0           # its absolute slack × CHORD_TOL: a disc tangent to the TRUE curve pokes out of the sampled outline
 WIDTH_BLEND = 0.5         # foot points of a vertex blend their local half-widths over this × its distance (blend_width)
+INSET_STEP = 0.5          # inset_rings: the contact stretch is resampled every INSET_STEP × gap ...
+INSET_PASSES = 12         # ... moved onto B's offset outline in this many passes (B's concave corners) ...
+INSET_THIN = 0.1          # ... and thinned back to this × gap chord deviation
+INSET_REFINE = 8          # ... after at most this many rounds of moving chord midpoints (B's corners)
+INSET_MIN_CHORD = 0.02    # ... (chords shorter than this × gap are not split again: bounded refinement) ...
+INSET_LOOP_SPAN = 32      # ... and loops of the moved stretch crossing itself within this many segments are cut off
 APEX_TIE = 1e-4           # × the inradius grid cell: distances this close tie (deterministic apex, SAMPLING 2)
 CACHE_LIMIT = 200
-VERSION = 4               # bump when the geometry changes (cache key)   3: Poisson inflation  4: local bevel cap, apex
+VERSION = 5               # bump when the geometry changes (cache key)   3: Poisson inflation  4: local bevel cap, apex
+#                           5: inset along B's offset (round 9), loops cut off
 
 _MESH_CACHE: "OrderedDict[str, str]" = OrderedDict()     # key -> mesh name
 _INRADIUS_CACHE: "OrderedDict[str, list]" = OrderedDict()
@@ -968,27 +975,225 @@ def rings_relation(ra: list, rb: list, tol: float) -> int:
 
 
 def inset_rings(ra: list, rb: list, gap: float) -> list:
-    """Piece A's rings pulled back from piece B (they touch along a shared edge): every vertex of A inside B or closer
-    than ``gap`` to B's outline moves to B's outline + ``gap`` along B's outward normal there (into A), so the two
-    bodies' walls no longer coincide. Other vertices are unchanged."""
+    """Piece A's rings pulled back from piece B (they touch along a shared edge) so that the two bodies' walls neither
+    coincide nor cross: where A's outline comes closer than ``gap`` to B (or lies inside B) it follows B's outline
+    offset by ``gap`` — that stretch is resampled every INSET_STEP·gap and each sample moved to distance ``gap`` from B
+    (along B's outward normal; radially around B's corners, a few passes for B's concave corners), chords whose midpoint
+    still comes closer than (1 − INSET_THIN)·gap get that midpoint moved too (B's corners are rounded off at radius
+    ``gap``, like a true offset), then the stretch is thinned back to INSET_THIN·gap chord detail. Where the moved
+    samples overshoot each other (B's concave corners: the offset's swallowtail; parts of A thinner than 2·gap) the
+    outline would cross itself: those loops are cut off at the crossing (:func:`_unloop`), so every ring stays simple
+    (a valid CDT / poly2tri input). An outer ring that lies wholly within ``gap`` of B (a sliver ≤ 2·gap wide) is
+    dropped; a piece left without outer rings returns [] (scene._layer skips it). A's other vertices are unchanged.
+    Round 9: moving A's VERTICES only left
+    B's corners and finer arcs poking into A between two of them (Calendar merged: the page's digit holes vs the
+    digits, 79 intersecting face pairs)."""
     if not ra or not rb:
         return ra
     Ab, Bb, _ = _segments(rb)
+    pre = segprep(Ab, Bb)
+    e = Bb - Ab
+    nout = _unit(np.column_stack([e[:, 1], -e[:, 0]]))      # B's outward normals (material on the left)
+    prv, nxt_seg = _ring_neighbours(rb)
+    corner_n = _unit(nout + nout[prv])                         # B's vertex normals (at each segment's start)
+
+    def push(P, ring: bool):
+        """P moved out to distance gap from B where it is closer / inside -> (P, moved mask). ``ring``: P is a closed
+        ring in order (a point lying exactly on one of B's corners takes its neighbours' direction)."""
+        P_all = P.copy()
+        moved = np.zeros(len(P), dtype=bool)
+        idx = np.arange(len(P))
+        for n_pass in range(INSET_PASSES):
+            # only what the last pass moved can still be too close (a concave corner of B: from one wall to the other)
+            P = P_all[idx]
+            d, seg, _g = nearest(P, Ab, Bb, pre=pre)
+            ins = _inside(P, rb)
+            # (nearest() measures in float32: ~1e-7 absolute, so 1e-6 × gap could never settle — every pass re-pushed
+            # every point)
+            m = ins | (d < gap * (1.0 - 1e-3))
+            if not m.any():
+                break
+            # the foot in float64 (nearest() measures in float32: a point ON B's outline has no usable direction):
+            # along the segment's outward normal, radially away from a corner foot
+            es = e[seg]
+            tt = np.clip(((P - Ab[seg]) * es).sum(1) / np.maximum((es * es).sum(1), 1e-300), 0.0, 1.0)
+            foot = Ab[seg] + es * tt[:, None]
+            rad = P - foot
+            dr = np.hypot(rad[:, 0], rad[:, 1])
+            at_corner = (tt <= 0.0) | (tt >= 1.0)
+            corner = at_corner & (dr > 1e-3 * gap)
+            radial = rad / np.maximum(dr, 1e-300)[:, None] * np.where(ins, -1.0, 1.0)[:, None]
+            away = np.where(corner[:, None], radial, nout[seg])
+            # ON one of B's corners (a corner the two outlines share): no direction of its own — along the neighbours'
+            # (A's outline continues there; B's vertex normal would push it outside A: a spike), else B's vertex normal
+            undef = at_corner & ~corner
+            if undef.any():
+                vn = corner_n[np.where(tt >= 1.0, nxt_seg[seg], seg)]
+                if ring and n_pass == 0 and len(P) >= 3:
+                    nb = (np.roll(away, 1, axis=0) * ~np.roll(undef, 1)[:, None]
+                          + np.roll(away, -1, axis=0) * ~np.roll(undef, -1)[:, None])
+                    ok = np.hypot(nb[:, 0], nb[:, 1]) > 1e-9
+                    vn = np.where(ok[:, None], _unit(nb), vn)
+                away = np.where(undef[:, None], vn, away)
+            P[m] = foot[m] + away[m] * gap
+            P_all[idx] = P
+            moved[idx[m]] = True
+            idx = idx[m]
+        return P_all, moved
+
+    def settle(X):
+        return push(X, False)[0]
+
     out = []
     for r in ra:
-        d, seg, g = nearest(r, Ab, Bb)
-        ins = _inside(r, rb)
-        m = ins | (d < gap)
-        if not m.any():
+        d0 = nearest(r, Ab, Bb, pre=pre)[0]
+        nxt = np.roll(r, -1, axis=0)
+        L = np.hypot(*(nxt - r).T)
+        # edges that can come within gap of B (an edge point is at most L/2 nearer than its closer end)
+        ins0 = _inside(r, rb)
+        zone = (np.minimum(d0, np.roll(d0, -1)) < gap + 0.5 * L) | ins0 | np.roll(ins0, -1)
+        if not zone.any():
             out.append(r)
             continue
-        foot = r - g * d[:, None]                  # nearest point of B's outline (g = unit (p − foot))
-        e = Bb[seg] - Ab[seg]
-        nout = _unit(np.column_stack([e[:, 1], -e[:, 0]]))      # B's outward normal (material on the left)
-        q = r.copy()
-        q[m] = foot[m] + nout[m] * gap
-        out.append(q)
-    return out
+        k = np.where(zone, np.maximum(1, np.ceil(L / (INSET_STEP * gap))).astype(np.int64), 1)
+        t = np.concatenate([np.arange(n) / n for n in k])
+        i = np.repeat(np.arange(len(r)), k)
+        P, moved = push(r[i] + (nxt[i] - r[i]) * t[:, None], True)
+        free = np.repeat(zone, k) & (t > 0.0) | moved           # inserted / moved samples may go again
+        sign = 1.0 if _signed_area(r) >= 0.0 else -1.0
+        # the samples moved onto B's offset overshoot each other at B's concave corners (a swallowtail: the outline
+        # crossed itself, review r9 — 83 of the corpus' 205 inset pieces): cut those loops off before refining
+        P, free, extra = _unloop(P, free, sign, gap, settle)
+        refined = False
+        for _ in range(INSET_REFINE):
+            Q = 0.5 * (P + np.roll(P, -1, axis=0))
+            bad = _inside(Q, rb) | (nearest(Q, Ab, Bb, pre=pre)[0] < (1.0 - INSET_THIN) * gap)
+            bad &= np.hypot(*(np.roll(P, -1, axis=0) - P).T) > INSET_MIN_CHORD * gap   # bounded refinement
+            if not bad.any():
+                break
+            at = np.nonzero(bad)[0] + 1
+            P = np.insert(P, at, push(Q[bad], False)[0], axis=0)
+            free = np.insert(free, at, True)
+            refined = True
+        if refined:
+            P, free, more = _unloop(P, free, sign, gap, settle)
+            extra += more
+        keep = np.hypot(*(P - np.roll(P, 1, axis=0)).T) > 1e-3 * gap     # samples moved onto the same point
+        if keep.sum() < 3:
+            out += ([r] if sign < 0.0 else []) + extra
+            continue
+        P, free = _thin(P[keep], free[keep], INSET_THIN * gap)
+        P, _free, more = _unloop(P, free, sign, gap, settle)
+        extra += more
+        if len(P) >= 3 and _signed_area(P) * sign > 0.0:
+            out.append(P)
+        elif not extra and sign < 0.0:
+            out.append(r)             # (a hole never lies wholly within gap of B; kept as it was)
+        out += extra
+    # an outer ring wholly within gap of B (a sliver ≤ 2·gap wide: nothing of it is farther than gap from B) is gone —
+    # kept as it was it cut into B (Files_1 / DJI / Translate with every piece split: 73–159 intersecting face pairs);
+    # with no outer ring left the piece is a sliver: [] (scene._layer skips it)
+    return out if any(_signed_area(q) > 0.0 for q in out) else []
+
+
+def _signed_area(r: np.ndarray) -> float:
+    return 0.5 * float(np.dot(r[:, 0], np.roll(r[:, 1], -1)) - np.dot(np.roll(r[:, 0], -1), r[:, 1])) if len(r) else 0.0
+
+
+def _seg_cross(p: np.ndarray, q: np.ndarray, r: np.ndarray, s: np.ndarray, eps: float = 1e-9):
+    """Crossings of segments p→q and r→s (arrays (N, 2)), touching ends included (``eps``: of non-adjacent
+    segments that is a fold too) -> (mask, parameter along p→q in [0, 1])."""
+    d1, d2, w = q - p, s - r, r - p
+    den = d1[:, 0] * d2[:, 1] - d1[:, 1] * d2[:, 0]
+    ok = np.abs(den) > 1e-300
+    den = np.where(ok, den, 1.0)
+    t = (w[:, 0] * d2[:, 1] - w[:, 1] * d2[:, 0]) / den
+    u = (w[:, 0] * d1[:, 1] - w[:, 1] * d1[:, 0]) / den
+    hit = ok & (t > -eps) & (t < 1.0 + eps) & (u > -eps) & (u < 1.0 + eps)
+    return hit, np.clip(t, 0.0, 1.0)
+
+
+def _unloop(r: np.ndarray, free: np.ndarray, sign: float, gap: float, settle=None):
+    """Self-crossings of an inset ring (segments at most INSET_LOOP_SPAN apart) resolved -> (ring, free, extra rings).
+    The sub-loop between two crossing segments is cut off at their crossing point: dropped when it turns against the
+    ring's orientation ``sign`` (a swallowtail of the offset at one of B's concave corners, or a part of A thinner than
+    2·gap squeezed out between B's walls), kept as a ring of its own when it turns with it and is larger than
+    (4·gap)² (a lobe of A pinched off by B; smaller ones are slivers of the tangle). ``settle``: moves the cut points
+    (X on a chord that cut B's corner region can lie nearer than gap to B) back out to the offset."""
+    extra = []
+    lobe = (4.0 * gap) ** 2
+    for _ in range(64):
+        n = len(r)
+        W = min(INSET_LOOP_SPAN, n // 2)
+        if n < 4 or W < 2:
+            break
+        # only pairs with a segment of the moved stretch (free: moved / inserted points); A's other segments are A's own
+        fs = free | np.roll(free, -1)
+        c = np.concatenate([[0], np.cumsum(np.concatenate([fs, fs]))])
+        cand = np.nonzero(c[np.arange(n) + W + 1] - c[np.arange(n)] > 0)[0]     # a free segment within i .. i+W
+        if not len(cand):
+            break
+        i = np.repeat(cand, W - 1)
+        d = np.tile(np.arange(2, W + 1), len(cand))
+        k = (i + d) % n
+        ok = ((k + 1) % n != i) & (fs[i] | fs[k])
+        i, d, k = i[ok], d[ok], k[ok]
+        nx = np.roll(r, -1, axis=0)
+        hit, t = _seg_cross(r[i], nx[i], r[k], nx[k])
+        if not hit.any():
+            break
+        i, d, t = i[hit], d[hit], t[hit]
+        taken = np.zeros(n, dtype=bool)
+        drop = np.zeros(n, dtype=bool)
+        at = {}
+        for o in np.lexsort((i, d)):                  # the most local loops first, never two overlapping in one pass
+            a, b = int(i[o]), int(i[o] + d[o])        # the loop: points a+1 .. b (mod n), cut at X on segment a
+            span = np.arange(a, b + 2) % n
+            if taken[span].any():
+                continue
+            taken[span] = True
+            X = r[a] + (nx[a] - r[a]) * t[o]
+            loop = np.arange(a + 1, b + 1) % n
+            lp = np.vstack([X[None], r[loop]])
+            ar = _signed_area(lp)
+            if ar * sign > lobe and len(lp) >= 3:
+                extra.append(lp)
+            drop[loop] = True
+            at[a] = X
+        a_s = np.array(sorted(at), dtype=np.int64)            # never dropped themselves: X follows each of them
+        pos = np.cumsum(~drop)[a_s]
+        Xs = np.array([at[a] for a in a_s])
+        if settle is not None:
+            Xs = settle(Xs)
+        r = np.insert(r[~drop], pos, Xs, axis=0)
+        free = np.insert(free[~drop], pos, True)
+    return r, free, extra
+
+
+def _thin(r: np.ndarray, removable: np.ndarray, tol: float):
+    """Drop ``removable`` points of a ring that lie within ``tol`` of the chord of their neighbours (never two
+    neighbours in one pass), keeping every other point: :func:`_simplify` restricted to a stretch -> (ring, removable
+    mask of what is left)."""
+    out, rem_ok = r, removable.copy()
+    for it in range(64):
+        n = len(out)
+        if n <= 4:
+            break
+        a, c = np.roll(out, 1, axis=0), np.roll(out, -1, axis=0)
+        ac = c - a
+        lac = np.maximum(np.hypot(ac[:, 0], ac[:, 1]), 1e-300)
+        dev = np.abs((out[:, 0] - a[:, 0]) * ac[:, 1] - (out[:, 1] - a[:, 1]) * ac[:, 0]) / lac
+        tt = ((out - a) * ac).sum(1) / np.maximum(lac * lac, 1e-300)
+        rem = rem_ok & (dev < tol) & (tt > 0.0) & (tt < 1.0)
+        if not rem.any():
+            break
+        rem &= (np.arange(n) % 2) == it % 2
+        if n % 2 == 1:
+            rem[-1] = False
+        if not rem.any():
+            continue
+        out, rem_ok = out[~rem], rem_ok[~rem]
+    return out, rem_ok
 
 
 def rings_to_splines(rings: list) -> list:

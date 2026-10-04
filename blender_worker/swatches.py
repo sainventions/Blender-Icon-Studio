@@ -169,7 +169,8 @@ def render_swatches(builder, out_dir: str, size: int = 192, quality: str = "prev
         project, bundle = swatch_scene(preset)
         info = builder.build(project, bundle, "light", engine=R.tier(quality)["engine"])
         cm = P.color_mode_id(project["render"]["colorMode"])
-        R.configure(scene, quality, size, transparent=True, color_mode=cm, max_glass_roughness=info["maxGlassRoughness"])
+        R.configure(scene, quality, size, transparent=True, color_mode=cm, max_glass_roughness=info["maxGlassRoughness"],
+                    trace_max_roughness=info.get("traceMaxRoughness"))
         R.configure_compositor(scene, info["bloom"], True, P.soft_clip_knee(cm))
         out = os.path.join(out_dir, f"{preset}.png")
         R.render_still(scene, out)

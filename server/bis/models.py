@@ -106,6 +106,10 @@ class Element(_Model):
     shadow: Optional[DropShadow] = None
     wasStroke: bool = False
     role: Literal["fill", "stroke", "image"] = "fill"
+    # rasters (kind 'image', PLAN §11 round 9): True = SOFT alpha (≥ 25 % of its covered pixels partly transparent:
+    # a glow / shine / shadow → a flat card), False = a crisp alpha silhouette (a real body like vector art);
+    # None = not a raster (or not measured yet)
+    softAlpha: Optional[bool] = None
 
 
 # ----------------------------------------------------------------------------------------------
@@ -386,7 +390,8 @@ class StyleSpec(_Model):
     - layers are re-stacked at their REAL heights, overlap-aware (shared/presets.json "geometry", PLAN 11 round 8):
       a layer stacks only above the lower layers it overlaps in XY, z(i) = max(stackLift, max over overlapped
       lower j of z(j) + H(j) + gap), H = max(thickness + 2 x inflate x maxRadius x art/layer scale, in-layer
-      stacked height), gap = zGap (None = the presets' stackGap); raster image layers stay flat cards;
+      stacked height), gap = zGap (None = the presets' stackGap); layers of soft-alpha rasters stay flat cards
+      (round 9: Element.softAlpha; crisp rasters take the look's depth like vector art);
     - plate material/thickness/bevel (+ fill/shape when not None), lighting, camera (when given),
       render.colorMode (when given) and appearances.tint (when given) are copied."""
     layerDefaults: StyleLayerDefaults = StyleLayerDefaults()

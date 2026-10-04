@@ -91,7 +91,8 @@ version and the OptiX GPU.
   - *Layer* — **Material** (preset picker + the Principled BSDF inputs, see [Materials](#materials-one-principled-bsdf-per-shape)),
     **Colour** (fill overrides with a gradient editor, opacity, blend mode — used by the `.icon` export only),
     **Depth** (Z position, thickness, roundness, inflate, segments, individual / combined bodies, re-stack, and a
-    warning with a **Re-stack** button when hand-placed layers collide; image layers are marked as flat cards),
+    warning with a **Re-stack** button when hand-placed layers collide; layers of soft images, such as glows and
+    shines, are marked as flat cards),
     position & scale, **Shadow** (Physical / None), the layer's **Shapes** and per-appearance overrides.
   - *Document* — platform, plate (shape, fill and its own Principled material), lighting, camera (view angle,
     orthographic / perspective), colour mode and render settings.
@@ -211,8 +212,10 @@ the Poisson dome turns the star tips into round, tapering tubes. Head-on.</sub><
   tips, thin strokes and sharp corners simply get thinner — no inverted bevels and no self-intersecting edges.
   Across the 68-icon corpus at default, maximum roundness and full inflate: zero self-intersections, zero
   non-manifold edges.
-- **Pieces inside one layer.** Pieces that only touch pull back 0.003 from each other; a piece that overlaps an
-  earlier one is stacked on top of it by its real height, so bodies in one layer never cut through each other.
+- **Pieces inside one layer.** Where a piece touches another, its outline pulls back to follow the other's outline
+  0.003 away, rounded at the other's corners (a sliver no wider than 0.006 along it is dropped). A piece that
+  overlaps an earlier one is stacked on top of it by its real height, so bodies in one layer never cut through
+  each other.
 - **Overlap-aware stacking.** A layer's height is `H = max(thickness + 2 · inflate · maxRadius · scale, in-layer
   stacked height)`, where `maxRadius` (the largest inscribed radius of the outlines the bodies are built from)
   comes with the geometry bundle; server, Blender worker and live view use the same H. A layer only stacks on the
@@ -225,11 +228,23 @@ the Poisson dome turns the star tips into round, tapering tubes. Head-on.</sub><
   rule. Once the layers form such a stack, changing a thickness, inflate, scale or position, reordering or
   deleting a layer keeps them stacked. A Z you set by hand is left alone; a merge, split or move then only lifts
   layers that would intersect, and hand-placed layers that collide get a **Collide · Re-stack** warning.
-- **Image layers are flat cards.** A layer whose shapes are all embedded raster images imports as a thin card
-  (Thickness 0.02, bevel 0.006, Inflate 0). Looks keep it flat, a copied style never takes its depth from a card,
-  and a card merged with vector art takes the vector layer's depth. Inflate still works if you want a pillow.
+- **Crisp images are bodies, soft images are cards.** An embedded raster image with a crisp alpha silhouette
+  (*iMessage's* bubble, *Feit's* house, *Outlook's* and *Vanced Neon's* logos) is traced and becomes a real body
+  like vector art: the default depth, the overlap-aware stack, and the PNG painted on it. An image is *soft* when
+  at least 25 % of its covered pixels (alpha above 0.02) are partly transparent (alpha below 0.98): glows, shines
+  and shadows. The server measures this at import (`Element.softAlpha`) with the same test as the Blender worker.
+  A layer made only of soft images imports as a flat card (Thickness 0.02, bevel 0.006, Inflate 0). Looks keep it
+  flat, a copied style never takes its depth from a card, and a card merged with body art takes that art's depth.
+  Inflate still works if you want a pillow. Projects imported before this rule keep their card depths until you
+  re-split the layers or apply a look.
+- **Baked highlights are hidden.** A soft card that lies at least half on the body layers below it is a highlight
+  baked into the art (*Find Device's* sweep). Cycles lights the bodies for real, so that card imports hidden, with
+  the warning *baked highlight hidden — Blender lighting replaces it*; unhide the layer to keep it. A soft image
+  that doesn't sit on other art (*Vanced Neon's* glow halo) stays a visible card, and merging body art into a
+  hidden card turns it into a visible body.
 - **Import defaults.** New imports start as Liquid Glass with Thickness 0.16, Roundness 100 % (bevel 0.08),
-  Inflate 0.25, 8 segments and physical shadows (image layers as flat cards), stacked overlap-aware by real height.
+  Inflate 0.25, 8 segments and physical shadows (soft image layers as flat cards), stacked overlap-aware by real
+  height.
 - **Depth controls.** *Z position*, *Thickness*, *Roundness* (the edge radius as a share of half the thickness:
   100 % is a near-pill edge, and a round shape as thick as it is wide becomes a near-sphere; the read-out under
   the sliders shows the radius the body really gets after the minimum wall), *Inflate* (the dome), *Segments*
@@ -246,8 +261,9 @@ the Poisson dome turns the star tips into round, tapering tubes. Head-on.</sub><
 
 **Import and split**
 - Any SVG: drag and drop or the sample library; plain, UTF-16 and gzip-compressed (`.svgz`) files.
-  Gradients, opacity, strokes, clip paths and embedded raster images are handled (a layer of images only becomes
-  a flat card); baked drop-shadow filters are recognised; off-canvas junk is culled.
+  Gradients, opacity, strokes, clip paths and embedded raster images are handled (crisp images become bodies,
+  glows and shines flat cards, and baked shines import hidden); baked drop-shadow filters are recognised;
+  off-canvas junk is culled.
 - Smart layer split (smart, group, colour, per element or single), then merge / split / move. Z-order
   validation stops overlapping art from being "woven" through other layers.
 - Full-bleed artwork (the art itself is the icon shape) is recognised and labelled *Full-bleed*.
@@ -262,10 +278,10 @@ the Poisson dome turns the star tips into round, tapering tubes. Head-on.</sub><
   Neon, Iridescent and Soft 3D. A look sets every layer's material, depth (thickness, roundness, inflate) and
   shadow, restacks the layers overlap-aware by real height (Crystal and Prism leave 0.05 between bodies, every
   other look the default 0.03) and sets the plate material plus, when it defines them, lighting, camera, colour
-  mode and tint. Liquid Glass uses the import defaults (Thickness 0.16, bevel 0.08, Inflate 0.25), and image
-  layers stay flat cards under every look. Applying a look clears
-  per-shape materials so it shows on every shape. Bevels are clamped to half the thickness only. The icon's own
-  plate colour and shape are kept unless the look sets them (Neon switches the plate to System Dark).
+  mode and tint. Liquid Glass uses the import defaults (Thickness 0.16, bevel 0.08, Inflate 0.25). Crisp image
+  layers take the look's depth, and soft ones (glows, shines) stay flat cards under every look. Applying a look
+  clears per-shape materials so it shows on every shape. Bevels are clamped to half the thickness only. The
+  icon's own plate colour and shape are kept unless the look sets them (Neon switches the plate to System Dark).
 - **Copy / paste style** between icons (<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>C</kbd> / <kbd>V</kbd>): the dominant
   layer material, depth and shadow, each layer's material by stack position, the median clearance between stacked
   bodies (only layers that sit on another count; side-by-side layers give the default gap), the plate material,
@@ -283,9 +299,13 @@ the Poisson dome turns the star tips into round, tapering tubes. Head-on.</sub><
 | Final / Ultra | Cycles, 1024 / 2048 px | seconds | exports and hero shots (one-shot process) |
 
 EEVEE is a layout draft: it can't show glass through glass. Translucent glass (opacity below 1, or art with soft
-alpha) is alpha-blended there, and a light probe that sees only the plate (the wallpaper under a glass plate) gives
-blended and floating glass something to refract, so drafts don't turn glass near-black. Draft glass still reads
-lighter and less saturated than in Cycles. The Cycles preview is the first physical view.
+alpha) is alpha-blended there, and light probes give blended, frosted and floating glass something to refract, so
+drafts don't turn glass near-black. A probe at the plate captures the lit plate (for a glass plate, the wallpaper
+beneath it). In Clear Light, Clear Dark and Tinted Light the plate is frosted glass, and the glass glyphs must see
+it as they do in Cycles: over the light wallpaper they refract the plate on screen, and over the dark one a second
+probe above the plate captures the plate and the glass bodies. Draft glass still reads lighter and less saturated
+than in Cycles, and Clear Dark glyphs a little darker (about 6 L* head-on, more in iso views). The Cycles preview
+is the first physical view.
 
 **Export** (one zip):
 
@@ -459,13 +479,13 @@ cd web; npx tsc -b --noEmit; npx vite build                              # type 
 
 | Suite | What it covers |
 |---|---|
-| `tests/test_svg_*.py` | the SVG pipeline over the 68-icon corpus: import, split, geometry, units, ops, `maxRadius` and stacks kept through edits |
-| `tests/test_stacking.py` | the overlap-aware real-height stacking rule: footprints and clearance, body and in-layer height (checked against the worker's height field), gaps, telling rule, old and hand-placed stacks apart, image cards |
+| `tests/test_svg_*.py` | the SVG pipeline over the 68-icon corpus: import, split, geometry, units, ops, `maxRadius` and stacks kept through edits; raster softness (matching the worker's test, 16-bit PNGs included), crisp images as bodies, soft cards and hidden baked shines through re-split and edits |
+| `tests/test_stacking.py` | the overlap-aware real-height stacking rule: footprints and clearance, body and in-layer height (checked against the worker's height field), gaps, telling rule, old and hand-placed stacks apart, soft image cards |
 | `tests/test_api.py` | REST, WebSocket, the job queue, coalescing, cancel and auto preview, material cleaning of old projects, per-shape materials, with a FakeBridge |
 | `tests/test_api_bridge.py` | the real `BlenderBridge` against a stand-in process: handshake, progress, restart, one-shot kill |
 | `tests/test_export.py`, `test_style.py`, `test_batch.py` | every export target, the marketing heroes and the `.icon` writer · looks and style transfer · Icon Pack |
 | `tests/test_api_integration.py` | the real SVG pipeline, plus opt-in real Blender runs (`BIS_REAL_BLENDER=1`) |
-| `tests/blender/` | the worker inside Blender 5.0 (≤ 256 px): one Principled BSDF per shape (graph rules, parameter mapping, glass / shadow physics), height-field bodies (Poisson dome, minimum wall, local bevel cap, deterministic dome apex, watertight, no self-intersections, touching / overlapping pieces, corpus), the iso camera and framing, the camera-relative light rig, the dark renditions, EEVEE draft glass (plate probe, never near-black), every preset in draft + preview |
+| `tests/blender/` | the worker inside Blender 5.0 (≤ 256 px): one Principled BSDF per shape (graph rules, parameter mapping, glass / shadow physics), height-field bodies (Poisson dome, minimum wall, local bevel cap, deterministic dome apex, watertight, no self-intersections, touching pieces (inset without self-crossing outlines), overlapping pieces, corpus), crisp raster bodies, the iso camera and framing, the camera-relative light rig, the dark renditions, EEVEE draft glass (plate and glyph probes, never near-black, Clear / Tinted glyphs close to Cycles), every preset in draft + preview |
 | `web/src/viewport/tests/` | the live view against the worker: Principled → three.js material mapping, the height-field and Poisson port (minimum wall, local bevel cap, dome apex, touching outlines), iso framing, camera-relative lighting, the dark rule, plus the UI polish checks |
 | `web/src/features/editor/stacking.test.mjs` | the overlap-aware stack against the server's own results (`fixtures/stack-corpus.json.gz`): overlap lists, re-stack, recognising stacks, collisions |
 | `web/src/features/editor/inspector/` | the Principled inspector: group order and open groups, the per-shape merge rule, Roundness, re-stack, keeping a stack through edits and the collision hint |
@@ -489,6 +509,7 @@ cd web; npx tsc -b --noEmit; npx vite build                              # type 
 | First render is slow | NVIDIA shader-cache compile after a driver update (one time). |
 | Out of VRAM (OptiX error) | Close other GPU-heavy apps, lower the size or tier, or render Ultra only when needed. |
 | Layers float in the iso view | A layer stacks above every lower layer it overlaps or touches in the plane (layers side by side share the base), so touching pieces such as *Photos'* petals form a staircase. Drag a layer's Z down (a hand-placed Z is kept; if bodies then collide, the Layers header shows **Collide · Re-stack**) or merge the layers. |
+| An image layer (a shine) doesn't render | A soft image that lies on the art below it is a baked highlight: it imports hidden, with a warning, because Blender's lighting replaces it. Click its eye in the Layers panel to show it again. |
 | Stacked glass looks wrong in the draft | EEVEE drafts are layout previews and can't show glass through glass. The Cycles preview follows about 1.2 s after edits settle (or press <kbd>R</kbd>). |
 | "Web UI not built" page | Run `Blender Icon Studio.cmd -Rebuild`, or `cd web; npm run build`. |
 | Port 8420 is busy | `Blender Icon Studio.cmd -Port 8430` |

@@ -13,6 +13,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 HERE = Path(__file__).resolve().parent
@@ -445,6 +446,38 @@ def test_raster_glass_dithers_unless_its_alpha_is_soft(worker, outdir):
 
 
 @needs_blender
+def test_crisp_raster_is_a_height_field_body(worker, outdir):
+    """PLAN §11 round 9: a raster with a crisp alpha silhouette (iMessage's bubble, Feit's house, Outlook) is a real
+    body like vector art — the server gives its layer the default depth; the worker builds the height field over the
+    traced outline and paints it with the PNG (Base Color art). Draft and preview both show the art through the glass
+    (never black), the dome is as tall as a vector body's, and the soft glow beside it stays a blended flat card."""
+    proj, bundle = raster_cards(outdir)
+    L = proj["layers"][0]
+    L["depth"].update({"thickness": 0.16, "bevel": 0.08, "inflate": 0.25})
+    got = {}
+    for q in ("draft", "preview"):
+        out = outdir / f"raster_body_{q}.png"
+        render(worker, (proj, bundle), out, quality=q, size=PX)
+        got[q] = rgb_at(out, -0.45, 0.0, r=5)
+        if q == "draft":
+            info = worker.result("scene_info", {"check": True})
+            objs = {o["name"]: o for o in info["objects"]}
+            body = objs["BIS A r0"]
+            assert body["route"] == "heightfield" and body["check"]["nonManifold"] == 0, body
+            assert body["location"][2] > 0.08, body          # mid-plane of a 0.16 body (a flat card's: 0.012)
+            mats = info["materials"]
+            e1 = mats["BIS Raster / e1"]
+            assert "ShaderNodeTexImage" in e1["types"] and "Base Color" in e1["linked"], e1
+            assert e1["renderMethod"] == "DITHERED" and e1["raytraceRefraction"] is True, e1
+            assert mats["BIS Raster / e2"]["renderMethod"] == "BLENDED"
+            assert _black_pixels(out) == 0
+    d, p = got["draft"], got["preview"]
+    for c in (d, p):
+        assert c[2] > c[0] + 25 and c.sum() > 250, got                   # the blue art through clear glass
+    assert abs(d.sum() - p.sum()) < 0.25 * p.sum(), got
+
+
+@needs_blender
 def test_flat_raster_glass_draft_is_smooth(worker, outdir):
     """iMessage's bubble (an opaque raster, a flat image card) in a 256 px draft: its high-pass grain inside the bubble
     stays at the Cycles preview's level — blended, it was a blotchy pattern from the plate probe (1.5 vs 0.5)."""
@@ -469,8 +502,9 @@ def test_flat_raster_glass_draft_is_smooth(worker, outdir):
 def test_glass_plate_probe_sees_the_wallpaper(worker, outdir, appearance):
     """Round-8 review: in the clear (and tinted-light) renditions the plate is frosted glass over the wallpaper; the
     plate probe captured the glass plate itself and EEVEE drafts showed a flat grey plate ((109,109,109) where Cycles
-    shows the lavender wallpaper (212,221,248); clear-dark (92,92,92) vs navy (63,73,112)). A glass plate is hidden from
-    the probe, which then sees the wallpaper beneath it."""
+    shows the lavender wallpaper (212,221,248); clear-dark (92,92,92) vs navy (63,73,112)). The plate's probe never sees
+    a glass plate: over a light wallpaper the plate is hidden from it; over a dark one (round 9) it sits inside the plate
+    and clips past the plate's faces, while the glyph probe above captures the plate for the glyphs (scene._probe)."""
     lay = T.layer("A", preset="liquid_glass", bevel=0.08, thickness=0.16)
     scn = T.scene([lay], {"A": T.geo([("e", [T.circle(0.3)], "#ffffff", 1.0)])}, color_mode="brand")
     got = {}
@@ -479,11 +513,54 @@ def test_glass_plate_probe_sees_the_wallpaper(worker, outdir, appearance):
         render(worker, scn, out, quality=q, appearance=appearance)
         got[q] = rgb_at(out, -0.7, 0.55)
         if q == "draft":
-            objs = {o["name"]: o for o in worker.result("scene_info")["objects"]}
-            assert objs["BIS Plate"]["hideProbeSphere"] is True
+            info = worker.result("scene_info")
+            objs = {o["name"]: o for o in info["objects"]}
+            probes = info["probes"]
+            assert info["materials"]["BIS Plate"]["raytraceRefraction"] is False      # drawn in EEVEE's opaque layer
+            if appearance == "clear-light":
+                assert objs["BIS Plate"]["hideProbeSphere"] is True and "BIS Glyph Probe" not in probes
+                assert objs["BIS A r0"]["hideProbeSphere"] is True
+                assert info["eevee"]["traceMaxRoughness"] == pytest.approx(0.3)       # frosted glyphs trace the plate
+            else:
+                assert objs["BIS Plate"]["hideProbeSphere"] is False and objs["BIS A r0"]["hideProbeSphere"] is False
+                pp, gp = probes["BIS Probe"], probes["BIS Glyph Probe"]
+                assert -0.3 < pp["location"][2] < 0.0 and pp["clipStart"] > -pp["location"][2] + 0.2, pp   # mid-plate
+                assert gp["influence"] == "BOX" and gp["location"][2] - gp["scale"][2] == pytest.approx(0.03, abs=1e-4)
+                assert gp["location"][2] + gp["scale"][2] > objs["BIS A r0"]["location"][2] + 0.08, gp   # holds it
+                assert info["eevee"]["traceMaxRoughness"] == pytest.approx(0.2)
     d, p = got["draft"], got["preview"]
     assert d[2] > d[0] + 8 and p[2] > p[0] + 8, (d.round(), p.round())   # the wallpaper's blue, not a neutral grey
     assert abs(d.sum() - p.sum()) < 0.4 * p.sum(), (d.round(), p.round())   # before: 0.52 (clear-light)
+
+
+def _lstar(rgb) -> float:
+    c = np.asarray(rgb, dtype=float) / 255.0
+    lin = np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+    y = float(lin @ np.array([0.2126, 0.7152, 0.0722]))
+    return 116.0 * (y ** (1 / 3) if y > 0.008856 else 7.787 * y + 16 / 116) - 16.0
+
+
+@needs_blender
+@pytest.mark.parametrize("appearance", ["clear-dark", "clear-light", "tinted-light"])
+def test_clear_glyph_drafts_see_the_frosted_plate(worker, outdir, appearance):
+    """QA r10 N7: clear-dark drafts rendered glass glyphs near-black — they refracted the dark wallpaper straight through
+    the frosted plate (Gemini (32,35,46) vs Cycles' (70,71,79), Photos (34,38,54) vs (82,84,93)); clear-light / tinted-light
+    drafts read 7–9 L* dark overall. A domed clear glass glyph on the frosted plate: the draft keeps Cycles' glyph-to-plate
+    contrast and stays within a few L* of the Cycles preview (HEAD clear-dark: the glyph 16 L* darker than Cycles' and
+    darker than its plate, where Cycles' is brighter)."""
+    lay = T.layer("A", preset="liquid_glass", bevel=0.08, thickness=0.16)
+    lay["depth"]["inflate"] = 0.25
+    scn = T.scene([lay], {"A": T.geo([("e", [T.circle(0.35)], "#ffffff", 1.0)], safe=0.35)}, color_mode="brand")
+    got = {}
+    for q in ("draft", "preview"):
+        out = outdir / f"clear_glyph_{appearance}_{q}.png"
+        render(worker, scn, out, quality=q, appearance=appearance)
+        got[q] = (_lstar(rgb_at(out, 0.0, 0.0, r=6)), _lstar(rgb_at(out, -0.72, 0.0, r=4)))
+    (gd, pd), (gp, pp) = got["draft"], got["preview"]
+    assert (gd - pd) > (gp - pp) - 6.0, got          # the glyph shows the plate, not a dark hole in it
+    tol = 8.0 if appearance == "clear-dark" else 4.0        # EEVEE's frosted glass has no multiple scattering
+    assert gd > gp - tol, got
+    assert abs(pd - pp) < (10.0 if appearance == "clear-dark" else 4.0), got    # HEAD clear-light plate: 7 L* dark
 
 
 @needs_blender

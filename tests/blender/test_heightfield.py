@@ -425,6 +425,161 @@ def test_touching_pieces_inset_and_overlapping_pieces_stack():
     assert s.tolist() == pytest.approx([0.0, 0.0, 0.102])
 
 
+def _self_crossings(rings) -> int:
+    """Pairs of non-adjacent segments of the rings that properly cross (a valid outline has none)."""
+    a, b, _ = H._segments(rings)
+
+    def orient(p, q, r):
+        return (q[..., 0] - p[..., 0]) * (r[..., 1] - p[..., 1]) - (q[..., 1] - p[..., 1]) * (r[..., 0] - p[..., 0])
+    A0, A1, B0, B1 = a[:, None], b[:, None], a[None], b[None]
+    x = (orient(A0, A1, B0) * orient(A0, A1, B1) < 0) & (orient(B0, B1, A0) * orient(B0, B1, A1) < 0)
+    return int(np.triu(x, 2).sum())
+
+
+def _clearance(ra, rb):
+    """(min distance of A's vertices to B's outline, min distance of B's vertices to A's outline, A vertices inside B,
+    B vertices inside A)."""
+    sa, sb = H._segments(ra), H._segments(rb)
+    PA, PB = np.vstack(ra), np.vstack(rb)
+    return (float(H.nearest(PA, sb[0], sb[1])[0].min()), float(H.nearest(PB, sa[0], sa[1])[0].min()),
+            int(H._inside(PA, rb).sum()), int(H._inside(PB, ra).sum()))
+
+
+@pytest.mark.parametrize("tip", [(0.0, 0.01), (0.0005, 0.013), (-0.0008, 0.021), (0.0, 0.0)])
+def test_inset_clears_the_other_pieces_corners(tip):
+    """Round 9 (Calendar merged: the page's digit holes vs the digits, 79 intersecting face pairs): a corner of B that
+    touches A BETWEEN two of A's outline samples. Pulling back only A's vertices left that corner on (or inside) A's
+    outline; the contact stretch now follows B's outline offset by the gap — B's corner rounded off at radius gap."""
+    gap = 0.003
+    a = H.piece_rings([G.rect_spline(-0.4, -0.2, 0.0, 0.2)])
+    b = H.piece_rings([_poly([tip, (0.3, -0.2), (0.3, 0.2)])])
+    assert H.rings_relation(a, b, 3 * H.CHORD_TOL) == 1
+    ai = H.inset_rings(a, b, gap)
+    da, db, a_in_b, b_in_a = _clearance(ai, b)
+    assert a_in_b == 0 and b_in_a == 0
+    assert da >= gap * (1 - 1e-4) and db >= 0.85 * gap, (da / gap, db / gap)     # HEAD: db 0.07–0.54 gap, or inside
+    assert len(ai[0]) < len(a[0]) + 12                                            # thinned back: a few arc points
+    assert np.vstack(ai)[:, 0].min() == pytest.approx(-0.4)                      # the rest of A unchanged
+    assert _self_crossings(ai) == 0
+
+
+def test_inset_at_corners_both_outlines_share():
+    """Two pieces of equal height side by side (the shared edge ends at corners of BOTH): the corner points have no
+    direction away from B of their own — moved along B's vertex normal they poked out of A as a crossed spike and the
+    body failed to build (an element-material split of a merged layer lost a piece)."""
+    a = H.piece_rings([G.rect_spline(-0.5, -0.3, 0.0, 0.3)])
+    b = H.piece_rings([G.rect_spline(0.0, -0.3, 0.5, 0.3)])
+    ai = H.inset_rings(a, b, 0.003)
+    r = np.vstack(ai)
+    assert r[:, 0].max() == pytest.approx(-0.003) and r[:, 1].min() == pytest.approx(-0.3)
+    assert r[:, 1].max() == pytest.approx(0.3) and _self_crossings(ai) == 0
+    assert _ring_area(ai[0]) == pytest.approx(0.497 * 0.6, rel=1e-6)
+
+
+def test_inset_of_a_finer_and_a_coarser_outline_of_one_curve():
+    """A disc in a hole of (nearly) the same circle, flattened with different sample counts (the outlines interleave
+    within the touch tolerance): every vertex and every chord of A ends up at least ~gap inside the hole."""
+    gap = 0.003
+
+    def ngon(n, r, ph):
+        return _poly([(r * math.cos(ph + 2 * math.pi * k / n), r * math.sin(ph + 2 * math.pi * k / n)) for k in range(n)])
+
+    disc = H.piece_rings([ngon(36, 0.3, 0.0)])
+    page = H.piece_rings([G.rect_spline(-0.6, -0.6, 0.6, 0.6), ngon(52, 0.3, 0.05)])
+    assert H.rings_relation(disc, page, 3 * H.CHORD_TOL) == 1
+    di = H.inset_rings(disc, page, gap)
+    da, db, a_in_b, b_in_a = _clearance(di, page)
+    assert a_in_b == 0 and b_in_a == 0 and da >= gap * (1 - 1e-4) and db >= 0.85 * gap, (da / gap, db / gap)
+    assert H.rings_relation(di, page, 3 * H.CHORD_TOL) == 0 and _self_crossings(di) == 0
+
+
+def _subdivided(corners, step, jitter, rng, closed=True):
+    """Corners joined by straight runs sampled every ~step (interior samples jittered): one outline, flattened
+    differently for each piece that shares it."""
+    out = []
+    n = len(corners) if closed else len(corners) - 1
+    for i in range(n):
+        a, b = np.asarray(corners[i], float), np.asarray(corners[(i + 1) % len(corners)], float)
+        k = max(1, int(np.ceil(np.linalg.norm(b - a) / step)))
+        out += [tuple(a + (b - a) * t / k + (rng.normal(0.0, jitter, 2) if t else 0.0)) for t in range(k)]
+    if not closed:
+        out.append(tuple(map(float, corners[-1])))
+    return out
+
+
+@pytest.mark.parametrize("half_angle", [12.0, 30.0, 60.0])
+def test_inset_cuts_off_the_swallowtail_at_the_other_pieces_concave_corner(half_angle):
+    """Review r9: A's tip filling B's V-notch (B's CONCAVE corner). The samples moved onto B's offset from both walls
+    overshoot each other past the offset corner — the outline crossed itself (a swallowtail: 83 of the corpus' 205 inset
+    pieces with every layer split, and up to 22,000 points from the refinement in a sharp notch). The loop is cut off
+    at the crossing: a simple ring, ≥ gap from B everywhere, bounded size."""
+    gap, rng = 0.003, np.random.default_rng(3)
+    h = 0.3 * math.tan(math.radians(half_angle))
+    wall = [(0.0, -h), (0.3, 0.0), (0.0, h)]
+    a = H.piece_rings([_poly([(-0.4, h), (-0.4, -h)] + _subdivided(wall, 0.011, 0.0, rng, closed=False)[:-1]
+                             + [(0.0, h)])])
+    b = H.piece_rings([_poly([(0.0, h), (0.6, h), (0.6, -h), (0.0, -h)] + _subdivided(wall, 0.017, 0.0, rng,
+                                                                                         closed=False)[1:-1])])
+    assert H.rings_relation(a, b, 3 * H.CHORD_TOL) == 1
+    ai = H.inset_rings(a, b, gap)
+    assert _self_crossings(ai) == 0
+    da, db, a_in_b, b_in_a = _clearance(ai, b)
+    assert a_in_b == 0 and b_in_a == 0 and da >= 0.97 * gap and db >= 0.85 * gap, (da / gap, db / gap)
+    tip = np.vstack(ai)[:, 0].max()                    # the true offset corner: gap / sin(half angle) behind B's corner
+    assert tip == pytest.approx(0.3 - gap / math.sin(math.radians(half_angle)), abs=0.15 * gap)
+    assert sum(len(r) for r in ai) < 2 * sum(len(r) for r in a) + 40
+
+
+def test_inset_of_randomly_cut_pieces_stays_simple_and_clear():
+    """Review r9 fuzz: a square cut in two along a random zigzag / wave, each side flattened with its own spacing and
+    jitter (the shared edge then interleaves within the touch tolerance), either side inset from the other: every
+    result is a simple ring that keeps at least ~gap from the other piece — chords included."""
+    gap, rng = 0.003, np.random.default_rng(11)
+    tested = 0
+    for it in range(24):
+        m = int(rng.integers(3, 20))
+        ys = np.linspace(-0.5, 0.5, m)
+        amp = float(rng.choice([0.01, 0.05, 0.15]))
+        xs = rng.uniform(-amp, amp, m) if it % 2 else amp * np.sin(ys * rng.uniform(3.0, 20.0))
+        xs[0] = xs[-1] = 0.0
+        cut = list(zip(xs, ys))
+        jit = float(rng.choice([0.0, 1e-4, 4e-4]))
+        left = _subdivided(cut, rng.uniform(0.005, 0.05), jit, rng, closed=False)
+        right = _subdivided(cut, rng.uniform(0.005, 0.05), jit, rng, closed=False)
+        a = H.piece_rings([_poly([(-0.5, 0.5), (-0.5, -0.5)] + left)])
+        b = H.piece_rings([_poly([(0.5, -0.5), (0.5, 0.5)] + right[::-1])])
+        if it % 3 == 0:
+            a, b = b, a
+        if H.rings_relation(a, b, 3 * H.CHORD_TOL) != 1:
+            continue
+        tested += 1
+        ai = H.inset_rings(a, b, gap)
+        assert _self_crossings(ai) == 0, it
+        q = np.vstack([r + (np.roll(r, -1, axis=0) - r) * t for r in ai for t in np.linspace(0.0, 1.0, 9)[:-1]])
+        sb = H._segments(b)
+        assert not H._inside(q, b).any() and not H._inside(np.vstack(b), ai).any(), it
+        assert H.nearest(q, sb[0], sb[1])[0].min() >= 0.5 * gap, it
+        assert abs(_ring_area(ai[0]) - _ring_area(a[0])) < 0.02 * abs(_ring_area(a[0])), it
+    assert tested >= 20
+
+
+def test_inset_drops_slivers_along_the_other_piece():
+    """An outer ring of A that lies wholly within gap of B (≤ 2·gap wide) has nothing left once pulled back. Kept as it
+    was it cut into B (Files_1 / DJI / Translate with every piece split: 73–159 intersecting face pairs); left to the
+    old vertex moves it became a degenerate outline. It is dropped: an island of a piece with other outline left goes,
+    a piece that is only that sliver comes back empty (scene._layer skips it)."""
+    gap = 0.003
+    b = H.piece_rings([G.rect_spline(0.0, -0.3, 0.4, 0.3)])
+    main = G.rect_spline(-0.4, -0.3, 0.0, 0.3)
+    sliver = G.rect_spline(0.05, 0.3, 0.2, 0.302)            # 0.002 thin, lying on B's top edge
+    a = H.piece_rings([main, sliver])
+    assert len(a) == 2 and H.rings_relation(a, b, 3 * H.CHORD_TOL) == 1
+    ai = H.inset_rings(a, b, gap)
+    assert len(ai) == 1 and np.vstack(ai)[:, 1].max() == pytest.approx(0.3)
+    assert np.vstack(ai)[:, 0].max() == pytest.approx(-gap)
+    assert H.inset_rings(H.piece_rings([sliver]), b, gap) == []
+
+
 def test_coincident_outlines_overlap_not_touch():
     """A translucent overlay with (nearly) the base's own outline has every vertex within tol of the other outline:
     it OVERLAPS (stacks), it does not TOUCH — pulled back as a 'touch', the base grew outward around the overlay

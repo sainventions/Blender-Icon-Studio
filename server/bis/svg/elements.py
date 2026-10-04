@@ -21,6 +21,7 @@ from bis.models import (DropShadow, Element, FillLinear, FillRadial, FillSolid, 
 from .colors import color_name
 from .common import PIPELINE_VERSION, ArtSpace, atomic_write_text, compose, is_similarity, rnd, sha1
 from .paths import skia_from_d, shapely_from_path
+from .raster import SOFT_ALPHA, file_alpha_softness
 from picosvg.svg_transform import Affine2D
 
 STORE_FILE = "elements.json"
@@ -41,7 +42,8 @@ class Elem:
     area: float = 0.0                    # SVG units²
     name: str = ""
     shadow: Optional[dict] = None        # SVG root units: {dx, dy, blur, opacity, color}
-    image: Optional[dict] = None         # raster: {file, mime, width, height, matrix, clipD, opaque, meanAlpha}
+    image: Optional[dict] = None         # raster: {file, mime, width, height, matrix, clipD, opaque, meanAlpha,
+    #                                      alphaSoftness (raster.alpha_softness; round 9: soft → card, crisp → body)}
     synthetic: Optional[str] = None      # 'image-background' for a plate matted out of a raster
     _path: Any = field(default=None, repr=False, compare=False)
     _geom: Any = field(default=None, repr=False, compare=False)
@@ -208,7 +210,21 @@ def to_model(e: Elem, art: ArtSpace) -> Element:
         shadow=model_shadow(e.shadow, art),
         wasStroke=e.role == "stroke",
         role=e.role,  # type: ignore[arg-type]
+        softAlpha=soft_alpha(e) if e.image else None,
     )
+
+
+def soft_alpha(e: Elem) -> bool:
+    """Round 9 (PLAN §11): a raster with SOFT alpha (a glow / shine / shadow - the worker's ``art_alpha_is_soft``,
+    ``image.alphaSoftness`` ≥ :data:`bis.svg.raster.SOFT_ALPHA`) is a flat card; a crisp one is a real body. Vector
+    elements → False. Unknown softness (an unreadable image) → False (crisp), like the worker."""
+    if not e.image:
+        return False
+    s = e.image.get("alphaSoftness")
+    try:
+        return s is not None and float(s) >= SOFT_ALPHA
+    except (TypeError, ValueError):
+        return False
 
 
 def element_name(e: Elem, auto_name) -> str:
@@ -354,8 +370,24 @@ class ElementStore:
         if not path.exists():
             raise FileNotFoundError(f"{path} not found - import the SVG first")
         store = cls.from_json(json.loads(path.read_text(encoding="utf-8")))
+        backfill_alpha_softness(store, Path(project_dir))
         _CACHE.put(path, store)
         return store
+
+
+def backfill_alpha_softness(store: ElementStore, project_dir: Path) -> int:
+    """Stores written before round 9 have no ``image.alphaSoftness``: measure it from the stored image file (what
+    the worker reads, :func:`bis.svg.raster.alpha_softness`). An unreadable file stays unknown (treated as crisp,
+    like the worker, which cannot load it either). In memory; it is written with the store's next save. Returns
+    how many rasters were measured."""
+    n = 0
+    for e in store.elems:
+        if e.image and "alphaSoftness" not in e.image:
+            f = e.image.get("file")
+            e.image["alphaSoftness"] = file_alpha_softness(Path(project_dir) / f) if f else None
+            e._hash = None
+            n += 1
+    return n
 
 
 class _StoreCache:

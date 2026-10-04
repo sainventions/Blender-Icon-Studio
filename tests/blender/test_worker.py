@@ -610,6 +610,8 @@ def test_raster_region_perspective_framing(worker, outdir):
         index = make_fixtures.make(["Find Device"], HERE / "_fixtures")
     e = index["Find Device"]
     proj = json.loads(Path(e["project"]).read_text(encoding="utf-8"))
+    for L in proj["layers"]:            # the raster region under test (round 9 imports this shine hidden)
+        L["visible"] = True
     out = outdir / "framing_find_device.png"
     worker.result("render", {"project": proj, "geometryPath": e["geometryPath"], "quality": "draft", "size": PX,
                              "out": str(out), "camera": {"view": "perspective", "tiltX": 20, "tiltY": -25, "fov": 30}})

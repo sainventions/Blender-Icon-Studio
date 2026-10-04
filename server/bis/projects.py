@@ -160,7 +160,23 @@ class ProjectStore:
         # PLAN §11: legacy material params / shadow kinds / explode come back on the Principled contract. The
         # cleaned copy is what everyone (UI, renders, styles) sees; the file follows on the next save.
         normalize_project(project, self.presets)
+        self._fill_soft_alpha(project)
         return project
+
+    def _fill_soft_alpha(self, project: Project) -> None:
+        """Rasters of a project imported before round 9 have no ``Element.softAlpha``: fill it in from the SVG
+        pipeline's element store (soft → flat card under looks, crisp → body; PLAN §11 round 9). In memory - the
+        file follows on the next save. Only runs when such a raster exists; a missing pipeline leaves it None."""
+        if not any(e.kind == "image" and e.softAlpha is None for e in project.elements):
+            return
+        try:
+            soft = self.svg.element_soft_alpha(self.dir(project.id), project)
+        except Exception as e:  # noqa: BLE001 - a classification must never break a load
+            log.warning("raster alpha of %s unavailable: %s", project.id, e)
+            return
+        for el in project.elements:
+            if el.kind == "image" and el.softAlpha is None and soft and el.id in soft:
+                el.softAlpha = soft[el.id]
 
     def _repair_layer_modes(self, project: Project, layer_ids: set[str]) -> None:
         """Layers saved with ``mode: null`` (a look applied by the round-4 server, whose looks had no mode yet)

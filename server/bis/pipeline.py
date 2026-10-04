@@ -93,6 +93,14 @@ class SvgPipeline:
             return None
         return dict(fn(project_dir, project, mode))
 
+    def element_soft_alpha(self, project_dir: Path, project: Project) -> dict[str, bool] | None:
+        """{raster element id: soft alpha?} (``Element.softAlpha``, PLAN §11 round 9) from A's element store; None
+        when the pipeline has no such op (tests' fake pipeline)."""
+        fn = getattr(self.module, "element_soft_alpha", None)
+        if fn is None:
+            return None
+        return {str(k): bool(v) for k, v in fn(project_dir, project).items()}
+
     def build_geometry(self, project_dir: Path, project: Project, url_prefix: str) -> GeometryBundle:
         bundle = self.module.build_geometry(project_dir, project, url_prefix)
         return bundle if isinstance(bundle, GeometryBundle) else GeometryBundle.model_validate(_plain(bundle))

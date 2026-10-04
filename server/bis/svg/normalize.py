@@ -169,7 +169,7 @@ def _attach_image(elem: Elem, ref, placed: pathops.Path, pre: Prepass, tol: floa
     """Image placeholder -> raster element. `placed` = visible image area (transform, clip and
     viewBox applied by picosvg / us). Geometry = alpha silhouette ∩ placed area."""
     try:
-        info, _rgba = raster.analyse_image(ref.data, ref.matrix)
+        info, rgba = raster.analyse_image(ref.data, ref.matrix)
     except Exception as ex:  # noqa: BLE001
         pre.warnings.append(f"embedded image could not be decoded ({ex}) - dropped")
         return False
@@ -184,6 +184,9 @@ def _attach_image(elem: Elem, ref, placed: pathops.Path, pre: Prepass, tol: floa
         "uid": ref.uid, "mime": ref.mime, "width": ref.width, "height": ref.height,
         "matrix": [round(v, 9) for v in ref.matrix], "clipD": clean_d(placed, 4),
         "opaque": info.opaque, "meanAlpha": round(info.mean_alpha, 4), "alphaThreshold": info.threshold,
+        # round 9: soft alpha (glow / shine / shadow) → flat card; crisp silhouette → a real body. Measured over the
+        # WHOLE stored image like the worker's art_alpha_is_soft (unrounded: the 0.25 threshold must agree)
+        "alphaSoftness": raster.data_alpha_softness(ref.data, rgba),
         "file": None,  # filled in when the store is written (images/<id>.png)
     }
     elem._image_data = ref.data  # type: ignore[attr-defined]

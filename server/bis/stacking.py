@@ -28,8 +28,9 @@ z(i+1) = z(i) + H(i) + gap - never lower than the overlap-aware one.
 Used by the SVG pipeline's import defaults and structural edits (``bis.svg.layers`` / ``bis.svg.ops``, footprints from
 the element store: :func:`bis.svg.geometry.layer_shape`), by looks / pasted / copied styles (``bis.style.apply_style``)
 and so by the Icon Pack batch (footprints from the pipeline or from a geometry bundle: :func:`shape_from_geometry`).
-The bevel (round-edge radius) is clamped to thickness / 2 only - height-field bodies taper thin parts. Raster image
-layers are flat cards (:data:`IMAGE_CARD`): no dome, thin, a small round edge.
+The bevel (round-edge radius) is clamped to thickness / 2 only - height-field bodies taper thin parts. Layers of
+soft-alpha rasters are flat cards (:data:`IMAGE_CARD`, :func:`is_card_layer`): no dome, thin, a small round edge;
+crisp rasters are bodies (round 9).
 
 No pydantic import: works on ``bis.models.Layer`` objects or anything with the same attributes. numpy / shapely are
 imported where footprints are handled.
@@ -69,8 +70,8 @@ FLATTEN_TOL = 5e-4
 #: GEOS tolerance of a piece's max inscribed radius (art units; bis.svg.geometry.MAX_RADIUS_TOL)
 PIECE_RADIUS_TOL = 5e-4
 
-#: Raster image layers (every element kind 'image') are flat cards (PLAN §11 round 8): no dome, thin, a small
-#: round edge - at import and under every look / style.
+#: Layers of SOFT-alpha rasters only (glows, shines, shadows - round 9; round 8: every raster) are flat cards (PLAN
+#: §11): no dome, thin, a small round edge - at import and under every look / style. Crisp rasters are bodies.
 IMAGE_CARD: dict[str, float] = {"thickness": 0.02, "bevel": 0.006, "inflate": 0.0}
 
 _FILE_LOCK = threading.Lock()
@@ -485,9 +486,29 @@ def bbox_radius(boxes: Sequence[Sequence[float]]) -> float:
 
 # ---------------------------------------------------------------------------------------------- image cards
 def is_image_layer(layer: Any, kinds: Mapping[str, str]) -> bool:
-    """True when every element of the layer is a raster image (`kinds`: element id → Element.kind)."""
+    """True when every element of the layer is a raster image (`kinds`: element id → Element.kind) - crisp or soft
+    (round 9 cards: :func:`is_card_layer`)."""
     ids = list(getattr(layer, "elementIds", None) or [])
     return bool(ids) and all(kinds.get(i) == "image" for i in ids)
+
+
+def card_elements(elements: Iterable[Any]) -> set[str]:
+    """Ids of the elements that make a flat card (PLAN §11 round 9): rasters with SOFT alpha (``Element.softAlpha``
+    True - glows, shines, shadows). A raster not measured yet (softAlpha None: a project imported before round 9)
+    counts as a card, as it was imported; a crisp raster (False) is a body like vector art."""
+    out = set()
+    for e in elements or ():
+        get = (lambda k, d=None: e.get(k, d)) if isinstance(e, Mapping) else (lambda k, d=None: getattr(e, k, d))
+        if get("kind") == "image" and get("softAlpha") is not False:
+            out.add(str(get("id")))
+    return out
+
+
+def is_card_layer(layer: Any, cards: Iterable[str]) -> bool:
+    """True when every element of the layer is a card element (:func:`card_elements`): the layer is a flat card."""
+    ids = list(getattr(layer, "elementIds", None) or [])
+    cs = cards if isinstance(cards, (set, frozenset)) else set(cards)
+    return bool(ids) and all(i in cs for i in ids)
 
 
 def card_depth(depth: Any) -> Any:

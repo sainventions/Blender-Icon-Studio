@@ -292,3 +292,24 @@ def test_image_cards():
     assert (d.thickness, d.bevel, d.inflate) == (0.02, 0.006, 0.0)
     d = stacking.card_depth(LayerDepth(thickness=0.01, bevel=0.08, inflate=1.0))
     assert (d.thickness, d.bevel, d.inflate) == (0.01, 0.005, 0.0)
+
+
+def test_card_elements_are_soft_rasters():
+    """Round 9: only SOFT-alpha rasters make a flat card (Element.softAlpha True; None = imported before round 9 - a
+    card, as it was imported); a crisp raster (False) is a body like vector art. Models and plain dicts alike."""
+    from bis.models import Element, FillSolid
+
+    els = [Element(id="e0", name="e0", paint=FillSolid(), bbox=(-1, -1, 1, 1), area=1.0),
+           Element(id="img0", name="i0", kind="image", role="image", paint=FillSolid(), bbox=(-1, -1, 1, 1), area=1.0,
+                   softAlpha=True),
+           Element(id="img1", name="i1", kind="image", role="image", paint=FillSolid(), bbox=(-1, -1, 1, 1), area=1.0,
+                   softAlpha=False),
+           Element(id="img2", name="i2", kind="image", role="image", paint=FillSolid(), bbox=(-1, -1, 1, 1), area=1.0)]
+    cards = stacking.card_elements(els)
+    assert cards == {"img0", "img2"}
+    assert stacking.card_elements([e.model_dump(mode="json") for e in els]) == cards
+    L = _layers({"thickness": 0.16})[0]
+    for ids, want in ((["img0"], True), (["img0", "img2"], True), (["img1"], False), (["img0", "img1"], False),
+                      (["img0", "e0"], False), ([], False)):
+        L.elementIds = ids
+        assert stacking.is_card_layer(L, cards) is want, ids

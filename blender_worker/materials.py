@@ -213,7 +213,9 @@ def _settings(mat: bpy.types.Material, spec: dict) -> None:
         # only the front-most surface of a blended body: with overlap its back faces (the underside) were drawn over
         # the front in object order — blotchy raster glass (iMessage's bubble) without its key highlight
         _set_if(mat, "use_transparency_overlap", False)
-    _set_if(mat, "use_raytrace_refraction", transmissive and not blended)
+    # spec 'raytrace' False (the plate, scene.SceneBuilder._plate): refraction from the light probes only — the surface
+    # stays in EEVEE's opaque layer, which the raytraced glass above it traces against
+    _set_if(mat, "use_raytrace_refraction", transmissive and not blended and bool(spec.get("raytrace", True)))
     _set_if(mat, "thickness_mode", "SPHERE" if transmissive else "SLAB")
     _set_if(mat, "use_transparent_shadow", True)
     _set_if(mat, "use_backface_culling", False)
@@ -449,10 +451,11 @@ def resolve(layer_material: Optional[dict], element_material: Optional[dict] = N
 def make_spec(preset: str, params: Optional[dict], paint: dict, **kw) -> dict:
     """Material spec: ``params`` are merged over the preset's defaults (presets.json). Keys: preset, params, paint
     (kind texture|solid|linear|radial + data), opacity (piece opacity, multiplies Alpha), mono (tinted appearances:
-    {lo, hi, floor, tint}), thickness (EEVEE refraction), preview_color, shape (owner tag)."""
+    {lo, hi, floor, tint}), thickness (EEVEE refraction), raytrace (EEVEE raytraced refraction where transmissive;
+    False = light probes only), preview_color, shape (owner tag)."""
     if preset not in P.material_ids():
         preset = "liquid_glass"
     spec = {"preset": preset, "params": P.material_params(preset, params), "paint": paint, "opacity": 1.0,
-            "mono": None, "thickness": 0.1, "preview_color": (0.8, 0.8, 0.8), "shape": None}
+            "mono": None, "thickness": 0.1, "raytrace": True, "preview_color": (0.8, 0.8, 0.8), "shape": None}
     spec.update(kw)
     return spec

@@ -291,6 +291,30 @@ def test_looks_keep_raster_layers_flat_cards():
     assert extract_style(q).layerDefaults.depth.inflate == 0.3                    # not the card's 0
 
 
+def test_looks_give_crisp_raster_layers_a_body():
+    """Round 9: only SOFT-alpha rasters (Element.softAlpha True; None = imported before round 9, as imported) stay
+    flat cards under a look; a CRISP raster (softAlpha False) is a body that takes the look's depth like vector art,
+    and Copy style may take its depth from it."""
+    for soft, card in ((True, True), (None, True), (False, False)):
+        p = _img_project()
+        p.elements[2].softAlpha = soft
+        assert stacking.is_card_layer(p.layers[2], stacking.card_elements(p.elements)) is card
+        for look in ("clay", "liquid-glass", "neon"):
+            st = resolve_look(PRESETS, look)
+            out = apply_style(p, st, {"l0": 0.5, "l1": 0.2, "l2": 0.5}, presets=PRESETS)
+            d, want = out.layers[2].depth, st.layerDefaults.depth
+            if card:
+                assert (d.thickness, d.inflate) == (min(want.thickness, 0.02), 0.0), (soft, look)
+            else:
+                assert (d.thickness, d.bevel, d.inflate) == (want.thickness, want.bevel, want.inflate), (soft, look)
+    for soft, want in ((False, 0.4), (True, 0.1)):     # the top-most body gives Copy style its depth
+        q = _img_project()
+        q.elements[2].softAlpha = soft
+        for L, k in zip(q.layers, (0.1, 0.1, 0.4)):
+            L.depth.inflate = k
+        assert extract_style(q).layerDefaults.depth.inflate == want, soft
+
+
 def test_apply_style_stacks_overlap_aware():
     """Round 8: with footprints (bis.stacking.LayerShape) a look stacks a layer only above the lower layers it
     overlaps; Copy style's zGap is the clearance of the stacked layers (None when nothing sits on anything)."""
@@ -592,9 +616,9 @@ def test_every_look_stacks_without_interpenetration(client, sample):
         geo = c.get(f"/api/projects/{src['id']}/geometry").json()
         _assert_real_stack(p, geo, PRESETS["looks"][look]["style"].get("zGap", StyleSpec().zGap))
         depth = PRESETS["looks"][look]["style"]["layerDefaults"]["depth"]
-        kinds = {e["id"]: e["kind"] for e in p["elements"]}
+        cards = stacking.card_elements(p["elements"])
         for l in p["layers"]:
-            if all(kinds.get(i) == "image" for i in l["elementIds"]):    # round 8: rasters stay flat cards
+            if all(i in cards for i in l["elementIds"]):    # rounds 8 + 9: soft-alpha rasters stay flat cards
                 assert l["depth"]["inflate"] == 0.0 and l["depth"]["thickness"] <= 0.02, look
             else:
                 assert l["depth"]["bevel"] == pytest.approx(min(depth["bevel"], depth["thickness"] / 2), abs=1e-5)

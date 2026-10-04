@@ -14,7 +14,7 @@
 
 Public API (PLAN.md §4 A): :func:`import_svg`, :func:`split_layers`, :func:`merge_layers`,
 :func:`split_layer`, :func:`move_elements`, :func:`build_geometry`, :func:`geometry_path`,
-:func:`thumbnail_png`, :func:`layer_thumbnail_png` (+ :func:`layer_auto_modes`, :func:`layer_shapes`). Invalid edits raise ``ValueError``
+:func:`thumbnail_png`, :func:`layer_thumbnail_png` (+ :func:`layer_auto_modes`, :func:`layer_shapes`, :func:`element_soft_alpha`). Invalid edits raise ``ValueError``
 (:class:`ZOrderError` for stacking-order violations)."""
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ from typing import Dict, List, Literal, Optional
 
 from bis.models import Canvas, Element, GeometryBundle, Layer, Project, SourceInfo, SplitStrategy
 from .common import PIPELINE_VERSION, ArtSpace, atomic_write_bytes, atomic_write_text, dedupe, sha1
-from .elements import ElementStore, Elem, element_name, to_model
+from .elements import ElementStore, Elem, element_name, soft_alpha, to_model
 from .geometry import TEXTURE_SIZE, build_bundle, geometry_file
 from .layers import members_for
 from .normalize import extract_elements, matte_opaque_image_plate, normalize
@@ -42,7 +42,8 @@ from . import raster, textures
 
 __all__ = [
     "ImportResult", "ZOrderError", "import_svg", "split_layers", "merge_layers", "split_layer",
-    "move_elements", "layer_auto_modes", "layer_shapes", "build_geometry", "geometry_path", "thumbnail_png",
+    "move_elements", "layer_auto_modes", "layer_shapes", "element_soft_alpha", "build_geometry", "geometry_path",
+    "thumbnail_png",
     "layer_thumbnail_png", "read_store", "PIPELINE_VERSION",
 ]
 
@@ -160,7 +161,9 @@ def import_svg(svg_bytes: bytes, filename: str, project_dir: Path, strategy: Spl
                       textures.layer_svg(elems, ex.gradients, vb, project_dir))
 
     canvas = make_canvas(plate, {e.id: e for e in elems}, art)
-    layers, _info = fresh_layers(store, strategy, art_scale=canvas.art.scale)
+    layers, info = fresh_layers(store, strategy, art_scale=canvas.art.scale)
+    # round 9: baked shines hidden (bis.svg.layers.hide_baked_overlays) - one warning per layer, never counted twice
+    warnings = warnings + [w for w in info.get("warnings") or () if w not in warnings]
     if not elems:
         warnings = dedupe(warnings + ["no paintable shapes found"])
     full_bleed = bool(plate and plate.get("fullBleed"))
@@ -180,9 +183,13 @@ def read_store(project_dir: Path) -> ElementStore:
 # ----------------------------------------------------------------------------------------------
 def split_layers(project_dir: Path, project: Project, strategy: SplitStrategy) -> List[Layer]:
     """Fresh default layers for all non-plate elements of `project` with `strategy` (default depth, stacked at
-    their real heights)."""
-    layers, _info = fresh_layers(read_store(project_dir), strategy, active=[e.id for e in project.elements],
-                                 art_scale=project.canvas.art.scale)
+    their real heights; baked shines hidden like at import - their source warnings are added to
+    ``project.source.warnings`` IN PLACE, persist it too)."""
+    layers, info = fresh_layers(read_store(project_dir), strategy, active=[e.id for e in project.elements],
+                                art_scale=project.canvas.art.scale)
+    if info.get("warnings") and getattr(project, "source", None) is not None:
+        have = list(project.source.warnings)
+        project.source.warnings = have + [w for w in info["warnings"] if w not in have]
     return layers
 
 
@@ -218,6 +225,15 @@ def layer_shapes(project_dir: Path, project: Project, mode: Optional[str] = None
         for L in probe.layers:
             L.mode = mode  # type: ignore[assignment]
     return dict(_ops.layer_shapes(store, probe.layers, float(project.canvas.art.scale)))
+
+
+def element_soft_alpha(project_dir: Path, project: Project) -> Dict[str, bool]:
+    """{raster element id: soft alpha?} (``Element.softAlpha``, PLAN §11 round 9) from the element store - fills in
+    projects imported before round 9 (their store is measured from the image files on load)."""
+    store = read_store(project_dir)
+    idx = store.index
+    return {e.id: soft_alpha(store.elems[idx[e.id]]) for e in project.elements
+            if e.id in idx and store.elems[idx[e.id]].image}
 
 
 def layer_auto_modes(project_dir: Path, project: Project) -> Dict[str, str]:

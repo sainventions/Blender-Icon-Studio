@@ -149,7 +149,8 @@ def _render_one(ctx: Context, project: dict, bundle: dict, args: dict, out: str,
     cm = _color_mode(project)
     settings = R.configure(scene, quality, args.get("size") or project["render"].get("size"),
                            transparent=transparent, color_mode=cm,
-                           max_glass_roughness=info["maxGlassRoughness"], samples=args.get("samples"))
+                           max_glass_roughness=info["maxGlassRoughness"], samples=args.get("samples"),
+                           trace_max_roughness=info.get("traceMaxRoughness"))
     R.configure_compositor(scene, info["bloom"], transparent, P.soft_clip_knee(cm))
     build_s = time.perf_counter() - t0
     if progress:
@@ -250,7 +251,8 @@ def cmd_save_blend(ctx: Context, args: dict, progress) -> dict:
     scene = bpy.context.scene
     cm = _color_mode(project)
     R.configure(scene, quality, args.get("size"), transparent=info["backdrop"] == "transparent",
-                color_mode=cm, max_glass_roughness=info["maxGlassRoughness"])
+                color_mode=cm, max_glass_roughness=info["maxGlassRoughness"],
+                trace_max_roughness=info.get("traceMaxRoughness"))
     R.configure_compositor(scene, info["bloom"], info["backdrop"] == "transparent", P.soft_clip_knee(cm))
     scene.render.filepath = "//render.png"
     os.makedirs(os.path.dirname(os.path.abspath(out)) or ".", exist_ok=True)
@@ -327,8 +329,13 @@ def cmd_scene_info(ctx: Context, args: dict, progress) -> dict:
     sc = bpy.context.scene
     comp = {"useCompositing": bool(sc.render.use_compositing), "viewTransform": sc.view_settings.view_transform,
             "group": sc.compositing_node_group.name if sc.compositing_node_group else None}
+    probes = {ob.name: {"location": [round(v, 5) for v in ob.location], "scale": [round(v, 5) for v in ob.scale],
+                        "influence": ob.data.influence_type, "distance": round(float(ob.data.influence_distance), 5),
+                        "falloff": round(float(ob.data.falloff), 5), "clipStart": round(float(ob.data.clip_start), 5)}
+              for ob in bpy.data.objects if ob.name.startswith("BIS") and ob.type == "LIGHT_PROBE"}
+    eevee = {"traceMaxRoughness": round(float(sc.eevee.ray_tracing_options.trace_max_roughness), 4)}
     return {"materials": mats, "objects": objs, "curves": len(bpy.data.curves), "images": len(bpy.data.images),
-            "lights": lights, "compositor": comp,
+            "lights": lights, "compositor": comp, "probes": probes, "eevee": eevee,
             "engine": bpy.context.scene.render.engine, "info": {k: v for k, v in ctx.builder.info.items()
                                                                 if k in ("appearance", "backdrop", "stats")}}
 

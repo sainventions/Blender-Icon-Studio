@@ -12,8 +12,8 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 from bis.models import Layer, Project
 from .elements import ElementStore, Elem, element_name, to_model
 from .geometry import layer_max_radius, layer_shape
-from .layers import (clamp_bevel, dedupe_names, default_depth, is_image_only, layer_name, make_layer, members_for,
-                     next_layer_ids, restack, stack_gap)
+from .layers import (clamp_bevel, dedupe_names, default_depth, hide_baked_overlays, is_card, layer_name, make_layer,
+                     members_for, next_layer_ids, restack, stack_gap)
 from .paths import clean_d, islands, skia_from_d, bounds
 from .prepass import auto_name
 from .split import Analysis, SplitParams, components, forced_units, split, topo_order, _unit_preserving
@@ -43,9 +43,12 @@ def fresh_layers(store: ElementStore, strategy: str, params: Optional[SplitParam
                  active: Optional[Iterable[str]] = None, art_scale: float = 1.0) -> Tuple[List[Layer], dict]:
     """Default layers for all non-plate (active) elements with the given strategy. The smart split
     keeps the pieces that tile one shape together; every layer gets its default mode ('combined'
-    for tiled art, :func:`bis.svg.tiling.auto_mode`) and the default depth (raster-only layers: flat cards), and
-    the layers are stacked at their REAL heights, overlap-aware (:func:`bis.stacking.restack`, PLAN §11 round 8:
-    a layer stacks only above the lower layers it overlaps; `art_scale` = ``canvas.art.scale``)."""
+    for tiled art, :func:`bis.svg.tiling.auto_mode`) and the default depth (layers of soft-alpha rasters only: flat
+    cards; crisp rasters are bodies like vector art - PLAN §11 round 9), and the layers are stacked at their REAL
+    heights, overlap-aware (:func:`bis.stacking.restack`, PLAN §11 round 8: a layer stacks only above the lower
+    layers it overlaps; `art_scale` = ``canvas.art.scale``). Soft cards that sit on body layers below them (baked
+    shines) are hidden (:func:`bis.svg.layers.hide_baked_overlays`): ``info["warnings"]`` gets one source warning
+    per hidden layer, ``info["bakedHidden"]`` their ids."""
     fg = foreground_indices(store, active)
     tiles = []
     if strategy == "smart":   # pieces that tile one shape, edge lines drawn under a piece, covered prints
@@ -65,6 +68,8 @@ def fresh_layers(store: ElementStore, strategy: str, params: Optional[SplitParam
     info["combined"] = [L.id for L in layers if L.mode == "combined"]
     info["maxRadius"] = {lid: sh.maxRadius for lid, sh in shapes.items()}
     dedupe_names(layers)
+    info["warnings"] = hide_baked_overlays(store, layers, shapes, art_scale)
+    info["bakedHidden"] = [L.id for L in layers if not L.visible]
     return layers, info
 
 
@@ -178,15 +183,17 @@ def _stack_gap(store: ElementStore, layers: Sequence[Layer], art_scale: float,
 
 
 def _is_card(store: ElementStore, L: Optional[Layer]) -> bool:
-    """The layer holds raster images only (a round-8 flat card)."""
-    return L is not None and is_image_only(members_for(store, L.elementIds))
+    """The layer holds soft-alpha raster images only (a flat card; round 9: crisp rasters are bodies)."""
+    return L is not None and is_card(members_for(store, L.elementIds))
 
 
 def _card_rule(store: ElementStore, L: Layer, was_card: bool, donor: Optional[Layer] = None) -> None:
-    """Flat raster cards across structural edits (PLAN §11 round 8; in place, z kept): a layer that NOW holds raster
-    images only becomes a flat card; a former card that now holds vector art too gets a full body back - the
-    depth of `donor` (a non-card layer the art came from) or the import default - instead of flattening the
-    vector art into a 0.02 card. A layer that stays a card (or stays vector) is left as it is."""
+    """Flat raster cards across structural edits (PLAN §11 rounds 8 + 9; in place, z kept): a layer that NOW holds
+    soft-alpha rasters only becomes a flat card; a former card that now holds body art too (vector art or a crisp
+    raster) gets a full body back - the depth of `donor` (a non-card layer the art came from) or the import default
+    - instead of flattening that art into a 0.02 card, and it is shown again when `donor` is shown (a baked overlay
+    hidden at import must not hide the art merged into it; a card is never hidden here). A layer that stays a card
+    (or stays a body) is left as it is."""
     now_card = _is_card(store, L)
     if now_card and not was_card:
         stacking.card_depth(L.depth)
@@ -194,6 +201,8 @@ def _card_rule(store: ElementStore, L: Layer, was_card: bool, donor: Optional[La
         z = L.depth.z
         L.depth = donor.depth.model_copy(deep=True) if donor is not None else default_depth()
         L.depth.z = z
+        if not L.visible and (donor is None or donor.visible):
+            L.visible = True
     clamp_bevel(L)
 
 

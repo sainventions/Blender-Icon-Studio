@@ -323,8 +323,8 @@ open({out!r}, "w").write(json.dumps(out))
 """
 
     def test_pieces_of_one_layer_never_interpenetrate(corpus_index, tmp_path):
-        """QA r8 #6: pieces of one layer that TOUCH (Secure Folder's translucent tab and opaque folder share an edge)
-        pull back from each other; a piece that OVERLAPS an earlier one (a translucent disc over a square) is stacked on
+        """QA r8 #6: pieces of one layer that TOUCH (Secure Folder's translucent tab and opaque folder share an edge;
+        Calendar's page and the digits in its holes) pull back from each other; a piece that OVERLAPS an earlier one (a translucent disc over a square) is stacked on
         it by their real heights. Framing uses the real layer height: thickness + 2·inflate·maxRadius."""
         import test_worker_quality as T
         index_path, _names = corpus_index
@@ -346,6 +346,11 @@ open({out!r}, "w").write(json.dumps(out))
         g = T.geo([("sq", [T.square(0.4)], "#3366ff", 1.0), ("disc", [T.circle(0.25, 0.2, 0.1)], "#ffffff", 0.6)])
         g["maxRadius"] = 1.0
         cases["both"] = list(T.scene([lay], {"A": g}))
+        # round 9: Calendar's L1 + L2 merged — the page with the digits cut out as holes and the digits filling them
+        # (outlines flattened differently, they touch): pulling back only the digits' VERTICES left the page's corners
+        # poking into them between two samples (79 intersecting face pairs, the full body height deep)
+        cal = json.loads((HERE / "data" / "calendar_merged_layer.json").read_text(encoding="utf-8"))
+        cases["calendar"] = [cal["project"], cal["geometry"]]
         cp = tmp_path / "cases.json"
         cp.write_text(json.dumps(cases), encoding="utf-8")
         out = tmp_path / "scene.json"
@@ -365,6 +370,9 @@ open({out!r}, "w").write(json.dumps(out))
         assert both["stats"].get("stackedPieces") == 1 and both["overlap"] == 0, both
         assert both["hi"][1] - both["lo"][0] < 1.1                    # the stacked bodies are lower than the rule ...
         assert both["span"] == pytest.approx(0.1 + 2 * 0.5 * 1.0, rel=1e-6), both   # ... so the rule frames them
+        cal = r["calendar"]
+        assert cal["stats"].get("insetPieces", 0) >= 1 and not cal["stats"].get("stackedPieces"), cal["stats"]
+        assert cal["overlap"] == 0, cal
 
     _TUBE_EXPR = """
 import sys, json
