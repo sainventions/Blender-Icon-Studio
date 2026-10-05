@@ -150,8 +150,8 @@ export function panView(dx: number, dy: number): void {
 
 // ------------------------------------------------------------------------------------------ DOM wiring
 /**
- * Wires the stage: `area` (the stage area incl. the floating toolbar) takes the wheel — always, so the page itself
- * never scrolls or browser-zooms over the stage; `surface` (the views) takes middle-drag / Space + drag pans and the
+ * Wires the stage: `area` (the stage area incl. the floating toolbar) takes the wheel (always, so the page itself
+ * never scrolls or browser-zooms over the stage); `surface` (the views) takes middle-drag / Space + drag pans and the
  * double middle-click. Listeners run in the capture phase and stop the event, so a pan never reaches the three.js
  * canvas (no layer select / drag, no OrbitControls) or the Compare divider.
  */
@@ -297,7 +297,7 @@ export function useStageNavigation(area: HTMLElement | null, surface: HTMLElemen
   }, [surface])
 }
 
-/** Cursor while Space is held over the stage / while panning — beats the canvas's own hover cursors. */
+/** Cursor while Space is held over the stage / while panning; it beats the canvas's own hover cursors. */
 export const PAN_CURSOR_CSS =
   '[data-stage-surface][data-pan="ready"],[data-stage-surface][data-pan="ready"] *{cursor:grab!important}' +
   '[data-stage-surface][data-pan="active"],[data-stage-surface][data-pan="active"] *{cursor:grabbing!important}'

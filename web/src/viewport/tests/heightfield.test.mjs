@@ -72,7 +72,7 @@ test('profile = PLAN §11: z(d) = e + hb(d) + inflate·D·√(1 − (1 − min(d
   assert.equal(hf.slope(0.05, b, 0, D), 0) // flat cap beyond the round edge
   near(hf.halfHeight(t, b, 0, D), t / 2, 1e-12)
   near(hf.halfHeight(t, b, 1, D), t / 2 + D, 1e-12)
-  // thin island (D < b): it tapers — half height √(b² − (b − D)²) + e < t / 2
+  // thin island (D < b): it tapers: half height √(b² − (b − D)²) + e < t / 2
   assert.ok(hf.halfHeight(t, b, 0, 0.01) < t / 2)
   // graded rings: uniform in angle along the quarter circle, dome rings interleaved and thinned
   const K = 6
@@ -125,7 +125,7 @@ test('sphere head: bevel = radius rounds a thin island into a bead (1.webp), len
   fx.regions.forEach((r, i) => {
     const { arr, mesh } = build(r.splines, t, b, 0, 8, S)
     const c = assertClean(mesh, r.elementId)
-    // round 8: no knife-thin rim — a WALL_MIN share of the half thickness stays a vertical wall
+    // round 8: no knife-thin rim; a WALL_MIN share of the half thickness stays a vertical wall
     near(arr.info.wall, hf.WALL_MIN * (t / 2), 1e-12, 'minimum wall')
     near(arr.info.bevel, (1 - hf.WALL_MIN) * (t / 2), 1e-12, 'rim radius')
     // the island's apex: e + min(b, D) (a thinner island is a sphere of its own radius)
@@ -136,7 +136,7 @@ test('sphere head: bevel = radius rounds a thin island into a bead (1.webp), len
 })
 
 test('round 8 profile: minimum wall, bevel = radius = t/2 is a near-sphere, the round edge capped at the local half-width', () => {
-  // bevel = radius = half the thickness: a disc of radius R becomes a near-sphere — a round edge of radius
+  // bevel = radius = half the thickness: a disc of radius R becomes a near-sphere: a round edge of radius
   // (1 − WALL_MIN)·R on the minimum wall WALL_MIN·R
   const R = 0.2
   const bb = (1 - hf.WALL_MIN) * R
@@ -588,7 +588,7 @@ test('inflated bodies = the worker: a Poisson dome (round tube on thin parts, no
   assertClean(mesh, 'ellipse')
   near(arr.info.half, 0.05 + arr.info.D, 1e-6 * arr.info.half, 'q = 1 at the apex: H = t + 2·k·D')
   assert.ok(arr.info.poisson && arr.info.poisson.residual <= hf.POISSON_TOL && arr.info.poisson.components === 1)
-  // a thin stadium (bevel 0, wall e = t/2): a ROUND tube (semicircular cross-section) — not a creased ridge
+  // a thin stadium (bevel 0, wall e = t/2): a ROUND tube (semicircular cross-section), not a creased ridge
   const w = 0.04
   const st = []
   for (let i = 0; i < 9; i++) st.push([-0.4 + (0.8 * i) / 8, -w])
@@ -611,7 +611,7 @@ test('inflated bodies = the worker: a Poisson dome (round tube on thin parts, no
     }
   // the corpus shapes whose distance dome grew fins (Gemini's tips): adjacent upper-dome faces meet at < 30°, and the
   // body equals the worker's (half height / volume measured with blender_worker.heightfield.build, thickness 0.16,
-  // bevel 0.08, 8 segments — the import defaults)
+  // bevel 0.08, 8 segments, the import defaults)
   // (round 8: the 15 % minimum wall and the locally capped round edge; inflate 0 = the flat import body)
   const REF = {
     'gemini-star.json|0|0.5': { half: 0.245228, volume: 0.1966417 },
@@ -751,7 +751,7 @@ function workerOutline(key, t, bv) {
 
 test('local half-width = the worker at sharp corners: a probe nearest to a shared vertex takes the worker’s (float32) segment', () => {
   // Scandit's dot (thin) and Earth's coast (import defaults): tangent discs that reach a vertex shared by two segments
-  // decided the material side by whichever segment the float64 search hit first — Scandit's vertex 53 came out 9.6e-4
+  // decided the material side by whichever segment the float64 search hit first: Scandit's vertex 53 came out 9.6e-4
   // narrower (just above its bevel), Earth's vertex 169 capped 17 % of the bevel lower than the worker (a dent in the
   // round edge that Cycles does not have).
   for (const key of ['scanditR0', 'earthSil']) {

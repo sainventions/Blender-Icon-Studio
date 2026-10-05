@@ -4,13 +4,13 @@
 // Roundness = bevel / (thickness / 2) and 1 is a near-pill edge on every part wide enough to take it (round 8: the body
 // keeps a minimum vertical wall of 15 % of the half thickness, and thin parts are round tubes of their own width).
 //
-// Real-height stacking (PLAN §11 rounds 7 + 8, shared/presets.json "geometry" — the same rule as server bis.stacking):
+// Real-height stacking (PLAN §11 rounds 7 + 8, shared/presets.json "geometry"; the same rule as server bis.stacking):
 // a layer's bodies are H = max(thickness + 2 · inflate · maxRadius · S, in-layer stacked height) tall
 // (LayerGeometry.maxRadius, S = canvas.art.scale × layer.transform.scale) and layers stack bottom → top OVERLAP-AWARE:
 // a layer only stacks above the lower layers whose footprints it overlaps in XY (features/editor/overlap.ts),
 // z(i) = max(stackLift, max over those j of z(j) + H(j) + gap) (gap = stackGap); layers side by side share the base.
 // HIDDEN layers take no stack slot (QA r11 N12, server stacking.stack_lower): j ranges over the visible lower layers
-// only — nothing floats over a hidden layer — while a hidden layer's own z is still stacked over the visible layers it
+// only (nothing floats over a hidden layer), while a hidden layer's own z is still stacked over the visible layers it
 // overlaps, so unhiding puts it there (the stack keeper then lifts the layers above it that it overlaps).
 import type { Layer, SvgElement } from '../../../types'
 
@@ -19,7 +19,7 @@ export interface StackRules {
   stackLift: number
   stackGap: number
 }
-/** server bis.stacking.DEFAULT_RULES — used when presets.json has no "geometry" section. */
+/** server bis.stacking.DEFAULT_RULES, used when presets.json has no "geometry" section. */
 export const DEFAULT_STACK_RULES: StackRules = { stackLift: 0, stackGap: 0.03 }
 /** Two z values closer than this are "the same" when a stack is recognised (server Z_TOL). */
 export const Z_TOL = 2e-4
@@ -76,7 +76,7 @@ export type BodyHeight = (l: Layer) => number
 /**
  * For every layer i the indices of the LOWER layers j < i whose footprints it overlaps in XY (server
  * bis.stacking.overlap_lists; features/editor/overlap.ts computes them from the geometry bundle). Without them every
- * layer overlaps every lower one — the round-7 sequential stack.
+ * layer overlaps every lower one: the round-7 sequential stack.
  */
 export type LowerLists = number[][]
 
@@ -89,7 +89,7 @@ export function allLower(n: number): LowerLists {
 export const isShown = (l: Pick<Layer, 'visible'>): boolean => l.visible !== false
 
 /**
- * The overlap lists the stack uses (QA r11 N12, server stacking.stack_lower): only the VISIBLE lower layers — no layer
+ * The overlap lists the stack uses (QA r11 N12, server stacking.stack_lower): only the VISIBLE lower layers; no layer
  * stacks above a hidden one. Every layer keeps its list (a hidden layer's own z is stacked over the visible layers it
  * overlaps). Returns `lower` itself when no layer is hidden.
  */
@@ -100,7 +100,7 @@ export function stackLower(layers: Pick<Layer, 'visible'>[], lower: LowerLists):
 
 /**
  * Layers (bottom → top) re-stacked at their real heights, OVERLAP-AWARE (PLAN §11 round 8, server stacking.restack):
- * z(i) = max(stackLift, max over the lower layers j it overlaps of z(j) + H(j) + gap) — layers side by side share the
+ * z(i) = max(stackLift, max over the lower layers j it overlaps of z(j) + H(j) + gap); layers side by side share the
  * base (gap = the rules' stackGap unless given). Hidden layers take no slot (stackLower). Locked layers keep their z
  * (the ones above still clear them). The running z stays UNROUNDED like the server's (the output is rounded to 5
  * decimals). Returns the same array when nothing moves.
@@ -144,9 +144,9 @@ export function stackClearances(zs: number[], hs: number[], lower: LowerLists): 
 /**
  * Server bis.stacking.stack_gap: the gap of a RULE stack, null for a custom (hand-placed) one. Rule stacks: the
  * overlap-aware real-height stack (round 8: base layers at stackLift, every other layer one gap above its overlapped
- * lower layers) and the round-7 sequential real-height stack (one gap between every pair of neighbours) — both give
- * their gap — and the pre-round-7 default stack (z_i = i × 0.13) and a stack with no overlapping layers at all (every
- * layer at stackLift) — both give the rules' stackGap. The overlap-aware stack is the current one (hidden layers take no
+ * lower layers) and the round-7 sequential real-height stack (one gap between every pair of neighbours), both giving
+ * their gap, and the pre-round-7 default stack (z_i = i × 0.13) and a stack with no overlapping layers at all (every
+ * layer at stackLift), both giving the rules' stackGap. The overlap-aware stack is the current one (hidden layers take no
  * slot: stackLower) or the round-9 one, where hidden layers kept their slot (projects saved before QA r11 N12): an edit
  * then converts it.
  */
@@ -202,7 +202,7 @@ export function interpenetrations(layers: Layer[], heightOf: BodyHeight, touchin
 /**
  * Keep a real-height stack across an edit (the server re-stacks on structural edits; a PUT stores the project as sent,
  * so client-side edits re-stack here): when the layers BEFORE the edit formed a recognised rule stack (stackGapOf), the
- * edited layers are re-stacked overlap-aware with the same gap — a thicker / more inflated / rescaled / moved /
+ * edited layers are re-stacked overlap-aware with the same gap: a thicker / more inflated / rescaled / moved /
  * reordered / deleted / unhidden layer moves the layers above it that it overlaps (hiding one lets them down: a hidden
  * layer takes no slot). Custom stacks are left alone (the Depth section offers Re-stack when their bodies collide).
  * Returns `after` itself when nothing moves.
@@ -255,11 +255,11 @@ export function stackAffected(before: Layer[], after: Layer[], artBefore: ArtLik
 }
 
 /**
- * What a layer of raster images is (PLAN §11 round 9, server stacking.card_elements / is_card_layer — the same softness
+ * What a layer of raster images is (PLAN §11 round 9, server stacking.card_elements / is_card_layer; the same softness
  * data: Element.softAlpha, measured from image.alphaSoftness at import): 'card' when every element is a SOFT-alpha
- * raster (a glow / shine / shadow; softAlpha true, or not measured yet — a project imported before round 9) — a flat
+ * raster (a glow / shine / shadow; softAlpha true, or not measured yet, as in a project imported before round 9): a flat
  * card, thin and without a dome; 'body' when every element is a raster but not all are soft (a crisp alpha silhouette:
- * iMessage's bubble, Vanced Neon's logo) — a real body like vector art; null when the layer holds vector art (or nothing).
+ * iMessage's bubble, Vanced Neon's logo): a real body like vector art; null when the layer holds vector art (or nothing).
  */
 export function rasterLayerKind(
   elements: Pick<SvgElement, 'id' | 'kind' | 'softAlpha'>[],

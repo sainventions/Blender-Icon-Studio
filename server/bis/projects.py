@@ -15,7 +15,7 @@ Layout of a project directory::
 All public methods are synchronous (file + CPU work); the API layer runs them in a thread pool. Every
 read-modify-write of a project holds that project's lock.
 
-PLAN §11 (round 6): every load and every save passes the project through ``bis.materials.normalize_project`` —
+PLAN §11 (round 6): every load and every save passes the project through ``bis.materials.normalize_project``:
 material params outside the shared Principled schema are dropped (a few legacy params are renamed), legacy shadow
 kinds ``neutral`` / ``chromatic`` become ``physical``, ``camera.explode`` is reset to 1 and ``camera.iso`` clamped
 to 0..1, per-shape overrides of elements a layer no longer holds are dropped. Loading a legacy project.json does
@@ -308,7 +308,7 @@ class ProjectStore:
             shutil.rmtree(d, ignore_errors=True)
             if isinstance(e, (ProjectError, SvgPipelineUnavailable)):
                 raise
-            if isinstance(e, ValueError):  # bis.svg: unreadable / invalid SVG — a user error, not a crash
+            if isinstance(e, ValueError):  # bis.svg: unreadable / invalid SVG is a user error, not a crash
                 log.warning("import of %s rejected: %s", filename, e)
             else:
                 log.exception("import of %s failed", filename)

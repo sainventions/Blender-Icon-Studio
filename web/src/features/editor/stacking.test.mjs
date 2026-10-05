@@ -99,7 +99,7 @@ test(`corpus parity with server bis.stacking: H, XY overlaps and re-stacks (${IC
     const p = project(ic)
     const H = SM.bodyHeights(p, g)
     // H = max(rule, in-layer stacked height): the rule exactly; the in-layer stack within the piece inradius estimate
-    // (the web and the worker: heightfield inradius; the server: GEOS maximum inscribed circle — up to 4e-4 apart)
+    // (the web and the worker: heightfield inradius; the server: GEOS maximum inscribed circle; up to 4e-4 apart)
     const checkH = (layers, want, tag) =>
       layers.forEach((l, i) => {
         const got = H(l)
@@ -235,10 +235,10 @@ test('N5: a hand-placed stack stays as placed, reports its collisions, and Re-st
 })
 
 // ------------------------------------------------------------------------------------------------ N12: hidden layers
-test('N12: hidden layers take no stack slot — hide / unhide on a detected stack re-stacks it like the server', () => {
+test('N12: hidden layers take no stack slot: hide / unhide on a detected stack re-stacks it like the server', () => {
   // the import (Find Device's baked sweep is hidden: the dot sits on the dome, not on the sweep), then every layer shown,
   // every other layer hidden, the bottom one hidden, every layer shown again: each a client-side visibility commit that
-  // the stack keeper re-stacks to the server's restack of those layers — no collisions, still a rule stack
+  // the stack keeper re-stacks to the server's restack of those layers: no collisions, still a rule stack
   let moved = 0
   let importHidden = 0
   for (const name of ICONS) {
@@ -299,7 +299,7 @@ test('N12: unhiding a layer of a HAND-PLACED stack leaves it as placed and shows
 
 // ------------------------------------------------------------------------------------------------ raster notes
 test('the inspector calls a raster layer a flat card only when it is one: rasterLayerKind = server is_card_layer', () => {
-  // (QA r11: iMessage's bubble and Vanced Neon's logo are crisp rasters — real bodies — but were called "flat card")
+  // (QA r11: iMessage's bubble and Vanced Neon's logo are crisp rasters (real bodies) but were called "flat card")
   const seen = { card: [], body: [] }
   for (const name of ICONS.filter((n) => !n.includes('+'))) {
     const ic = fx.icons[name]

@@ -1,4 +1,4 @@
-"""Regression tests for the QA round-2 render-quality defects — launches REAL Blender 5.0 (OptiX). Skipped when
+"""Regression tests for the QA round-2 render-quality defects, launching REAL Blender 5.0 (OptiX). Skipped when
 Blender is missing. GPU rules: renders ≤ 256 px, ≤ 32 spp.
 
 Synthetic scenes (scene builders below are also used by test_materials.py and scratch before/after scripts) isolate
@@ -83,7 +83,7 @@ def open_disc_scene():
 
 
 def thin_ring_scene():
-    """Ti73's pie: a 0.02-wide ring in a layer whose safeRadius says 0.3 — the bevel must not fill its hole."""
+    """Ti73's pie: a 0.02-wide ring in a layer whose safeRadius says 0.3; the bevel must not fill its hole."""
     return scene([layer("A", preset="flat", shadow=0.0)],
                  {"A": geo([("e", [circle(0.4), circle(0.38, hole=True)], "#0e190b", 1.0)], safe=0.3)}, shape="none")
 
@@ -110,7 +110,7 @@ HOLE = (-0.35, -0.15, 0.35, 0.15)
 
 def cell_scene(zoom=1.6):
     """Sheets: a white slab with a rectangular hole (sharp concave corners, straight edges). Opaque satin lit by the key
-    on the view axis only: the bevel geometry is under test — physical glass would show the refracted plate in the
+    on the view axis only: the bevel geometry is under test; physical glass would show the refracted plate in the
     bands, and a grazing key puts the bands at its terminator, where real shading varies along them (12-20/255)."""
     proj, bundle = scene([layer("A", preset="satin", shadow=0.0)],
                          {"A": geo([("e", [rect(-0.6, -0.4, 0.6, 0.4), rect(*HOLE, hole=True)], "#ffffff", 1.0)],

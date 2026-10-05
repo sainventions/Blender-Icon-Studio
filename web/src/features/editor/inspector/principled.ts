@@ -4,7 +4,7 @@
 // presets.resolve_material does).
 import type { Layer, MaterialPreset, MaterialSpec, ParamSchema, Presets } from '../../../types'
 
-/** Blender's own panel order — the fallback when presets.json carries no `principledSchema.groups`. */
+/** Blender's own panel order: the fallback when presets.json carries no `principledSchema.groups`. */
 export const PRINCIPLED_GROUPS = ['Paint', 'Base', 'Subsurface', 'Specular', 'Transmission', 'Coat', 'Sheen', 'Emission', 'Thin Film']
 
 /** Groups that are always relevant (the art colour and the base inputs). */

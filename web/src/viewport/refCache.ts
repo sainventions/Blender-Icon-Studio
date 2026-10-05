@@ -2,7 +2,7 @@
 //
 // `get()` may be called during render (get-or-create, no ref taken); mounted users `retain()`/`release()` in
 // effects. Entries that end up with zero refs (released, or created by a render that never committed) are
-// destroyed after a short grace period — so switching projects back and forth reuses work, but nothing leaks.
+// destroyed after a short grace period, so switching projects back and forth reuses work, but nothing leaks.
 import { useEffect, useMemo } from 'react'
 
 interface Entry<V> {

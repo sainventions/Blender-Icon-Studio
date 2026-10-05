@@ -1,4 +1,4 @@
-"""Blender Icon Studio — FastAPI application (REST /api/*, WebSocket /ws, static /files, /swatches, SPA).
+"""Blender Icon Studio: FastAPI application (REST /api/*, WebSocket /ws, static /files, /swatches, SPA).
 
 Run:  .venv/Scripts/python.exe -m uvicorn bis.main:app --app-dir server --port 8420
 
@@ -52,7 +52,7 @@ MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 VALID_STRATEGIES = {"smart", "group", "color", "element", "single"}
 NO_STORE = {"Cache-Control": "no-store"}
 
-# Starlette guesses Content-Type with `mimetypes`, which on Windows also reads the registry — where `.js` is
+# Starlette guesses Content-Type with `mimetypes`, which on Windows also reads the registry, where `.js` is
 # often mapped to text/plain (browsers then refuse the SPA's module scripts). Pin every type we serve.
 MIME_TYPES = {
     ".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css", ".html": "text/html",

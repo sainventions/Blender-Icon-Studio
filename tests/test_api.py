@@ -1,4 +1,4 @@
-"""API tests for the server (workstream C) — FakeBridge + fake bis.svg, no Blender / GPU needed."""
+"""API tests for the server (workstream C): FakeBridge + fake bis.svg, no Blender / GPU needed."""
 from __future__ import annotations
 
 import io
@@ -771,7 +771,7 @@ def test_svg_sniffing():
 
 
 def test_open_in_blender_launches_detached(tmp_path):
-    """The real launcher with Python standing in for blender.exe: the GUI process must be fully detached —
+    """The real launcher with Python standing in for blender.exe: the GUI process must be fully detached:
     on Windows outside the server's process tree and outside every job object (it must survive the server)."""
     from bis.rendering import open_in_blender, pid_alive
 
@@ -798,7 +798,7 @@ def test_open_in_blender_launches_detached(tmp_path):
         k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
         k32.IsProcessInJob.argtypes = [wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)]
         # (the venv python.exe is a redirector that runs the real interpreter in its own job: check the
-        # process the launcher started — Blender in production)
+        # process the launcher started, i.e. Blender in production)
         h = k32.OpenProcess(0x1000, False, launched.pid)
         if h:  # still running (the script sleeps 1.5 s): it must not be in any job object
             in_job = wintypes.BOOL()

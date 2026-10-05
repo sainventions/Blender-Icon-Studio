@@ -124,7 +124,7 @@ export function regionOffset(zSub: number | null | undefined): number {
 
 /**
  * Worker scene.touching_opaque: some regions of the layer share edges (the union silhouette has fewer outer contours
- * than the regions together) and every region is opaque vector paint with no sub-layer offset — the layer then renders
+ * than the regions together) and every region is opaque vector paint with no sub-layer offset; the layer then renders
  * as ONE body painted by the layer texture.
  */
 export function touchingOpaque(lg: LayerGeometry | null | undefined): boolean {
@@ -141,7 +141,7 @@ export function touchingOpaque(lg: LayerGeometry | null | undefined): boolean {
 }
 
 /**
- * One body (silhouette) instead of one per region: layer mode 'combined', or touching opaque pieces — unless a shape of
+ * One body (silhouette) instead of one per region: layer mode 'combined', or touching opaque pieces, unless a shape of
  * the layer has its own material (Layer.elementMaterials), which needs its own body.
  */
 export function isCombinedBody(layer: Layer, lg: LayerGeometry): boolean {
@@ -270,7 +270,7 @@ export function layerLift(bodies: { part: BodyPart; body: Body }[], d: DepthPara
   return Math.max(0, half - d.thickness / 2)
 }
 
-/** How the pieces (regions) of one layer meet — worker scene._relations. Indices into LayerGeometry.regions. */
+/** How the pieces (regions) of one layer meet (worker scene._relations). Indices into LayerGeometry.regions. */
 export interface PieceRelations {
   /** [i, j]: piece j OVERLAPS the earlier piece i (a translucent piece over another) → stacked by real heights. */
   stack: [number, number][]
@@ -324,7 +324,7 @@ function cachedInradius(key: string, splines: Spline[], S: number): number {
 }
 
 /**
- * World height H of a layer's bodies — worker scene._body_height (PLAN §11 round 8, identical in the server's
+ * World height H of a layer's bodies, worker scene._body_height (PLAN §11 round 8, identical in the server's
  * bis.stacking): H = max(rule height, in-layer stacked height). Rule height (presets.json "geometry") = thickness + 2 ×
  * inflate × maxRadius × S (LayerGeometry.maxRadius; without it the silhouette's own inradius); in-layer stacked height =
  * the real-height stack of the layer's OVERLAPPING pieces (layerRelations): max_j(shift_j + h_j) + max_j h_j.
@@ -360,7 +360,7 @@ export function layerBodyHeight(layer: Layer, lg: LayerGeometry, S: number): num
 }
 
 /**
- * Part-index pairs of a layer's overlapping pieces (layerRelations.stack mapped onto layerBodyParts' order) — the
+ * Part-index pairs of a layer's overlapping pieces (layerRelations.stack mapped onto layerBodyParts' order): the
  * pieces LayerBody stacks by their real heights. Empty for one-body (combined) layers.
  */
 export function partStackPairs(parts: BodyPart[], lg: LayerGeometry, S: number): [number, number][] {

@@ -176,7 +176,7 @@ class SystemMonitor:
             return
         self.version = await asyncio.to_thread(blender_version, Path(exe))
         if self.version and not self.version.startswith("5.0"):
-            log.warning("Blender %s found at %s — this app targets Blender 5.0", self.version, exe)
+            log.warning("Blender %s found at %s, but this app targets Blender 5.0", self.version, exe)
         self.push_soon()
 
     async def poll_once(self) -> None:

@@ -1,5 +1,5 @@
 // Real-height, overlap-aware layer stacking of a project (PLAN §11 rounds 7 + 8; shared/presets.json "geometry"; server
-// bis.stacking) — pure (no store, no React): the node tests run it against fixtures exported from the server.
+// bis.stacking). Pure (no store, no React): the node tests run it against fixtures exported from the server.
 // Body heights H = max(thickness + 2 · inflate · maxRadius · S, in-layer stacked height) from the geometry bundle, XY
 // footprints from its silhouettes (./overlap.ts), the Re-stack button, keeping a recognised stack across client-side
 // edits, and the collisions of a hand-placed stack (the Depth section's Re-stack hint). ./stacking.ts installs it.
@@ -45,10 +45,10 @@ export function lowerLists(p: StackProject, geometry: Geo, clearance: number): L
   return overlapLists(layerPlacements(p.layers, geometry, p.canvas.art), clearance)
 }
 
-/** The Re-stack button: every layer at its real height, overlap-aware — z = stackLift, or one stackGap above the
+/** The Re-stack button: every layer at its real height, overlap-aware: z = stackLift, or one stackGap above the
  *  highest lower layer it overlaps in XY. */
 export function restackProject<P extends StackProject>(p: P, geometry: Geo, presets: Presets | null | undefined): P {
-  // no geometry bundle yet (the project is still loading): no heights / footprints to stack by — leave it as it is
+  // no geometry bundle yet (the project is still loading): no heights / footprints to stack by, so leave it as it is
   if (!geometry?.layers) return p
   const rules = stackRules(presets)
   const layers = restack(p.layers, bodyHeights(p, geometry), rules, rules.stackGap, lowerLists(p, geometry, rules.stackGap))
@@ -85,7 +85,7 @@ export function stackStatus(p: StackProject, geometry: Geo, presets: Presets | n
   const rules = stackRules(presets)
   const H = bodyHeights(p, geometry)
   // collisions only between layers whose footprints AND heights are known: while the bundle loads (or misses a layer
-  // just added) an unknown footprint "overlaps everything" and its height is the bare thickness — side-by-side layers
+  // just added) an unknown footprint "overlaps everything" and its height is the bare thickness, so side-by-side layers
   // on the base would flash a false "Collide · Re-stack" warning (18 of the 68 corpus imports)
   const known = (i: number) => !!geometry?.layers?.[p.layers[i].id]
   const touching = lowerLists(p, geometry, TOUCH_CLEARANCE).map((low, i) => (known(i) ? low.filter(known) : []))

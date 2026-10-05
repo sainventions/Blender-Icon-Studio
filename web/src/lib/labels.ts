@@ -1,4 +1,4 @@
-// User-facing names for appearances and render engines — one place, so every surface (top bar, renditions strip,
+// User-facing names for appearances and render engines, in one place, so every surface (top bar, renditions strip,
 // matrix, waterfall, tooltips, status bar, toasts) says the same thing.
 import type { AppearanceId, Presets, SourceInfo } from '../types'
 
@@ -21,7 +21,7 @@ const SHORT: Record<AppearanceId, string> = {
 }
 
 /**
- * Display name of an appearance. The base appearance is always Apple's "Default" (Icon Composer), never "Light" —
+ * Display name of an appearance. The base appearance is always Apple's "Default" (Icon Composer), never "Light";
  * presets.json's `short` for it still says "Light", so it is not consulted for that one. `short` = for tight spots
  * (top-bar segments, renditions strip); pair it with the long name in a tooltip.
  */

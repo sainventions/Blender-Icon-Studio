@@ -44,7 +44,7 @@ export function stageBackgroundStyle(spec: StageBackdropSpec = STAGE_BACKDROP): 
 
 /**
  * The faded checkerboard drawn behind a render in the icon frame (absolutely positioned over the frame box). The
- * cell at the frame's top-left is `b`, then they alternate — the live viewport's shader uses the same phase.
+ * cell at the frame's top-left is `b`, then they alternate; the live viewport's shader uses the same phase.
  */
 export function checkerOverlayStyle(spec: StageBackdropSpec = STAGE_BACKDROP): CSSProperties {
   const c = spec.checker

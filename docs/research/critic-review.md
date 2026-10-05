@@ -20,9 +20,9 @@ The user's standing instruction for this run was **"use optix"**. Every render r
 | D2 | SVG JSON scale | Change `svg_prototype.icon_space` to `S = max(vbW, vbH)/2`. This multiplies all splines **and gradient recipes** by 2. | The prototype emits ±0.5 coordinates. |
 | D3 | Layer geometry route | **Primary:** legacy 2D curve with `extrude` + `bevel_mode='ROUND'` + `offset=-bevel`. It is the cleanest shading, parametric, and the PLAN default. Required **guards**:<br>(a) cull or clip geometry to the viewBox;<br>(b) clamp `bevel_depth ≤ 0.9 × layer safe radius`;<br>(c) for flat layers (bevel 0), use GN Fill Curve or nudge touching contours apart by 1e-3.<br>**Fallback** per layer: when the clamp cuts the bevel below about 30 % of the request, switch that layer to a mesh object with GN Fill Curve (`Mode='N-gons'`) + Set Material → Solidify → Bevel (`use_clamp_overlap`) → Weighted Normal. | Verified in Blender (see API doc "Critic verifications"):<br>- legacy flat fill breaks on touching contours (area 1.5 vs 3.5), but the beveled+offset version does not;<br>- a bevel larger than the half-width inverts caps;<br>- the GN+modifier route is robust but shows cap shading streaks in `Triangles` mode. |
 | D4 | `use_persistent_data` | **Off** in every tier. | Costs +630 MB VRAM for about 10 % speed (API doc §1). The glass doc's §7.1/§7.2 "True" is overruled. |
-| D5 | Denoiser | **OptiX denoiser in all Cycles tiers.** OIDN-GPU is an opt-in at ≤1024 px. Use OIDN-CPU when VRAM is tight. | Measured peaks: OptiX +2.32 GB vs OIDN-GPU **+2.96 GB** at 2048 px. Desktop baseline is 3.5–4.7 GB. This also matches the user's "use optix" and PLAN §8. The glass doc's final-tier OIDN-GPU is overruled. |
+| D5 | Denoiser | **OptiX denoiser in all Cycles tiers.** OIDN-GPU is an opt-in at ≤1024 px. Use OIDN-CPU when VRAM is tight. | Measured peaks: OptiX +2.32 GB vs OIDN-GPU **+2.96 GB** at 2048 px. Desktop baseline is 3.5-4.7 GB. This also matches the user's "use optix" and PLAN §8. The glass doc's final-tier OIDN-GPU is overruled. |
 | D6 | View transform | Default **Khronos PBR Neutral** for lit 3D renders. Offer **Standard** for a "flat / SVG-faithful" mode (emission-only preview, color checks) and AgX Punchy as "photographic". | API doc said Standard and the glass doc said Khronos; the glass doc had the render comparison. |
-| D7 | Draft vs faithful preview | EEVEE draft **cannot show glass seen through glass**: only the top glass group refracts (glass doc §4). Treat EEVEE and three.js as "layout/lighting drafts". The **Cycles 512 px / 32–48 spp tier is the first faithful glass view**. Measured at 0.35–0.65 s, so it can run automatically after an edit settles (debounce about 600 ms). | Liquid Glass icons are typically 2–4 stacked glass groups. |
+| D7 | Draft vs faithful preview | EEVEE draft **cannot show glass seen through glass**: only the top glass group refracts (glass doc §4). Treat EEVEE and three.js as "layout/lighting drafts". The **Cycles 512 px / 32-48 spp tier is the first faithful glass view**. Measured at 0.35-0.65 s, so it can run automatically after an edit settles (debounce about 600 ms). | Liquid Glass icons are typically 2-4 stacked glass groups. |
 | D8 | Finals and cancel | Live drafts and previews use the persistent worker. **Finals, exports and turntables use a separate short-lived Blender process** (kill = cancel; it frees ~0.65 GB of CUDA context). Progress comes from the `render_stats` handler. | `bpy.ops.render.render` blocks the socket loop, and stdout has no sample-progress lines in 5.0 (verified). |
 | D9 | Plate | Detected plate → **canvas background** (parametric squircle). **artScale** = canvas plate size ÷ detected plate bbox. For the corpus: plate bbox 466/500 px, so the art must be scaled ×500/466 for full-bleed Apple export. | Corpus plates are ~100-segment polylines covering 93.2 % of the canvas. |
 
@@ -36,21 +36,21 @@ The user's standing instruction for this run was **"use optix"**. Every render r
 |---|---|---|---|
 | PLAN §3 | XY | +Z looking −Z | ±1 |
 | glass doc §2.3/§6 | **XZ, facing −Y** | (0, −10, 0) | plate ±1 (`ortho_scale` 2.35) |
-| svg-pipeline §7.1 | (JSON) | — | **±0.5** (longer side = 1.0) |
+| svg-pipeline §7.1 | (JSON) | - | **±0.5** (longer side = 1.0) |
 | `blender_curve_builder.py` | XY | top camera | ±0.5 (`ortho_scale=1`, `LAYER_DZ=0.02`) |
 
 To port the glass rig to PLAN axes:
 - view axis −Y → **+Z**; up Z → **+Y**;
 - `light_dir(a,e) = (0,0,1)·cos e + (sin a, cos a, 0)·sin e`;
 - the world gradient must use Generated **Y** (not Z), and its light-angle Mapping rotation must be about **Z**. **Re-verify the sign**: the glass doc's "minus sign (verified)" only holds in its XZ frame;
-- the camera at (0, 0, 10) with `rotation_euler=(0,0,0)`, `ortho_scale ≈ 2.3–2.4`.
+- the camera at (0, 0, 10) with `rotation_euler=(0,0,0)`, `ortho_scale ≈ 2.3-2.4`.
 
-Light distances, sizes and energies (K = 350 W at 5–6 BU) were tuned for a ±1 icon, so keep them.
+Light distances, sizes and energies (K = 350 W at 5-6 BU) were tuned for a ±1 icon, so keep them.
 
 **C2. Geometry route.**
 - PLAN and the API doc say curve extrude + bevel.
 - svg-pipeline says "do not use legacy fill, use GN Fill Curve".
-- Resolved by test: see D3. Note that the glass doc §2 pill recipe (`bevel ≈ 0.4–0.5 × thickness`) **breaks on about half the real icons** without the clamp (§2.4 below).
+- Resolved by test: see D3. Note that the glass doc §2 pill recipe (`bevel ≈ 0.4-0.5 × thickness`) **breaks on about half the real icons** without the clamp (§2.4 below).
 
 **C3. `use_persistent_data`:** glass doc True vs API doc off. Resolved as D4.
 
@@ -58,7 +58,7 @@ Light distances, sizes and energies (K = 350 W at 5–6 BU) were tuned for a ±1
 
 **C5. View transform:** API doc Standard vs glass doc Khronos PBR Neutral. Resolved as D6.
 
-**C6. EEVEE first-render cost:** glass doc 0.5–1.5 s vs API doc **12 s** on a cold NVIDIA cache. Both are true (different cache states). On first launch after a driver or Blender update, budget about 12 s and show a "compiling shaders" state. The warm-up must cover every `surface_render_method` × raytrace-refraction × preset combination.
+**C6. EEVEE first-render cost:** glass doc 0.5-1.5 s vs API doc **12 s** on a cold NVIDIA cache. Both are true (different cache states). On first launch after a driver or Blender update, budget about 12 s and show a "compiling shaders" state. The warm-up must cover every `surface_render_method` × raytrace-refraction × preset combination.
 
 **C7. svg-pipeline vs PLAN §4.**
 
@@ -70,7 +70,7 @@ Light distances, sizes and energies (K = 350 W at 5–6 BU) were tuned for a ±1
 
 **C8. Gradient recipe units.** svg-pipeline's `paint.shader` coefficients are in ±0.5 icon space. If they are used with ±1 art-space object coordinates, every gradient is stretched 2×. Fix it together with D2.
 
-**C9. Layer depth defaults are undefined.** The glass doc uses layer 0.12, plate 0.16, bevel 0.04 and gaps of 0.1–0.3 × thickness; the SVG builder uses `LAYER_DZ` 0.02 at half scale; PLAN has nothing. Proposed defaults (art units, icon = 2.0):
+**C9. Layer depth defaults are undefined.** The glass doc uses layer 0.12, plate 0.16, bevel 0.04 and gaps of 0.1-0.3 × thickness; the SVG builder uses `LAYER_DZ` 0.02 at half scale; PLAN has nothing. Proposed defaults (art units, icon = 2.0):
 - plate depth 0.16, bevel 0.04;
 - layer thickness 0.10;
 - requested bevel 0.045 (clamped per layer);
@@ -104,9 +104,9 @@ The `.icon` group order is **front→back**, while the split order is bottom→t
    - All 68 icons have `viewBox="0 0 500 500"` and use `<style>` class CSS.
    - 64 use `linearGradient`. There are **no radial gradients, `<use>`, `<text>`, `<mask>` or patterns**.
    - 1 icon uses `clipPath`.
-   - **61/68 use a filter drop-shadow**: feOffset 0,0, feGaussianBlur σ = 23, black flood at 0.3–0.4 opacity. This is baked lighting that Apple says to remove. Parse it into `element.shadow`, as PLAN asks, and map it to the group's shadow parameter.
+   - **61/68 use a filter drop-shadow**: feOffset 0,0, feGaussianBlur σ = 23, black flood at 0.3-0.4 opacity. This is baked lighting that Apple says to remove. Parse it into `element.shadow`, as PLAN asks, and map it to the group's shadow parameter.
 2. **Prototype robustness.**
-   - 68/68 processed with no exceptions, in 0.01–0.40 s each.
+   - 68/68 processed with no exceptions, in 0.01-0.40 s each.
    - Normalization diff against the filter-stripped original is ≤ 0.1 % on 62 icons, and DJI is 1.76 % (gradient).
    - **5 raster icons fail**: Feit 63 % (it is entirely a clipped PNG, giving **0 layers**), iMessage 28 %, Vanced Neon 26 %, Find Device 21 %, Outlook 15 %. Their `<image>` base64 PNGs are dropped.
 3. **Off-canvas junk (bug).**
@@ -121,7 +121,7 @@ The `.icon` group order is **front→back**, while the split order is bottom→t
 5. **Thin features vs bevel.**
    - Per-layer "safe radius" is measured by morphological opening with a 2 % area tolerance, in art units with icon width 2.0: p10 0.020, **median 0.048**, p90 0.112.
    - **54 % of icons have a layer below 0.05**, 30 % below 0.03, and 7 % below 0.02. Ti84 has 0.004 (display text).
-   - The glass doc's default pill (thickness 0.12, so bevel 0.05–0.06) inverts geometry on those layers. A **per-layer clamp is mandatory**. The safe radius is cheap to compute with shapely (binary-search `buffer(-d).buffer(d)`).
+   - The glass doc's default pill (thickness 0.12, so bevel 0.05-0.06) inverts geometry on those layers. A **per-layer clamp is mandatory**. The safe radius is cheap to compute with shapely (binary-search `buffer(-d).buffer(d)`).
 6. **Faceting.**
    - 49 of 346 foreground contours, in 17 icons, are dense all-straight polylines (≥ 24 vertices, > 95 % straight), as are the corpus plates.
    - With VECTOR or straight handles, glass rims show facet highlights.
@@ -136,8 +136,8 @@ The `.icon` group order is **front→back**, while the split order is bottom→t
 | U1 | The `.icon` JSON schema is community reverse-engineered: group order, `features[]` gate, `-specializations`, how inverse refraction is encoded. | Medium. `.icon` export may not open in Icon Composer. | A real `.icon` file from Icon Composer 2.0 needs a Mac. Ship `.icon` **export** labelled "beta", and keep import tolerant. |
 | U2 | three.js r186 `MeshPhysicalMaterial` transmission can show glass through glass. | High for the live preview. three.js probably has the same limitation as EEVEE (the transmission pass samples a render target). r186 does have `dispersion`, `iridescence`, `anisotropy`, `sheen`, `attenuationColor` (verified in `node_modules`). | A 10-line R3F test with two stacked transmissive slabs. |
 | U3 | EEVEE chromatic shadows via "shadow card". | Low or medium; not prototyped. | One EEVEE render. |
-| U4 | Final-tier time on real scenes. Measured only on a trivial scene: OptiX 64 spp took 1.15 s at 1024 px and 3.1 s at 2048 px. The glass doc's "10–60 s" is an estimate. | Medium (UX of exports and turntables). | Benchmark a 4-group glass icon at 1024 px with adaptive sampling. |
-| U5 | Mappings from Icon Composer parameters to physics: Refraction strength/depth → IOR and bevel radius; Specular Inside/Outside; IC 2.0's "thin dark outline". | Medium (parity feel). | Tune against Apple screenshots. Proposed: depth → bevel/thickness ratio (0.2–0.5), strength → IOR 1.0–1.7, Inside/Outside → rim mask restricted to inner or outer bevel half, dark outline → `(1 − k·Fresnel·max(−N·L, 0))` multiplier on the coat tint. |
+| U4 | Final-tier time on real scenes. Measured only on a trivial scene: OptiX 64 spp took 1.15 s at 1024 px and 3.1 s at 2048 px. The glass doc's "10-60 s" is an estimate. | Medium (UX of exports and turntables). | Benchmark a 4-group glass icon at 1024 px with adaptive sampling. |
+| U5 | Mappings from Icon Composer parameters to physics: Refraction strength/depth → IOR and bevel radius; Specular Inside/Outside; IC 2.0's "thin dark outline". | Medium (parity feel). | Tune against Apple screenshots. Proposed: depth → bevel/thickness ratio (0.2-0.5), strength → IOR 1.0-1.7, Inside/Outside → rim mask restricted to inner or outer bevel half, dark outline → `(1 − k·Fresnel·max(−N·L, 0))` multiplier on the coat tint. |
 | U6 | Apple's squircle is approximated as a superellipse with n ≈ 5 (glass doc). | Low or medium. Apple's continuous-corner shape is not a superellipse. | Extract it from the Apple Design Resources templates. |
 | U7 | The world light-angle rotation sign. | Low, but it **must be re-verified after the D1 axis change**. | One 3-angle sweep render. |
 
@@ -194,7 +194,7 @@ The `.icon` group order is **front→back**, while the split order is bottom→t
    - the shading comparison;
    - the `render_stats` handler signature and strings;
    - VRAM and time at 1024 and 2048 px for OptiX vs OIDN-GPU.
-2. **Wrote this review**, with the decision sheet D1–D9.
+2. **Wrote this review**, with the decision sheet D1-D9.
 3. **Real-corpus runs** of `svg_prototype.py`: fidelity, background detection, the off-canvas cull fix (verified), the thin-feature distribution and polyline density. No project code was changed. The cull, the safe-radius clamp and the ×2 scale (D2) are left for workstream A.
 
 ## 6. Priority actions for the implementers

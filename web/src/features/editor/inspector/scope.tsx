@@ -26,7 +26,7 @@ export function useScope(section: ScopeSection): EffectiveScope {
 
 const BUCKET_HINT: Record<OverrideBucket, string> = {
   dark: 'Dark rendition only',
-  mono: 'Mono annotation — used by Clear and Tinted renditions',
+  mono: 'Mono annotation, used by Clear and Tinted renditions',
 }
 
 export function ScopePicker({ section }: { section: ScopeSection }) {

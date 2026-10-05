@@ -1,7 +1,7 @@
 """Apple Icon Composer ``.icon`` bundle writer (beta).
 
 A ``.icon`` is a folder: ``<Name>.icon/icon.json`` + ``<Name>.icon/Assets/<files>``. The JSON schema is
-community reverse-engineered (docs/research/apple-icon-composer.md §1.10, critic U1) — the export is labelled
+community reverse-engineered (docs/research/apple-icon-composer.md §1.10, critic U1), so the export is labelled
 beta and only uses Icon Composer 1.x keys (no ``features`` gate), so both IC 1.x and 2.0 can open it.
 
 Mapping (critic C11): each project layer (a depth plane) → one IC **group** holding one IC **layer** whose

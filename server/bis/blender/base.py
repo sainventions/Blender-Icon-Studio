@@ -133,7 +133,7 @@ class Bridge(abc.ABC):
 
     @abc.abstractmethod
     def status(self) -> dict[str, Any]:
-        """{"state", "pid", "message"} — the SystemStatus.worker shape."""
+        """{"state", "pid", "message"}: the SystemStatus.worker shape."""
 
     @property
     @abc.abstractmethod

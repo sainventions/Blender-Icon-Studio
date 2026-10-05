@@ -77,7 +77,7 @@ interface EditorState {
   mergeLayers: (ids?: string[]) => Promise<void>
   splitLayer: (id: string, mode: 'elements' | 'islands') => Promise<void>
   moveElements: (elementIds: string[], toLayerId: string | null) => Promise<void>
-  /** Apply a look / pasted style / another project's style on the server — ONE undo step (undo PUTs the
+  /** Apply a look / pasted style / another project's style on the server as ONE undo step (undo PUTs the
    *  previous project back). Resolves true on success. */
   applyStyle: (req: StyleRequest, label: string) => Promise<boolean>
 }
@@ -90,7 +90,7 @@ let lastCommit: { key: string | null; at: number } = { key: null, at: 0 }
 
 /**
  * Post-processing of every commit's result, installed by the editor page (features/editor/stacking: a real-height
- * layer stack stays one — PLAN §11 round 7). Injected rather than imported so this store, which the home page loads
+ * layer stack stays one; PLAN §11 round 7). Injected rather than imported so this store, which the home page loads
  * too, does not pull the 3D geometry code (three.js) into the main bundle.
  */
 export type CommitTransform = (before: Project, after: Project, geometry: GeometryBundle | null) => Project
@@ -142,7 +142,7 @@ async function saveDetached(snapshot: Project): Promise<void> {
     // The home screen may already have listed the project (name / updatedAt) from before this save.
     if (useAppStore.getState().projects.data) void useAppStore.getState().loadProjects()
   } catch (e) {
-    toast.error(`Could not save “${snapshot.name}”`, { description: `${errorMessage(e)} — the last edits were not stored.` })
+    toast.error(`Could not save “${snapshot.name}”`, { description: `${errorMessage(e)}; the last edits were not stored.` })
   }
 }
 
@@ -161,7 +161,7 @@ function pruneSelection(sel: Selection, p: Project | null): Selection {
 /**
  * Some server operations rewrite the element set itself: "split into islands" replaces a multi-island element
  * `e5` by `e5-1`, `e5-2`, … in the pipeline's element store (A's `_explode_islands`). History snapshots taken
- * before that still reference `e5`, which no longer exists server-side — undoing would silently drop the art
+ * before that still reference `e5`, which no longer exists server-side; undoing would silently drop the art
  * from the geometry. Returns a mapper that rewrites a snapshot onto the new element set (each removed id is
  * replaced by its pieces, in paint order), or null when the element set did not change.
  */
@@ -422,7 +422,7 @@ export const useEditor = create<EditorState>((set, get) => {
             if (get().project?.id !== snapshot.id) return
             const msg = errorMessage(e)
             set({ saveState: 'error', saveError: msg })
-            toast.error('Autosave failed', { id: 'autosave-error', description: `${msg} — retrying…` })
+            toast.error('Autosave failed', { id: 'autosave-error', description: `${msg}; retrying…` })
             window.clearTimeout(retryTimer)
             retryTimer = window.setTimeout(() => void get().flushSave(), 4000)
           } finally {
@@ -618,7 +618,7 @@ export const useEditor = create<EditorState>((set, get) => {
 })
 
 // Flush pending edits when the tab is closing. keepalive requests survive the unload but browsers cap their
-// body at 64 KB — projects with many elements are bigger, so those take a normal save (it completes while
+// body at 64 KB; projects with many elements are bigger, so those take a normal save (it completes while
 // the "leave page?" prompt is shown).
 const KEEPALIVE_MAX = 60_000
 if (typeof window !== 'undefined') {

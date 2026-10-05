@@ -51,7 +51,7 @@ const SIZE = 512
 const _rgb = { r: 0, g: 0, b: 0 }
 /**
  * CSS colour for the (sRGB) 2D canvas. NB: THREE.Color stores *linear* working-space values, so the sRGB components
- * must be read back with getRGB(…, SRGBColorSpace) — writing c.r/g/b directly would decode the colour twice.
+ * must be read back with getRGB(…, SRGBColorSpace); writing c.r/g/b directly would decode the colour twice.
  */
 function rgba(hex: string, opacity: number): string {
   new THREE.Color().setStyle(hex).getRGB(_rgb, THREE.SRGBColorSpace)
@@ -146,7 +146,7 @@ export function useGradientAsset(spec: PaintSourceSpec | null): GradientAsset | 
   return useCached(gradientCache, isGrad ? spec.key : null, () => drawGradient((spec as { fill: GradientFill }).fill))
 }
 
-/** Representative flat colour of a fill (sRGB hex) — used before textures load and for luminance stats. */
+/** Representative flat colour of a fill (sRGB hex), used before textures load and for luminance stats. */
 export function fillPreviewColor(fill: Fill, fallback = '#ffffff'): string {
   switch (fill.type) {
     case 'solid':

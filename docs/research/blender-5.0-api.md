@@ -6,7 +6,7 @@ on Blender **5.0.0 (hash a37564c4df7a, built 2025-11-18)**, Windows 11, i7-12700
 Unless a section says otherwise, results come from running the code. Where a point comes from the web, the section says so.
 
 Test scripts and raw logs are in the session scratchpad (temporary):
-`%TEMP%/claude/C--Users-sainv-GitHub-Blender-Icon-Studio/a2127083-50f3-40d0-bf81-8ac0d809e971/scratchpad/apiv/`
+(`apiv/`, not kept in the repo)
 (`t1_gpu.py`, `t2_svg.py`, `t3_curves.py`, `t4_nodes.py`, `t4b_nodes.py`, `t5_settings.py`, `t5c_eevee_refr.py`, `t7_comp.py`, `t8_worker.py` with `t8_client.py`, `t9_userprefs.py`, and others).
 The full socket and property dumps are in `out/t4_nodes.txt`, `out/t4b_nodes.txt` and `out/t5_settings.txt` in that folder. The key parts are copied below.
 
@@ -560,7 +560,7 @@ stored devices: [('NVIDIA GeForce RTX 3070 Ti','OPTIX',use=True,'CUDA_NVIDIA GeF
                  ('NVIDIA GeForce RTX 3070 Ti','CUDA',use=True)]   # CUDA entry only matters if type=CUDA
 system.gpu_backend: 'OPENGL'; shader_compilation_method: 'THREAD'; gpu_shader_workers: 0; memory_cache_limit: 4096
 enabled add-ons: io_anim_bvh, io_curve_svg, io_mesh_uv_layout, io_scene_fbx, io_scene_gltf2, cycles, pose_library, bl_pkg
-use_preferences_save: True (auto-save on — another reason the worker should use --factory-startup)
+use_preferences_save: True (auto-save on; another reason the worker should use --factory-startup)
 ```
 
 The GUI is already configured for OptiX. Our worker runs with `--factory-startup` and sets OptiX itself in memory; it never saves preferences.
@@ -631,7 +631,7 @@ Added by the completeness critic on 2026-10-03. Every item was run headless on B
 - `render.ffmpeg.format`: `MPEG4, MKV, WEBM, AVI, DV, FLASH, MPEG1, MPEG2, OGG, QUICKTIME`.
 - `render.ffmpeg.codec`: `NONE, AV1, H264, H265, WEBM, DNXHD, DV, FFV1, FLASH, HUFFYUV, MPEG1, MPEG2, MPEG4, PNG, PRORES, QTRLE, THEORA`. Other properties include `constant_rate_factor` and `ffmpeg_preset`.
 - `IMAGE` file formats: `JPEG, OPEN_EXR, PNG, WEBP, BMP, CINEON, DPX, IRIS, JPEG2000, HDR, TARGA, TARGA_RAW, TIFF`.
-- **No GIF, animated WebP or APNG in Blender.** Render a PNG sequence instead. In the venv, Pillow 12.3 was verified to write animated GIF, WebP and APNG, plus **ICO** (multi-size) and **ICNS** (16–1024) on Windows. A system `ffmpeg` 8.1 (winget) is also on PATH.
+- **No GIF, animated WebP or APNG in Blender.** Render a PNG sequence instead. In the venv, Pillow 12.3 was verified to write animated GIF, WebP and APNG, plus **ICO** (multi-size) and **ICNS** (16-1024) on Windows. A system `ffmpeg` 8.1 (winget) is also on PATH.
 
 ### Geometry Nodes availability
 

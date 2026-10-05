@@ -1,4 +1,4 @@
-"""FakeBridge — a Blender-free implementation of the worker protocol (PLAN §7).
+"""FakeBridge: a Blender-free implementation of the worker protocol (PLAN §7).
 
 Used by the API test-suite and by ``BIS_FAKE_BLENDER=1`` (UI development without a GPU). It "renders" a flat
 2D approximation with Pillow: the plate in its canvas shape and fill, and every visible layer's regions from

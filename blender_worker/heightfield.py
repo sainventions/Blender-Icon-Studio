@@ -12,7 +12,7 @@ PROFILE (all lengths in the piece's LOCAL units: the art units of its splines)
     island   one outer contour together with its holes (even-odd nesting); D = max d over the island
              (its inradius). Every interior point belongs to the island of its nearest outline segment.
     t, b, k  thickness, bevel (round-edge radius; the scene passes min(bevel, t/2)), inflate (0..1); the body uses
-             b = min(bevel, (1 − WALL_MIN)·t/2) (rim_bevel(), round 8: a minimum wall, WALL_MIN = 0.15 — knife-thin
+             b = min(bevel, (1 − WALL_MIN)·t/2) (rim_bevel(), round 8: a minimum wall, WALL_MIN = 0.15; knife-thin
              rims made tube ends facing the light refract the studio's dark side: Gemini's tip notch)
     e        = max(t/2 − b, 0) ≥ WALL_MIN·t/2                    half height of the vertical side wall
     w(p)     LOCAL HALF-WIDTH (round 8, local_width() / blend_width(), SAMPLING 3c): per outline vertex the radius of
@@ -21,7 +21,7 @@ PROFILE (all lengths in the piece's LOCAL units: the art units of its splines)
              outline points on every side within reach) blended by distance. A strip of half width a: a; a disc: its
              radius; on a medial axis both sides weigh the same (no crease).
     β(p)     = min(b, max(w(p), d(p)))                            the round-edge radius, capped LOCALLY
-    hb(d)    = sqrt(β² − (β − min(d, β))²)                        round edge: quarter circle of radius β — a part
+    hb(d)    = sqrt(β² − (β − min(d, β))²)                        round edge: quarter circle of radius β; a part
              narrower than 2b is a ROUND TUBE of radius w (slope 0 on its spine: no roof ridge; QA r9 N4), a small
              disc a sphere; where w ≥ b exactly the round edge of radius b
     dome     = k · D_P · sqrt(q),  q = u / max_P(u)                inflate: POISSON dome (round 7, see POISSON)
@@ -40,7 +40,7 @@ PROFILE (all lengths in the piece's LOCAL units: the art units of its splines)
     ∂hb/∂d is infinite at
     d = 0 whenever b > 0 or k > 0, i.e. the tangent is VERTICAL at the rim (smooth with the wall / the mirrored
     bottom). ∇u at a vertex = a least-squares quadratic fit over its one-ring (u_j − u_i ≈ g·δ + ½δᵀHδ; valence
-    3–4: H = c·I; else the area-weighted mean of its triangles' P1 gradients) — exact for quadratics (discs).
+    3-4: H = c·I; else the area-weighted mean of its triangles' P1 gradients), exact for quadratics (discs).
     Vertex normal n = normalize(−∇z, 1) with g = the softmin-weighted mean of the unit
     directions from the FOOT POINTS of p (outline segments whose distance is a local minimum along their
     ring; weights exp(−(dist − d)/κ), κ = max(0.0015 world units, 0.3·d); directions within 60° of the
@@ -52,14 +52,14 @@ PROFILE (all lengths in the piece's LOCAL units: the art units of its splines)
     A vertex normal is finally blended toward +Z just enough to face all its top faces (dot ≥ 0.05).
     b = 0 and k = 0: flat top and bottom, vertical wall, sharp (split-normal) rim edges.
 
-POISSON (inflate > 0, poisson(), after the triangulation of SAMPLING 4; numpy only — the viewport ports it)
+POISSON (inflate > 0, poisson(), after the triangulation of SAMPLING 4; numpy only: the viewport ports it)
 ------------------------------------------------------------------------------------------------------------
     Unknowns: the interior vertices (u = 0 at every outline vertex). Edge weights over the kept triangles:
     w_ij = ½(cot α_ij + cot β_ij) (the angles opposite edge ij in its one / two triangles), summed per undirected
     edge and clamped to ≥ 0. K_ii = Σ_j w_ij, K_ij = −w_ij; load b_i = (f/4)·Σ_j w_ij·|x_j − x_i|², f = POISSON_F = 4
-    (f × the vertex's circumcentric dual area: the scheme reproduces quadratics exactly — a disc's R² − r²).
+    (f × the vertex's circumcentric dual area: the scheme reproduces quadratics exactly, such as a disc's R² − r²).
     K u = b by Jacobi-preconditioned conjugate gradients from u = 0 until |r| ≤ POISSON_TOL·|b| (1e-5; ≤ 4000
-    iterations, typically 40–100), then u = max(u, 0). Parts P = connected components of the interior vertices
+    iterations, typically 40-100), then u = max(u, 0). Parts P = connected components of the interior vertices
     over triangle edges with both ends interior (components()); D_P = the median of the island inradius D
     over P's vertices; q = clamp(u / max_P(u), 0, 1).
 
@@ -81,9 +81,9 @@ FAN_DEG 15, RING_TOL 0.04, TAN_K 0.006, TAN 0.004..0.04, MERGE_Q 2e-6, NEAR 0.01
     cell centres x0 + h/2 + i·h; cells listed row by row, rows bottom → top, x left → right), refined by 12 steps of
     pattern search from each island's best cell (islands the raster misses: 0.25 × the ring's smaller bbox
     side); later raised to the largest d measured at a mesh vertex. DETERMINISTIC APEX (round 8; mirrored by the
-    viewport — float32 / float64 distances must not pick different cells): the island's TIED cells are those with
+    viewport, so float32 / float64 distances must not pick different cells): the island's TIED cells are those with
     d ≥ max d − APEX_TIE·h (a rectangle's medial plateau, rounding noise); the start cell is the tied cell nearest the
-    tied cells' centroid — the FIRST in the list order among those within APEX_TIE·h of the nearest distance. The
+    tied cells' centroid, the FIRST in the list order among those within APEX_TIE·h of the nearest distance. The
     pattern search (directions (1,0) (−1,0) (0,1) (0,−1) (.7,.7) (−.7,.7) (.7,−.7) (−.7,−.7) × step, step = h/2,
     halved on no move) takes the FIRST direction whose d is within APEX_TIE·h of the best of the eight, and moves
     only when that d exceeds the current one by more than APEX_TIE·h. Ring distances per island (graded where
@@ -92,7 +92,7 @@ FAN_DEG 15, RING_TOL 0.04, TAN_K 0.006, TAN 0.004..0.04, MERGE_Q 2e-6, NEAR 0.01
     dome gets per-ray ROWS instead (3b).
     Distances ≥ 0.999·D are dropped, and so is a ring closer to
     its inner neighbour than 0.25 × the smaller neighbouring gap. Beyond the last ring the profile is flat
-    (k = 0) or nearly so: no interior grid is needed — except the island's APEX (its best inradius probe),
+    (k = 0) or nearly so: no interior grid is needed, except the island's APEX (its best inradius probe),
     added whenever the profile still rises there (inflate, or D < b: a bevelled sphere / lens) and no Steiner
     point lies within APEX_CLEAR × (D − last ring distance) of it: otherwise a dome / sphere head ended in a flat
     cap at the last ring (radius 0.26·D, 3.4 % low at 6 segments; 0.5·D, 13 % low at 3).
@@ -101,7 +101,7 @@ FAN_DEG 15, RING_TOL 0.04, TAN_K 0.006, TAN 0.004..0.04, MERGE_Q 2e-6, NEAR 0.01
     t = d_j, plus a FAN at reflex vertices sharper than FAN_DEG: directions rotated from the incoming to the
     outgoing edge normal in ≤ FAN_DEG steps, at t = d_j. A candidate is kept when its true distance is
     ≥ (1 − RING_TOL)·d_j; the first one that fails ends its ray and adds a MEDIAL point at the ray's medial crossing
-    (BISECT bisection steps between it and the last valid one (or v); round 8, was halfway) — the ray crossed the
+    (BISECT bisection steps between it and the last valid one (or v); round 8, was halfway): the ray crossed the
     medial axis (ridges of thin parts / tip spines). Ring j's
     points are thinned on a grid of cell max(0.45·min(gap_j, MAX_EDGE), 0.8·s_j) with the along-ring spacing
     s_j = clamp(TAN_K / sqrt(dz/dd(d_j)), TAN_MIN, TAN_MAX) (z is constant along a ring; a chord's sag only
@@ -112,8 +112,8 @@ FAN_DEG 15, RING_TOL 0.04, TAN_K 0.006, TAN 0.004..0.04, MERGE_Q 2e-6, NEAR 0.01
  3b. Dome rows (inflate > 0; _dome_rows(); they replace the medial points of 3): every ray of 3 gets its MEDIAL
     distance t_m by BISECT = 4 bisection steps on "true distance ≥ (1 − RING_TOL) × distance along the ray"
     (bracket: its last valid / first failing round-edge ring, else 0 .. D/(1 − RING_TOL)·1.001); rows at distances
-    x_j = t_m·(1 − cos(jπ/2J)), j = 1..J−1, J = clamp(bevelSegments, 3, 12) — the disc model's rings scaled to the
-    LOCAL width (thin parts get as many rows across as discs) — along the ray (point = v + dir·x_j·mitre scale).
+    x_j = t_m·(1 − cos(jπ/2J)), j = 1..J−1, J = clamp(bevelSegments, 3, 12), the disc model's rings scaled to the
+    LOCAL width (thin parts get as many rows across as discs), along the ray (point = v + dir·x_j·mitre scale).
     A row closer than 0.35 × its gap (x_j − x_(j−1)) to a valid round-edge ring distance of the same ray is
     dropped. Row points are thinned per row j on grids of cell max(0.45·min(gap, MAX_EDGE), 0.8·s), s the 3-rule
     spacing with the disc model of radius t_m, each point's cell rounded DOWN to a power of two and every size class
@@ -204,7 +204,7 @@ _INRADIUS_CACHE: "OrderedDict[str, list]" = OrderedDict()
 # profile
 # ================================================================================================
 def rim_bevel(thickness: float, bevel: float) -> float:
-    """The round-edge radius a body really gets: b = min(bevel, (1 − WALL_MIN)·t/2) — a minimum vertical wall of WALL_MIN
+    """The round-edge radius a body really gets: b = min(bevel, (1 − WALL_MIN)·t/2) keeps a minimum vertical wall of WALL_MIN
     × the half thickness (round 8). A knife-thin rim (b = t/2, e = 0) made every narrow tube end / tip a glass rod end
     that, facing the light, refracts the studio's dark side: Gemini's top tip showed a dark notch in Cycles (QA r9);
     with the 0.012 wall at the import default (t 0.16) it is gone and the bodies look the same."""
@@ -237,9 +237,9 @@ def rim_slopes(d, beta) -> tuple[np.ndarray, np.ndarray]:
 
 def profile(d, thickness: float, bevel: float, inflate: float, D) -> np.ndarray:
     """Top height z(d) = e + hb(d; min(b, D)) + inflate·D·sqrt(1 − (1 − min(d/D, 1))²) (mirrored for the bottom): the
-    DISC MODEL of an island of inradius D — its local half-width is D everywhere, so the round edge is capped at D
-    (a disc narrower than the bevel is a sphere) — plus the disc model of the Poisson dome (exact for a disc of radius
-    D; the body itself uses the solved u and the local half-width — build). Used for sampling and the half height."""
+    DISC MODEL of an island of inradius D, whose local half-width is D everywhere, so the round edge is capped at D
+    (a disc narrower than the bevel is a sphere), plus the disc model of the Poisson dome (exact for a disc of radius
+    D; the body itself uses the solved u and the local half-width; see build). Used for sampling and the half height."""
     d = np.maximum(np.asarray(d, dtype=np.float64), 0.0)
     b = rim_bevel(thickness, bevel)
     z = np.full(d.shape, wall_half(thickness, b))
@@ -564,7 +564,7 @@ def nearest(P: np.ndarray, A: np.ndarray, B: np.ndarray, kappa: float = 0.0, chu
     index along each ring (:func:`_ring_neighbours`) only segments whose distance is a local minimum along their
     ring count as foot points: on a ridge (a second, nearly as close foot point across a thin part / a corner
     bisector) g blends both sides, but over a round blob (a disc's centre: one foot point, the rest of the
-    outline merely a little farther) g stays the exact unit gradient of d — a sphere / dome keeps true normals.
+    outline merely a little farther) g stays the exact unit gradient of d, so a sphere / dome keeps true normals.
     Chunks of spatially sorted points only test the segments inside their bounding box grown by an upper bound
     of their distances (exact). ``pre``: :func:`segprep` of (A, B), when the caller has it."""
     P = np.asarray(P, dtype=np.float64).reshape(-1, 2)
@@ -608,7 +608,7 @@ def nearest(P: np.ndarray, A: np.ndarray, B: np.ndarray, kappa: float = 0.0, chu
         seg[idx] = sel[j]
         if kappa > 0:
             # two-cluster softmin: unit directions from segments on the nearest one's side (within 60°) and from
-            # the other side(s) are averaged separately and normalised, then blended by their total weights —
+            # the other side(s) are averaged separately and normalised, then blended by their total weights:
             # full-length g on one side, the symmetric mean on a ridge / mitre (|g| = cos(half the angle))
             kap = np.maximum(kappa, rel * dmin)[:, None]
             w = np.exp(-(dist - dmin[:, None]) / kap)
@@ -683,7 +683,7 @@ class Outline:
 
 def island_inradius(ol: Outline, grid: int = 40, centres: Optional[dict] = None) -> np.ndarray:
     """Estimated inradius D per ring's island (indexed by ring; holes carry their island's value). ``centres``
-    (a dict) receives {island: (x, y)} — the centre of its largest inscribed disc found (the apex)."""
+    (a dict) receives {island: (x, y)}, the centre of its largest inscribed disc found (the apex)."""
     rings, island = ol.shapes, ol.island
     D = np.zeros(len(rings))
     if not rings:
@@ -738,11 +738,11 @@ def island_inradius(ol: Outline, grid: int = 40, centres: Optional[dict] = None)
 
 def local_width(ol: Outline, Dr: np.ndarray, tol_abs: float, window: float = 0.0) -> np.ndarray:
     """LOCAL HALF-WIDTH w at every sample-ring vertex (local units, in ``ol.A`` order; SAMPLING 3c): the radius of the
-    largest disc tangent to the outline at the vertex — centred on its inward bisector — that stays inside the piece
+    largest disc tangent to the outline at the vertex (centred on its inward bisector) that stays inside the piece
     (centre inside, true distance ≥ (1 − RING_TOL)·r − ``tol_abs``). A strip of half width a: a; a disc: its radius;
     a sharp convex corner: → 0 (its neighbours along the edges grow linearly). Tangent discs at one point are nested,
     so the test is monotone in r: WIDTH_BISECT bisection steps in [0, 1.05·D] (``Dr``: the inradius per ring).
-    ``window`` (the bevel b): then the sliding MAX over ±b of arclength along the ring, then the sliding MEAN over ±b/2 —
+    ``window`` (the bevel b): then the sliding MAX over ±b of arclength along the ring, then the sliding MEAN over ±b/2:
     a part is thin where it stays thin along its outline (a stroke: unchanged), not at the corner of a wide part (whose
     tangent discs only shrink within ~b of the apex: those corners keep the round edge of radius b, the crumpled cone tips
     of Contacts' lens otherwise); the mean removes the kinks of the sparse outline samples."""
@@ -804,8 +804,8 @@ def _slide(v: np.ndarray, rings: list, half: float, op: str) -> np.ndarray:
 
 def blend_width(ol: Outline, wv: np.ndarray, P: np.ndarray, chunk: int = 48):
     """-> (w, ∇w, d, ∇d) at points P: d = the distance to the sample outline; w = the local half-width at P's FOOT
-    POINTS — sample-ring segments whose distance is a local minimum along their ring (ties within 1e-9) and at most
-    d·(1 + 5·WIDTH_BLEND) away — each foot's value ``wv`` interpolated linearly at P's projection onto it (clamped), the
+    POINTS (sample-ring segments whose distance is a local minimum along their ring (ties within 1e-9) and at most
+    d·(1 + 5·WIDTH_BLEND) away), each foot's value ``wv`` interpolated linearly at P's projection onto it (clamped), the
     feet weighted by exp(−(dist − d) / (WIDTH_BLEND·d)). Beside one side of a part only its own foot counts; on a
     medial axis (a stroke's spine, a corner's bisector, a junction) both sides blend evenly, so the capped round edge
     has no crease there (a 90° corner: β → (d1 + d2)/2, z → sqrt(d1·d2)). The gradients are analytic (the weights'
@@ -895,7 +895,7 @@ def rim_radius(ol: Outline, wv: np.ndarray, P: np.ndarray, bevel: float) -> tupl
     if not len(P):
         return np.zeros(0), np.zeros((0, 2))
     b = float(bevel)
-    # fast path: closer to one side than w/4, the other side's feet (≥ 2w − d away on a strip) weigh < e^-10 — the
+    # fast path: closer to one side than w/4, the other side's feet (≥ 2w − d away on a strip) weigh < e^-10: the
     # nearest foot alone
     d, seg, g = nearest(P, ol.A, ol.B, pre=ol.pre)
     E = ol.B[seg] - ol.A[seg]
@@ -914,7 +914,7 @@ def rim_radius(ol: Outline, wv: np.ndarray, P: np.ndarray, bevel: float) -> tupl
 
 
 def piece_rings(splines: list, scale: float = 1.0) -> list:
-    """The sample rings (local units) of a piece's outline — :func:`outline` at the body tolerances."""
+    """The sample rings (local units) of a piece's outline, via :func:`outline` at the body tolerances."""
     sc = max(float(scale), 1e-9)
     return outline(splines, CHORD_TOL / sc, MAX_EDGE / sc, MERGE_EPS / sc)[0]
 
@@ -946,9 +946,9 @@ def _interior_probes(rings: list, depth: float) -> np.ndarray:
 
 
 def rings_relation(ra: list, rb: list, tol: float) -> int:
-    """How two pieces (lists of rings) meet: 0 apart, 1 TOUCH (outlines within ``tol`` of each other — a shared edge —
+    """How two pieces (lists of rings) meet: 0 apart, 1 TOUCH (outlines within ``tol`` of each other, a shared edge,
     but the pieces' interiors do not overlap), 2 OVERLAP (some vertex of one lies inside the other, farther than
-    ``tol`` from its outline: a translucent piece over another — or the outlines (nearly) COINCIDE: a translucent
+    ``tol`` from its outline: a translucent piece over another; or the outlines (nearly) COINCIDE: a translucent
     overlay with the base's own outline, every vertex within ``tol`` of the other outline; caught by interior probes
     4·tol inside each piece). Rings are densely sampled (≤ MAX_EDGE), so crossing outlines are caught too."""
     if not ra or not rb:
@@ -965,7 +965,7 @@ def rings_relation(ra: list, rb: list, tol: float) -> int:
         return 2
     if not ((da <= tol).any() or (db <= tol).any()):
         return 0
-    # the outlines meet: a shared edge (TOUCH) — or (nearly) the same outline, interiors on the same side (OVERLAP;
+    # the outlines meet: a shared edge (TOUCH), or (nearly) the same outline, interiors on the same side (OVERLAP;
     # pulled back as a 'touch', the lower piece grew outward around the upper one and the bodies interpenetrated)
     for r1, r2, s2 in ((ra, rb, sb), (rb, ra, sa)):
         Q = _interior_probes(r1, 4.0 * tol)
@@ -977,7 +977,7 @@ def rings_relation(ra: list, rb: list, tol: float) -> int:
 def inset_rings(ra: list, rb: list, gap: float) -> list:
     """Piece A's rings pulled back from piece B (they touch along a shared edge) so that the two bodies' walls neither
     coincide nor cross: where A's outline comes closer than ``gap`` to B (or lies inside B) it follows B's outline
-    offset by ``gap`` — that stretch is resampled every INSET_STEP·gap and each sample moved to distance ``gap`` from B
+    offset by ``gap``; that stretch is resampled every INSET_STEP·gap and each sample moved to distance ``gap`` from B
     (along B's outward normal; radially around B's corners, a few passes for B's concave corners), chords whose midpoint
     still comes closer than (1 − INSET_THIN)·gap get that midpoint moved too (B's corners are rounded off at radius
     ``gap``, like a true offset), then the stretch is thinned back to INSET_THIN·gap chord detail. Where the moved
@@ -1008,7 +1008,7 @@ def inset_rings(ra: list, rb: list, gap: float) -> list:
             P = P_all[idx]
             d, seg, _g = nearest(P, Ab, Bb, pre=pre)
             ins = _inside(P, rb)
-            # (nearest() measures in float32: ~1e-7 absolute, so 1e-6 × gap could never settle — every pass re-pushed
+            # (nearest() measures in float32: ~1e-7 absolute, so 1e-6 × gap could never settle: every pass re-pushed
             # every point)
             m = ins | (d < gap * (1.0 - 1e-3))
             if not m.any():
@@ -1024,7 +1024,7 @@ def inset_rings(ra: list, rb: list, gap: float) -> list:
             corner = at_corner & (dr > 1e-3 * gap)
             radial = rad / np.maximum(dr, 1e-300)[:, None] * np.where(ins, -1.0, 1.0)[:, None]
             away = np.where(corner[:, None], radial, nout[seg])
-            # ON one of B's corners (a corner the two outlines share): no direction of its own — along the neighbours'
+            # ON one of B's corners (a corner the two outlines share): no direction of its own, so along the neighbours'
             # (A's outline continues there; B's vertex normal would push it outside A: a spike), else B's vertex normal
             undef = at_corner & ~corner
             if undef.any():
@@ -1062,7 +1062,7 @@ def inset_rings(ra: list, rb: list, gap: float) -> list:
         free = np.repeat(zone, k) & (t > 0.0) | moved           # inserted / moved samples may go again
         sign = 1.0 if _signed_area(r) >= 0.0 else -1.0
         # the samples moved onto B's offset overshoot each other at B's concave corners (a swallowtail: the outline
-        # crossed itself, review r9 — 83 of the corpus' 205 inset pieces): cut those loops off before refining
+        # crossed itself, review r9; 83 of the corpus' 205 inset pieces): cut those loops off before refining
         P, free, extra = _unloop(P, free, sign, gap, settle)
         refined = False
         for _ in range(INSET_REFINE):
@@ -1090,8 +1090,8 @@ def inset_rings(ra: list, rb: list, gap: float) -> list:
         elif not extra and sign < 0.0:
             out.append(r)             # (a hole never lies wholly within gap of B; kept as it was)
         out += extra
-    # an outer ring wholly within gap of B (a sliver ≤ 2·gap wide: nothing of it is farther than gap from B) is gone —
-    # kept as it was it cut into B (Files_1 / DJI / Translate with every piece split: 73–159 intersecting face pairs);
+    # an outer ring wholly within gap of B (a sliver ≤ 2·gap wide: nothing of it is farther than gap from B) is gone:
+    # kept as it was it cut into B (Files_1 / DJI / Translate with every piece split: 73-159 intersecting face pairs);
     # with no outer ring left the piece is a sliver: [] (scene._layer skips it)
     return out if any(_signed_area(q) > 0.0 for q in out) else []
 
@@ -1220,7 +1220,7 @@ def stack_shifts(n: int, touching: list, halves: Sequence[float], gap: float,
 
 
 def inradius(splines: list, scale: float = 1.0, key: Optional[str] = None) -> float:
-    """Largest island inradius of a piece (local units; cached by ``key``) — framing / lift estimates."""
+    """Largest island inradius of a piece (local units; cached by ``key``), for framing / lift estimates."""
     if key is not None:
         hit = _INRADIUS_CACHE.get(key)
         if hit is not None:
@@ -1318,8 +1318,8 @@ def _dome_rows(ol: Outline, o: np.ndarray, dr: np.ndarray, sc: np.ndarray, ds: n
                tan_min: float, scale_w: float, kept: np.ndarray) -> np.ndarray:
     """Dome sampling of an inflated island (SAMPLING 3b): per ray its MEDIAL distance t_m (bisection on 'true distance
     ≥ (1 − RING_TOL) × distance along the ray', BISECT steps) and rows at t_m·(1 − cos(jπ/2J)), j = 1..J−1,
-    J = clamp(segments, 3, 12) — the disc model's dome rings scaled to the LOCAL width, so thin parts get as many rows
-    across as discs (the Poisson dome is a round tube there) — plus the medial point at t_m. A row closer than
+    J = clamp(segments, 3, 12): the disc model's dome rings scaled to the LOCAL width, so thin parts get as many rows
+    across as discs (the Poisson dome is a round tube there), plus the medial point at t_m. A row closer than
     0.35 × its gap to a valid round-edge ring of the same ray is dropped; rows are thinned per size class on grids of
     cell max(0.45·min(gap, MAX_EDGE), 0.8·s(x)) with s the slope-based spacing of the disc model of radius t_m;
     medial points are dropped within 0.35·min(t_m − last row, MAX_EDGE) of a kept point and thinned greedily."""
@@ -1371,7 +1371,7 @@ def _dome_rows(ol: Outline, o: np.ndarray, dr: np.ndarray, sc: np.ndarray, ds: n
 
 def steiner_points(ol: Outline, Dr: np.ndarray, bevel: float, inflate: float, segments: int,
                    max_edge: float, tan_min: float = 0.0, scale_w: float = 1.0) -> np.ndarray:
-    """Graded ring points + medial points (SAMPLING 2–3)."""
+    """Graded ring points + medial points (SAMPLING 2-3)."""
     rings, island = ol.rings, ol.island
     rays_o, rays_dir, rays_scale, rays_isl = [], [], [], []
     for k, r in enumerate(rings):
@@ -1412,7 +1412,7 @@ def steiner_points(ol: Outline, Dr: np.ndarray, bevel: float, inflate: float, se
         sel = np.nonzero(I == isl)[0]
         # inflated bodies: global rings for the round edge only; the dome gets per-ray rows (SAMPLING 3b)
         # flat bodies: the round edge's rings at the island's capped radius min(b, D) (round 8: an island narrower than
-        # the bevel is a round tube / sphere of radius D — rings graded to b stopped short of its spine); inflated ones
+        # the bevel is a round tube / sphere of radius D; rings graded to b stopped short of its spine); inflated ones
         # sample the local width with their dome rows (3b)
         ds = ring_distances(bevel if dome else min(bevel, float(Dr[isl])), 0.0 if dome else inflate, float(Dr[isl]),
                             segments)
@@ -1450,7 +1450,7 @@ def steiner_points(ol: Outline, Dr: np.ndarray, bevel: float, inflate: float, se
                                                segments, max_edge, tan_min, scale_w, kept)])
             pts_out.append(kept)
             continue
-        # medial points: ON the ray's medial crossing — BISECT bisection steps between the last valid ring (or the outline
+        # medial points: ON the ray's medial crossing, via BISECT bisection steps between the last valid ring (or the outline
         # vertex) and the first failure (round 8: the spine of a thin part is the top of its round tube; halfway between
         # the two rings left it 20-40 % short and the tube's top a coarse fold)
         rr = np.nonzero(first_bad < K)[0]
@@ -1573,9 +1573,9 @@ def poisson(V: np.ndarray, T: np.ndarray, fixed: np.ndarray, f: float = POISSON_
     """Solve −∇²u = f on the triangulated region (V (N, 2), CCW triangles T), u = 0 at the ``fixed`` vertices.
 
     Cotangent Laplacian with the circumcentric dual area: K u = b with K_ij = −w_ij, K_ii = Σ_j w_ij, edge weight
-    w_ij = ½(cot α_ij + cot β_ij) (the angles opposite edge ij in its one or two triangles; clamped to ≥ 0 — already
+    w_ij = ½(cot α_ij + cot β_ij) (the angles opposite edge ij in its one or two triangles; clamped to ≥ 0, though already
     non-negative on every unconstrained edge of a constrained Delaunay triangulation, so this only guards slivers) and
-    the load b_i = f·Σ_j w_ij·|x_j − x_i|²/4 (= f × the vertex's Voronoi area; quadratics — a disc's R² − r² — come out
+    the load b_i = f·Σ_j w_ij·|x_j − x_i|²/4 (= f × the vertex's Voronoi area; quadratics, such as a disc's R² − r², come out
     exact at the vertices). Solved for the free vertices by Jacobi-preconditioned conjugate gradients (numpy only: the
     sparse product is a bincount over the edge list), from u = 0, until |r| ≤ tol·|b|; u clamped to ≥ 0.
     -> (u (N,), info)."""
@@ -1670,7 +1670,7 @@ def _ls_fit(R: np.ndarray, du: np.ndarray, I: np.ndarray, n: int, sel: np.ndarra
 def vertex_gradient(V: np.ndarray, T: np.ndarray, u: np.ndarray, where: Optional[np.ndarray] = None) -> np.ndarray:
     """∇u at the vertices (only ``where`` when given; the rest stay 0): a least-squares QUADRATIC fit of u over each
     vertex's one-ring (u_j − u_i ≈ g·δ + ½δᵀHδ, δ = x_j − x_i scaled by the ring's mean edge length; exact for
-    quadratics — a disc's dome normals are exact on any mesh). Valence 3–4 (or an ill-conditioned fit): isotropic
+    quadratics, so a disc's dome normals are exact on any mesh). Valence 3-4 (or an ill-conditioned fit): isotropic
     curvature H = c·I; otherwise the area-weighted mean of the adjacent triangles' constant (P1) gradients."""
     n = len(V)
     want = np.ones(n, dtype=bool) if where is None else np.asarray(where, dtype=bool)
@@ -1973,7 +1973,7 @@ def build(splines: list, thickness: float, bevel: float, inflate: float = 0.0, s
         wn = _unit(np.column_stack([ev[:, 1], -ev[:, 0]]))                # the wall's own outward normal
         wall_crease = sing.copy()
         if not vertical[on_b].any():
-            # flat rim (no bevel, no inflate): a corner turning more than CORNER_DEG is a vertical crease too —
+            # flat rim (no bevel, no inflate): a corner turning more than CORNER_DEG is a vertical crease too:
             # the bisector normal shaded a sharp slab's corners as if they were rounded
             mind_w = np.full(nv, np.inf)
             for vv in (be_a, be_b):

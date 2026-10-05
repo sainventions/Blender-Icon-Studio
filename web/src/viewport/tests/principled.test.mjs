@@ -144,8 +144,8 @@ test('glass seen through glass is drawn opaque × what lies behind it (no transm
   // opaque presets ignore it
   m3d.applyPrincipled(m, m3d.materialParams('satin', {}, presets), { paint: paint(), opacity: 1, thickness: 0.1, covered: behind })
   assert.ok(!m.covered && m.bis.bisBehind.value.getHex() === 0xffffff)
-  // only the TRANSMITTED share shows what lies behind (review r7: the dark renditions' DARK_GLYPH glass — transmission
-  // 0.5 — covered by more glass was drawn as base × the dark plate: Earth / Find Device / Weatherbug went black)
+  // only the TRANSMITTED share shows what lies behind (review r7: the dark renditions' DARK_GLYPH glass (transmission
+  // 0.5) covered by more glass was drawn as base × the dark plate: Earth / Find Device / Weatherbug went black)
   const dark = m3d.materialParams('liquid_glass', { transmission: 0.5, subsurfaceWeight: 1 }, presets)
   m3d.applyPrincipled(m, dark, { paint: paint(), opacity: 1, thickness: 0.1, covered: behind })
   assert.equal(m.transmission, 0)
@@ -267,7 +267,7 @@ test('renditions only change Principled inputs (appearance.resolve), per-shape o
   assert.deepEqual(tl.layers[0].material.params, { ...ap.TINTED_GLYPH })
   assert.equal(tl.canvas.plate.fill.color, ap.mixHex('#ffffff', '#3b82f6', 0.18 + 0.2 * 0.8))
   const td = ap.resolveAppearance(p, 'tinted-dark', presets)
-  // round 7: lit glass (DARK_GLYPH), no emission — TINTED_GLYPH capped to half transmission + subsurface
+  // round 7: lit glass (DARK_GLYPH), no emission; TINTED_GLYPH capped to half transmission + subsurface
   assert.deepEqual(td.layers[0].material, {
     preset: 'liquid_glass',
     params: { ...ap.TINTED_GLYPH, transmission: 0.5, subsurfaceWeight: 1, tint: 1 },

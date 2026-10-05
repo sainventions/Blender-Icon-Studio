@@ -1,5 +1,5 @@
 // Cameras. The front view is the CAD-style iso view (PLAN §11, scene/iso.ts): an orthographic camera turned from
-// head-on (iso 0 — exactly the Blender camera: ortho_scale 2.24 / zoom, centred, looking −Z) toward the isometric view
+// head-on (iso 0, exactly the Blender camera: ortho_scale 2.24 / zoom, centred, looking −Z) toward the isometric view
 // (iso 1) by a quaternion slerp, showing the layers at their REAL z distances and auto-framed like the worker's
 // framing.ortho_plan. The iso amount and the framing are damped, so a slider drag animates smoothly. Orbit view is a
 // perspective camera with damped, angle-limited OrbitControls pivoting about the centre of plate + layers, at the
@@ -210,7 +210,7 @@ function OrbitRig({ zoom, fov, points }: Props) {
     k.up.copy(k.dir).cross(k.right).normalize()
     const { width, height } = state.size
     // With the editor's view window the fit targets that square (the frame) and the canvas shows a window of the
-    // virtual frame-sized image around it (setViewOffset below) — the CAD zoom / pan rides on top of the fit.
+    // virtual frame-sized image around it (setViewOffset below); the CAD zoom / pan rides on top of the fit.
     const vf = store.frame ? resolveFrame(store.frame, width, height) : null
     const aspect = vf ? 1 : width / Math.max(1, height)
     const tanV = Math.tan(THREE.MathUtils.degToRad(Math.max(5, Math.min(120, fov))) / 2)
@@ -243,7 +243,7 @@ function OrbitRig({ zoom, fov, points }: Props) {
     let goalDist = fitAt(0, 0)
     if (n > 0) {
       // Perspective makes the hull asymmetric about the box centre: shift the pivot sideways (in the view plane) by
-      // the offset of the projected hull's centre at that distance and refit (twice) — the stack ends up centred.
+      // the offset of the projected hull's centre at that distance and refit (twice), so the stack ends up centred.
       let sx = 0
       let sy = 0
       for (let pass = 0; pass < 2; pass++) {

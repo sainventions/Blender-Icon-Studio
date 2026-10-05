@@ -6,7 +6,7 @@ Runs in the backend venv (Python 3.13, picosvg/skia-pathops/shapely/resvg-py/sci
 
 Preferred source is workstream A's package (``bis.svg.import_svg`` + ``build_geometry``) when it exists
 and works; otherwise the research prototype ``docs/research/svg_prototype.py`` is used and its output is
-converted to the shared contract (×2 to art space — D2, safe radius per layer, edge-padded RGBA layer
+converted to the shared contract (×2 to art space per D2, safe radius per layer, edge-padded RGBA layer
 textures rasterised with resvg, plate → canvas.plate + canvas.art per D9).
 
 Output per icon: ``<out>/<Icon>/project.json``, ``<out>/<Icon>/cache/geometry-<hash>.json`` and layer PNGs.

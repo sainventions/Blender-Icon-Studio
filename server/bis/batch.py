@@ -15,8 +15,8 @@ Progress messages read ``"Icon 7/24: Maps"``. While the job runs, ``job.result``
 ``{items, count, failed, partial: true}`` updated after every icon (kept when the batch is cancelled).
 
 Result: ``{items: BatchItemResult[], contactSheet: url, zip?: url, count, failed, seconds}``. Outputs live in
-``workspace/batches/<jobId>/`` (served at ``/files/batches/<jobId>/``): ``contact-sheet.png`` — a dark PNG
-grid with each icon's name under its tile — and with ``export`` ``icon-pack.zip`` (one folder per icon with
+``workspace/batches/<jobId>/`` (served at ``/files/batches/<jobId>/``): ``contact-sheet.png`` (a dark PNG
+grid with each icon's name under its tile) and with ``export`` ``icon-pack.zip`` (one folder per icon with
 its export package + the contact sheet).
 """
 from __future__ import annotations
@@ -365,7 +365,7 @@ class BatchService:
                 log.warning("batch %s: %s failed: %s", ctx.job.id, head, e)
                 item.error = str(e) or type(e).__name__
                 tile.error = item.error
-            # deleted mid-item (library delete while the pack runs): the render recreated renders/ — drop the
+            # deleted mid-item (library delete while the pack runs): the render recreated renders/, so drop the
             # orphan folder and report the icon as failed instead of linking files that no longer exist
             if item.projectId and await asyncio.to_thread(self.store.purge_if_deleted, item.projectId):
                 item.error = tile.error = "The project was deleted while the pack was rendering"

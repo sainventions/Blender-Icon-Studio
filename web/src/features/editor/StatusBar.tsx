@@ -126,8 +126,8 @@ export function StatusBar() {
           className="hidden items-center gap-1 xl:flex"
           data-tip={
             `Layers · SVG elements in them` +
-            (plateCount ? ` — ${plateCount} more ${plateCount === 1 ? 'is' : 'are'} the plate (Canvas & plate)` : '') +
-            (unusedCount ? ` — ${unusedCount} ${unusedCount === 1 ? 'is' : 'are'} in no layer (deleted layers)` : '')
+            (plateCount ? `; ${plateCount} more ${plateCount === 1 ? 'is' : 'are'} the plate (Canvas & plate)` : '') +
+            (unusedCount ? `; ${unusedCount} ${unusedCount === 1 ? 'is' : 'are'} in no layer (deleted layers)` : '')
           }
         >
           <Shapes className="h-3 w-3" /> {layerCount} {layerCount === 1 ? 'layer' : 'layers'} · {elementCount} {elementCount === 1 ? 'element' : 'elements'}
@@ -144,7 +144,7 @@ export function StatusBar() {
         </>
       )}
       <Sep />
-      <span data-tip={ws === 'open' ? 'Live updates connected' : ws === 'connecting' ? 'Connecting live updates…' : 'Live updates disconnected — retrying'} className="flex items-center">
+      <span data-tip={ws === 'open' ? 'Live updates connected' : ws === 'connecting' ? 'Connecting live updates…' : 'Live updates disconnected, retrying'} className="flex items-center">
         {ws === 'open' ? <Wifi className="h-3 w-3 text-ok/80" /> : ws === 'connecting' ? <Activity className="h-3 w-3 animate-pulse text-warn" /> : <WifiOff className="h-3 w-3 text-bad" />}
       </span>
       <button

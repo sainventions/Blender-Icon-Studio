@@ -1,25 +1,60 @@
 # Python
 .venv/
+venv/
+env/
 __pycache__/
-*.pyc
+*.py[cod]
+*.egg-info/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
 
-# Node
+# Node / web build
 node_modules/
 web/dist/
+.vite/
+*.tsbuildinfo
+npm-debug.log*
+yarn-error.log*
 
 # Runtime data (projects, renders, caches)
 workspace/
 renders/
 *.blend1
+*.blend@
 *.log
+*.tmp
+tmp/
+
+# Test outputs (Blender fixtures and render checks)
+tests/blender/_fixtures/
+tests/blender/_out/
+coverage/
+
+# Generated launch video (the README copy lives in docs/img/)
+/brag-output/
+
+# Local tooling (Claude Code, agents, skills)
+/.claude/
+/.agents/
+skills-lock.json
+
+# Scratch / reference folders
+/refs*/
+/scratch/
+
+# Secrets
+.env
+.env.*
 
 # OS / editor
 .DS_Store
 Thumbs.db
+desktop.ini
 .vscode/
 .idea/
-*.tsbuildinfo
-/.claude
-/.agents
-skills-lock.json
+*.swp
+*~

@@ -51,9 +51,9 @@ export interface StackEntry {
 }
 
 /**
- * Canvas-space convex hull of a layer's silhouette (+ flat raster card quads), after art ∘ layer transforms — worker
- * scene.subject_hulls: an EXTRUDED raster region is bounded by its traced contour, not its PNG placement (Find Device's
- * 1685 px image overhangs the plate: the iso frame came out 1.3–1.7 % too loose and 4.5 % off-centre).
+ * Canvas-space convex hull of a layer's silhouette (+ flat raster card quads), after art ∘ layer transforms (worker
+ * scene.subject_hulls): an EXTRUDED raster region is bounded by its traced contour, not its PNG placement (Find Device's
+ * 1685 px image overhangs the plate: the iso frame came out 1.3-1.7 % too loose and 4.5 % off-centre).
  */
 function layerHull(lg: LayerGeometry, art: ArtTransform, t: LayerTransform): number[] {
   const pts: number[] = []
@@ -190,7 +190,7 @@ export interface PlateFrame {
 
 /**
  * World-space points whose hull bounds what the camera must show (worker subject_points): the plate outline at its
- * front and back faces — or, without a plate, the canvas square at z = 0 — and every layer's hull at its real z span.
+ * front and back faces (or, without a plate, the canvas square at z = 0) and every layer's hull at its real z span.
  * Written into `out` (xyz triplets); returns the number of points.
  */
 export function stackFramePoints(stack: StackEntry[], plate: PlateFrame | null, out: number[]): number {

@@ -1,4 +1,4 @@
-"""Looks, style extraction and style transfer (PLAN §10) — pure functions + the REST endpoints.
+"""Looks, style extraction and style transfer (PLAN §10): pure functions + the REST endpoints.
 
 Unit tests need nothing; the API tests use the FakeBridge and the real ``bis.svg`` pipeline (corpus icons) so the
 real-height stack (PLAN §11 round 7) is checked against real ``LayerGeometry.maxRadius`` values.

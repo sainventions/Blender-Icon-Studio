@@ -1,4 +1,4 @@
-"""Integration tests for the Blender worker — launches REAL Blender 5.0 (OptiX). Skipped when Blender is
+"""Integration tests for the Blender worker, launching REAL Blender 5.0 (OptiX). Skipped when Blender is
 missing. GPU rules: renders ≤ 256 px, ≤ 32 spp.
 
     .venv/Scripts/python.exe -m pytest -q tests/blender

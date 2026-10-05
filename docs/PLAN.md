@@ -1,15 +1,15 @@
-# Blender Icon Studio — Implementation Plan
+# Blender Icon Studio: Implementation Plan
 
 > Turn existing flat SVG icons into layered, physically-rendered 3D / glass / Liquid-Glass icons.
 > Apple's Icon Composer, rebuilt on Blender 5.0 (EEVEE for live drafts, Cycles + OptiX for truth).
 
-Research that informs every decision below lives in `docs/research/` — read the section relevant to your
+Research that informs every decision below lives in `docs/research/`; read the section relevant to your
 workstream: `apple-icon-composer.md`, `glass-materials-blender.md`, `blender-5.0-api.md`, `svg-pipeline.md`
-(+ `svg_prototype.py`, `blender_curve_builder.py`), and `critic-review.md` (decision sheet D1–D9 — binding).
+(+ `svg_prototype.py`, `blender_curve_builder.py`), and `critic-review.md` (decision sheet D1-D9, binding).
 
 ## 1. Goals
 
-1. **Import** any SVG icon. Primary test corpus: the user's 68 real icons in `samle icons/` (sic — keep the
+1. **Import** any SVG icon. Primary test corpus: the user's 68 real icons in `samle icons/` (sic; keep the
    folder name). All are 500×500, 63 share an Illustrator template plate path, 61 have baked drop-shadow
    filters, 15 use strokes, 5 embed raster `<image>` PNGs, 8 contain an off-canvas junk stroke (cull it).
 2. **Split** semi-automatically into layers (smart/group/color/element/single + manual merge/split/move).
@@ -34,20 +34,20 @@ workstream: `apple-icon-composer.md`, `glass-materials-blender.md`, `blender-5.0
 │ blender/bridge.py (C): ONE persistent worker (drafts/previews) + one-shot processes (finals/exports)  │
 └────────────▲────────────────────────────────────────────────────────────────────────────────────────┘
              │ TCP 127.0.0.1 JSON-lines (persistent)  |  stdout JSON-lines (one-shot)
-┌────────────┴──── blender_worker/ (B) — runs INSIDE Blender 5.0 (Python 3.11, bpy only, no pip deps) ─┐
+┌────────────┴──── blender_worker/ (B): runs INSIDE Blender 5.0 (Python 3.11, bpy only, no pip deps) ──┐
 │ gpu.py · scene.py · geometry.py · materials.py · lighting.py · appearance.py · render.py · worker.py │
 │ oneshot.py · swatches.py                                                                             │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Binding decisions (from research; critic-review.md D1–D9 + this plan)
+### Binding decisions (from research; critic-review.md D1-D9 + this plan)
 - **D1 Axes**: icon in Blender **XY plane**, camera on **+Z looking −Z**, 1 BU = 1 art unit, plate spans −1..1.
-  (The glass doc's rig was XZ/−Y — port it: view axis −Y→+Z, up Z→+Y. Re-verify light-angle sign.)
+  (The glass doc's rig was XZ/−Y; port it: view axis −Y→+Z, up Z→+Y. Re-verify light-angle sign.)
 - **D2 Art space** spans −1..1 on the longer viewBox side (svg_prototype used ±0.5 → multiply by 2, incl. gradients).
 - **D3 Geometry**: per region/silhouette a 2D bezier curve with `extrude = max(thickness/2 − bevel, 0)`,
   `bevel_mode='ROUND'`, `bevel_depth = bevel`, `offset = −bevel`, smooth. **Clamp bevel ≤ 0.9 × safeRadius.**
   Fallback per layer (clamped bevel < 30 % of request, or bevel 0 with touching contours): mesh via GN
-  Fill Curve (`N-gons`) + Set Material → Solidify → Bevel (`use_clamp_overlap`) — see blender-5.0-api.md.
+  Fill Curve (`N-gons`) + Set Material → Solidify → Bevel (`use_clamp_overlap`); see blender-5.0-api.md.
 - **D4** `use_persistent_data = False` everywhere. **D5** OptiX device + **OptiX denoiser** in all Cycles tiers.
 - **D6** View transform default **Khronos PBR Neutral** (`render.colorMode`), Standard/AgX optional.
 - **D7** EEVEE & three.js are layout/lighting drafts (EEVEE can't show glass-through-glass: only the top-most
@@ -92,7 +92,7 @@ Agents work in the main checkout on **disjoint paths**, do NOT commit, do NOT ed
 (if you need a change there, write it in your final report). Shared contract files (`server/bis/models.py`,
 `web/src/types.ts`, `shared/presets.json`) may only get *additive, backward-compatible* changes, reported.
 
-### A — SVG pipeline · owns `server/bis/svg/**`, `tests/test_svg*.py`
+### A: SVG pipeline · owns `server/bis/svg/**`, `tests/test_svg*.py`
 Port `docs/research/svg_prototype.py` into a package (`prepass.py`, `normalize.py`, `elements.py`, `split.py`,
 `geometry.py`, `raster.py`, `textures.py`), applying the critic fixes: viewBox cull/clip, ×2 art space, safe radius,
 filter drop-shadows → `Element.shadow`, `<image>` → raster elements (`kind='image'`; decode base64, place with its
@@ -122,10 +122,10 @@ Acceptance: all 68 corpus icons import without exceptions; plate detected on ≥
 layer SVGs vs. normalized source ≤ 1 % for all non-raster icons; geometry bundles validate against
 `GeometryBundle`; pytest suite green; full-corpus timing report.
 
-### B — Blender worker · owns `blender_worker/**`, `tests/blender/**`, `web/public/swatches/*.png`
+### B: Blender worker · owns `blender_worker/**`, `tests/blender/**`, `web/public/swatches/*.png`
 Pure-bpy package run by `blender.exe -b --factory-startup --python blender_worker/worker.py -- --port 0 --root <repo>`.
 - `gpu.py`: OptiX only (disable CUDA + CPU entries), `scene.cycles.device='GPU'`, OptiX denoiser. Use
-  `read_homefile(use_empty=True)` (NOT read_factory_settings — it resets the device type).
+  `read_homefile(use_empty=True)` (NOT read_factory_settings; it resets the device type).
 - `scene.py` builds the whole scene from `(project, geometry bundle, appearance)`: plate, layers, camera, lights,
   world, compositor (bloom only when neon present). Caches curve datablocks by `LayerGeometry.hash + depth params`;
   updates materials in place when only values change (avoid EEVEE recompiles); rebuilds node graphs only when the
@@ -145,7 +145,7 @@ Acceptance: tests that launch real Blender render every preset in draft + previe
 render real geometry produced by A for ≥ 5 corpus icons (if A's package is ready; else synthetic bundles),
 warm draft render ≤ 0.5 s at 512 px, no VRAM growth across 20 renders.
 
-### C — Server · owns `server/bis/{main,config,projects,jobs,system,export,icon_format,util}.py`,
+### C: Server · owns `server/bis/{main,config,projects,jobs,system,export,icon_format,util}.py`,
 `server/bis/blender/**`, `tests/test_api*.py`, `tests/test_export*.py`, `scripts/**`, `Blender Icon Studio.cmd`, `README.md`
 REST + WS per §8, project storage under `workspace/projects/<id>/` (`project.json` + A's files + `renders/`,
 `exports/`), job manager (serial GPU queue, live-draft coalescing per project, auto-preview), `BlenderBridge`
@@ -159,7 +159,7 @@ build web if `web/dist` is stale/missing, start uvicorn, open Edge `--app=http:/
 Acceptance: pytest API suite green with a stub bridge AND an opt-in real-Blender integration test
 (`BIS_REAL_BLENDER=1`): import a corpus icon → geometry → draft render PNG exists and is non-empty.
 
-### D1 — Web app shell · owns `web/src/**` EXCEPT `web/src/viewport/**`, `web/src/lib/shapes.ts`,
+### D1: Web app shell · owns `web/src/**` EXCEPT `web/src/viewport/**`, `web/src/lib/shapes.ts`,
 `web/src/lib/appearance.ts`, `web/src/lib/materials3d.ts`
 Home (hero, drag-drop import, samples grid from `/api/samples`, recent projects), Editor layout (layers panel w/
 drag-reorder via @dnd-kit, merge/split/move elements, visibility/lock, re-split strategy menu; centre stage
@@ -172,7 +172,7 @@ Animate, Export, Open in Blender), status bar (worker state, OptiX GPU, VRAM bar
 Export & Animate dialogs with job progress + downloads, toasts, keyboard shortcuts. zustand store with undo/redo
 and debounced autosave (PUT). API client + WS client with reconnect.
 
-### D2 — 3D viewport · owns `web/src/viewport/**`, `web/src/lib/shapes.ts`, `web/src/lib/appearance.ts`, `web/src/lib/materials3d.ts`
+### D2: 3D viewport · owns `web/src/viewport/**`, `web/src/lib/shapes.ts`, `web/src/lib/appearance.ts`, `web/src/lib/materials3d.ts`
 ```ts
 // web/src/viewport/index.ts
 export interface ViewportProps {
@@ -213,7 +213,7 @@ orbit view, Apple grid overlay, transparent checkerboard backdrop, 60 fps on the
 ## 6. Render quality tiers (OptiX everywhere; never exceed draft/preview during tests)
 | Tier | Engine | Size | Samples | Bounces (max/trans/transp/glossy/diffuse) | Process |
 |---|---|---|---|---|---|
-| draft | EEVEE, raytracing SCREEN, `trace_max_roughness` 0.8, overscan | 512 | 16 TAA | — | persistent |
+| draft | EEVEE, raytracing SCREEN, `trace_max_roughness` 0.8, overscan | 512 | 16 TAA | - | persistent |
 | preview | Cycles OptiX, adaptive 0.05, OptiX denoise | 512 | 48 | 16/16/16/6/2 | persistent |
 | final | Cycles OptiX, adaptive 0.01, min 64, OptiX denoise | 1024 | 384 | 32/32/32/8/4 | one-shot |
 | ultra | Cycles OptiX, adaptive 0.005 | 2048 | 1024 | 32/32/32/8/4 | one-shot |
@@ -271,7 +271,7 @@ Renders: `workspace/projects/<id>/renders/<jobId>.png`, URL `/files/projects/<id
 1. Research ✅ → 2. Contracts ✅ → 3. Parallel build (A, B, C, D1, D2) → 4. Integration on the real corpus
 → 5. Adversarial review + UI QA in the browser → 6. Polish (swatches, hero renders, README screenshots).
 
-## 10. Round 2 — Looks, Style transfer and Icon Pack (batch)
+## 10. Round 2: Looks, Style transfer and Icon Pack (batch)
 Contract: `StyleSpec`, `StyleRequest`, `BatchRequest`, `BatchSource` in models.py / types.ts; `looks` in presets.json.
 | Method | Path | Body / result |
 |---|---|---|
@@ -282,12 +282,12 @@ Contract: `StyleSpec`, `StyleRequest`, `BatchRequest`, `BatchSource` in models.p
 Apply rules are documented on `StyleSpec` in models.py (bevel clamped to each layer's safeRadius).
 Mono floor: the worker uses 0.3 (supersedes 0.25 in §5); the viewport mirrors the worker.
 
-## 11. Round 6 pivot — PHYSICAL rendering (binding; supersedes all earlier material/explode decisions)
+## 11. Round 6 pivot: PHYSICAL rendering (binding; supersedes all earlier material/explode decisions)
 **Goal (user):** make it easy to turn SVGs into the layered setup (the splitter already does this well), then let the
-renders take real advantage of Cycles physics. Things should look 3D and physical — *perfect colour accuracy is NOT a
+renders take real advantage of Cycles physics. Things should look 3D and physical; *perfect colour accuracy is NOT a
 goal*. Sliders need not mirror Icon Composer.
 
-**Materials — ONE Principled BSDF per shape.** Every shape object gets its own material (named after layer/element) whose
+**Materials: ONE Principled BSDF per shape.** Every shape object gets its own material (named after layer/element) whose
 graph is exactly: pre-processing nodes → ONE `ShaderNodeBsdfPrincipled` → Material Output (target ALL). Allowed
 pre-processing: Texture Coordinate / Mapping / Image Texture (the layer art), Mix Color (white → art = `tint`; specular /
 coat / sheen tints), Noise → Bump → Normal (`grain`), Noise → Map Range → Thin Film Thickness (`filmVariation`), Value /
@@ -303,7 +303,7 @@ Emission, Thin Film); presets are only starting values; per-shape overrides via 
   tinted = base = mono × tint; dark = dark plate fill).
 - Colour: no pre-compensation for glass. Keep `brand` as the default colour mode.
 
-**Geometry — robust height-field bodies for ALL shapes.** Each piece (individual) / silhouette (combined) is a watertight body
+**Geometry: robust height-field bodies for ALL shapes.** Each piece (individual) / silhouette (combined) is a watertight body
 over its 2D outline defined by inward distance d (per-piece max D): top z(d) = e + hb(d) + inflate·D·√(1−(1−min(d/D,1))²),
 bottom mirrored; hb(d) = √(b² − (b − min(d, b))²) (round edge of radius b = bevel), e = max(thickness/2 − b, 0).
 Thin parts simply taper (z limited by d) → no inverted bevels, no self-intersections at tips/corners (Gemini star!).
@@ -311,13 +311,13 @@ Built in Blender with `mathutils.geometry.delaunay_2d_cdt` (dense boundary + int
 hole-aware), smooth normals, cached. The curve-bevel route is retired (fallback only). Viewport mirrors it with poly2tri.
 - Roundness slider = bevel / min(thickness/2, D-ish limit); 1 → full pill / sphere lens.
 
-**View — CAD-style POV instead of "explode".** `camera.iso` 0..1 interpolates an orthographic camera from head-on (0) to
+**View: CAD-style POV instead of "explode".** `camera.iso` 0..1 interpolates an orthographic camera from head-on (0) to
 isometric (1: pitch 35.264°, yaw 45°) showing the REAL z distances (no artificial spreading), auto-framed. Same in the live
 viewport and Blender renders; animation kind `iso` = head-on → iso → head-on. `camera.explode` stays 1 (legacy).
 
 **Round 7 additions (binding):**
 - **Poisson inflation** replaces the distance-based dome (which creased thin parts into fins): per body solve
-  ∇²u = −4 on the CDT mesh (Dirichlet u = 0 on the outline; numpy conjugate gradient — no scipy in Blender; typed-array
+  ∇²u = −4 on the CDT mesh (Dirichlet u = 0 on the outline; numpy conjugate gradient, as there is no scipy in Blender; typed-array
   CG in the viewport), dome = inflate · D · √(u / u_max) with D = the body's max inscribed radius (disc → sphere-like
   dome, thin parts → round tapering tubes, no medial-axis creases). The round-edge rim hb(d) stays.
 - **Camera-relative lighting**: the key/rim/fill rig and the studio world are defined relative to the camera, so iso /
@@ -331,7 +331,7 @@ viewport and Blender renders; animation kind `iso` = head-on → iso → head-on
 **Round 8 decisions (binding):**
 - **Overlap-aware stacking**: a layer only stacks above lower layers it overlaps in XY (silhouette overlap after a small
   clearance dilation): z(i) = max(stackLift, max over overlapped lower j of z(j) + H(j) + gap). Non-overlapping layers
-  share the base. H(i) = max(rule height, in-layer stacked height) — identical in server, worker framing and web.
+  share the base. H(i) = max(rule height, in-layer stacked height), identical in server, worker framing and web.
 - **Local bevel cap**: the round-edge radius is capped at each part's local half-width (thin strokes become round tubes,
   no roof ridge).
 - **Raster image layers** (kind 'image') import as flat cards (inflate 0, thin, small bevel); looks don't inflate them.
@@ -342,11 +342,11 @@ viewport and Blender renders; animation kind `iso` = head-on → iso → head-on
 - **Raster layers:** a raster element with a crisp alpha silhouette (not `art_alpha_is_soft`) is a real body like vector art
   (traced outline → height-field, normal depth defaults); only soft-alpha rasters (glows, shines, shadows) are flat cards.
 - **Baked overlays:** soft-alpha raster layers that overlap vector/body layers BELOW them (baked shines/highlights, e.g.
-  Find Device's sweep) import hidden (`visible: false`) with a source warning ("baked highlight hidden — Blender lighting
-  replaces it"); the user can unhide. Soft rasters that don't sit on other art (e.g. a neon glow halo) stay visible cards.
+  Find Device's sweep) import hidden (`visible: false`) with a source warning ("baked highlight hidden because Blender
+  lighting replaces it"); the user can unhide. Soft rasters that don't sit on other art (e.g. a neon glow halo) stay visible cards.
 - Clear/tinted EEVEE drafts must not render glyph glass near-black (glyphs must see the frosted plate, like Cycles).
 
-**Round 10 (polish):** hidden layers take no stack slot — nothing stacks on a hidden layer; a hidden layer still gets its
+**Round 10 (polish):** hidden layers take no stack slot: nothing stacks on a hidden layer; a hidden layer still gets its
 own z over the visible layers it overlaps, and unhiding re-stacks detected stacks (hand-placed stacks show the collision
 badge). The draft plate probe exists whenever the plate is glass, even with no visible layers. Known limits: stacking
 uses base visibility (a layer shown only in one appearance can cut into the layers above in that rendition); projects

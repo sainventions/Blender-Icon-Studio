@@ -103,7 +103,7 @@ def configure(scene: bpy.types.Scene, quality: str, size: Optional[int], *, tran
         cy.glossy_bounces = gb
         cy.diffuse_bounces = db
         cy.volume_bounces = 0                      # no volume shaders (PLAN §11: one Principled BSDF)
-        # physical glass (PLAN §11): light reaches what lies beneath / behind glass through it — without caustic paths
+        # physical glass (PLAN §11): light reaches what lies beneath / behind glass through it; without caustic paths
         # every glass body cast a black shadow and read as dark smoked glass. Plain path-traced caustics (filter
         # flags, no kernel feature); MNEE (shadow caustics, a 164 s OptiX kernel compile) stays off
         cy.caustics_reflective = True
@@ -133,8 +133,8 @@ def configure(scene: bpy.types.Scene, quality: str, size: Optional[int], *, tran
         ee.ray_tracing_method = "SCREEN"
         rto = ee.ray_tracing_options
         rto.resolution_scale = "1" if px <= 512 else "2"
-        # rougher surfaces (satin plates 0.45, frosted glass 0.27) read the light probes — the plate probe
-        # (scene._probe) / the world — instead of noisy screen traces: smoother plates, draft-vs-preview glyph dE
+        # rougher surfaces (satin plates 0.45, frosted glass 0.27) read the light probes, the plate probe
+        # (scene._probe) / the world, instead of noisy screen traces: smoother plates, draft-vs-preview glyph dE
         # 12.3 -> 11.9 on 16 icons (round 8), and a little faster; clear glass / coats (≤ 0.05) still trace.
         # A glass plate over a light wallpaper (clear-light / tinted-light) traces up to 0.3: the frosted clear glyphs
         # (0.22) refract the plate on screen (glyph and plate within 3 L* of Cycles, round 9; at 0.2 the plate read
@@ -260,7 +260,7 @@ def configure_compositor(scene: bpy.types.Scene, bloom: float, transparent: bool
         for i, n in enumerate(chain + [out]):
             n.location = (i * 220, 0)
     if bloom_on:
-        # icon framing (QA round 3 #8): the glow hugs the tubes instead of spilling far past the plate — only the
+        # icon framing (QA round 3 #8): the glow hugs the tubes instead of spilling far past the plate: only the
         # bright cores bloom (threshold), over a short reach (size), and the faint far haze is not folded into alpha
         gl = ng.nodes["BIS Glare"]
         gl.inputs["Threshold"].default_value = BLOOM_THRESHOLD
@@ -357,7 +357,7 @@ ANIM_KINDS = ("turntable", "tilt", "float", "light-sweep", "iso", "explode")
 
 
 def frame_overrides(kind: str, t: float, base_camera: dict, base_angle: float, layer_ids: list) -> dict:
-    """t in [0, 1) — loops seamlessly."""
+    """t in [0, 1); the animation loops seamlessly."""
     s, c = math.sin(2 * math.pi * t), math.cos(2 * math.pi * t)
     persp = {"view": "perspective", "fov": float(base_camera.get("fov", 30.0) or 30.0)}
     if kind == "turntable":
@@ -371,7 +371,7 @@ def frame_overrides(kind: str, t: float, base_camera: dict, base_angle: float, l
         return {"lightAngle": base_angle + 80.0 * s}
     if kind in ("iso", "explode"):
         # CAD-style POV (PLAN §11): head-on -> isometric -> head-on, real z distances (camera.iso; 'explode' is the
-        # legacy alias — layers are never spread apart)
+        # legacy alias; layers are never spread apart)
         return {"camera": {"view": "front", "iso": 0.5 - 0.5 * c}}
     raise ValueError(f"unknown animation kind {kind!r}")
 

@@ -221,7 +221,7 @@ export function LayersPanel() {
           tone={overLimit ? 'warn' : 'neutral'}
           tip={
             overLimit
-              ? `${project.layers.length} groups — Apple Icon Composer allows at most 4. The .icon export will flatten extra groups; renders are unaffected.`
+              ? `${project.layers.length} groups, but Apple Icon Composer allows at most 4. The .icon export will flatten extra groups; renders are unaffected.`
               : `${project.layers.length} of 4 Icon Composer groups`
           }
         >

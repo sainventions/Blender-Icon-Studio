@@ -34,7 +34,7 @@ DEFAULT_SHADOW_OPACITY = 0.5
 #: a soft card is a baked overlay when at least this share of its footprint lies on body layers below it
 BAKED_OVERLAP = 0.5
 #: the source warning of a soft card hidden at import (PLAN §11 round 9)
-BAKED_WARNING = "baked highlight hidden — Blender lighting replaces it"
+BAKED_WARNING = "baked highlight hidden because Blender lighting replaces it"
 
 
 def default_depth() -> LayerDepth:

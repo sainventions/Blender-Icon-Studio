@@ -26,7 +26,7 @@ export const LookThumb = memo(function LookThumb({ look, presets, className }: {
   const lp = presets?.lighting[lightId]
   const angle = lp?.lockAngle ?? st.lighting?.angle ?? -45
   const shadow = st.layerDefaults?.shadow
-  // Shadows are real (Cycles) or off — legacy neutral / chromatic kinds render as physical (PLAN §11).
+  // Shadows are real (Cycles) or off; legacy neutral / chromatic kinds render as physical (PLAN §11).
   const castsShadow = !shadow || shadow.kind !== 'none'
   const plateBg = plateFill
     ? [PLATE_SHEEN_CSS[plateId], fillToCss(plateFill)].filter(Boolean).join(', ')

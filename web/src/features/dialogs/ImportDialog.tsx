@@ -25,7 +25,7 @@ export function ImportDialog() {
   const inputRef = useRef<HTMLInputElement>(null)
   const [preview, setPreview] = useState<string | null>(null)
 
-  // Object URL owned by the effect (created and revoked in the same place — safe under StrictMode re-runs).
+  // Object URL owned by the effect (created and revoked in the same place, so safe under StrictMode re-runs).
   useEffect(() => {
     if (!file) {
       setPreview(null)
@@ -110,7 +110,7 @@ export function ImportDialog() {
       width={860}
       icon={<FileUp />}
       title={project ? 'Review the layer split' : 'Import SVG'}
-      description={project ? `${project.layers.length} layers from ${project.elements.length} elements — change the strategy until the stack looks right.` : 'Each layer becomes an extruded depth plane with its own material.'}
+      description={project ? `${project.layers.length} layers from ${project.elements.length} elements. Change the strategy until the stack looks right.` : 'Each layer becomes an extruded depth plane with its own material.'}
       footer={
         project ? (
           <>

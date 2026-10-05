@@ -1,11 +1,11 @@
 // Shape materials of the live view (PLAN §11): every shape is ONE Principled BSDF (the 28-param schema of
-// shared/presets.json), mirrored here as ONE THREE.MeshPhysicalMaterial per shape — a direct, input-by-input mapping of
+// shared/presets.json), mirrored here as ONE THREE.MeshPhysicalMaterial per shape, a direct, input-by-input mapping of
 // blender_worker/materials.py's graph:
 //
 //   Base Color      = Mix(white → art, tint)           paintMode 'emission': Mix(black → art, tint)
 //   Emission        = art (paintMode emission / base+emission, else white) × emissionStrength
 //   Metallic / Roughness / IOR / Transmission (+ the body thickness) / Alpha (× piece opacity × art alpha)
-//   transmitted light takes Base Color (√ per interface in Cycles) — once more when the body lies on what it shows
+//   transmitted light takes Base Color (√ per interface in Cycles), once more when the body lies on what it shows
 //   Specular IOR Level → specularIntensity (×2: 0.5 = no adjustment)   Specular Tint → specularColor (art mix)
 //   Coat Weight / Roughness → clearcoat                                Sheen Weight / Roughness / Tint → sheen
 //   Thin Film Thickness / IOR (+ filmVariation noise) → iridescence    Anisotropic (+ radial tangent) → anisotropy
@@ -229,10 +229,10 @@ export interface ShapeContext {
    * is drawn opaque with its base colour × this linear colour (what lies behind it). Null = real transmission.
    */
   covered?: THREE.Color | null
-  /** Translucent bodies are drawn in the opaque pass (blendInOpaquePass) — false for bodies on top of glass. */
+  /** Translucent bodies are drawn in the opaque pass (blendInOpaquePass); false for bodies on top of glass. */
   route?: boolean
   /**
-   * 0..1: how much of the surface seen through this (glass) body was lit through it — the body lies on it (stack.ts
+   * 0..1: how much of the surface seen through this (glass) body was lit through it: the body lies on it (stack.ts
    * StackEntry.contact). The transmitted colour then takes Base Color once more (light in, light out).
    */
   contact?: number
@@ -303,7 +303,7 @@ const MAP_FRAGMENT = /* glsl */ `
 	diffuseColor.a *= mix( 1.0, bisArt.a, bisArtAlpha );
 `
 
-// Cycles tints transmission by √Base Color per interface, so light crossing a solid body takes Base Color once — the
+// Cycles tints transmission by √Base Color per interface, so light crossing a solid body takes Base Color once: the
 // thin-surface tint three.js applies. The surface seen through the body was itself lit through it when the body lies
 // on it (ShapeContext.contact, caustics on in every Cycles tier): that light takes Base Color once more.
 const TRANSMISSION_FRAGMENT = /* glsl */ `

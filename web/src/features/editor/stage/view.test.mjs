@@ -82,7 +82,7 @@ test('Fit places the frame below the toolbar like before; Render Fit is at most 
 })
 
 // ---------------------------------------------------------------- zoom at the cursor
-test('wheel zoom keeps the point under the cursor fixed and is clamped to 25 %–800 %', () => {
+test('wheel zoom keeps the point under the cursor fixed and is clamped to 25 % to 800 %', () => {
   let v = null
   const cursor = [301, 517]
   const before = artAt(v, live, ...cursor)

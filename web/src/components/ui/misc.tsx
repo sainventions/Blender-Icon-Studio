@@ -49,7 +49,7 @@ export function Spinner({ className }: { className?: string }) {
   return <LoaderCircle className={cn('h-4 w-4 animate-spin text-fg-3', className)} />
 }
 
-/** Circular progress (value 0..1) — indeterminate spinner arc when value is null. */
+/** Circular progress (value 0..1); indeterminate spinner arc when value is null. */
 export function ProgressRing({
   value,
   size = 28,

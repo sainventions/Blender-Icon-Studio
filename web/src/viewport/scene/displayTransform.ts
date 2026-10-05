@@ -1,6 +1,6 @@
 // The viewport's display transform (Effects.tsx: postprocessing ToneMapping → optional HueSaturation), as plain JS and
 // its inverse, plus the GLSL twin of the inverse. The backdrop uses the inverse to paint *scene* colours that come out
-// of the tone mapper as exactly the intended *display* colours — e.g. the stage's #0b0b0f instead of the near-black
+// of the tone mapper as exactly the intended *display* colours, e.g. the stage's #0b0b0f instead of the near-black
 // the Khronos PBR Neutral curve makes of dark greys (its black-offset subtracts the min channel).
 //
 // Forward functions mirror three.js r186 `tonemapping_pars_fragment` (LinearToneMapping, NeutralToneMapping,
@@ -22,7 +22,7 @@ export type ColorModeId = RenderSettings['colorMode']
 export const COLOR_MODES: readonly ColorModeId[] = ['brand', 'neutral', 'standard', 'agx', 'agx-punchy']
 /**
  * blender_worker/presets.DEFAULT_COLOR_MODE: the mode the worker renders when a project carries no (or an unknown)
- * render.colorMode — round 5's 'brand'. The live view resolves colour modes the same way.
+ * render.colorMode (round 5's 'brand'). The live view resolves colour modes the same way.
  */
 export const DEFAULT_COLOR_MODE: ColorModeId = 'brand'
 
@@ -44,7 +44,7 @@ export function displayTransformFor(colorMode: string | null | undefined): Displ
 // ------------------------------------------------------------------------------------------------ 'brand'
 /**
  * blender_worker/util.BRAND_KNEE / BRAND_CAP ('brand' colour mode): the Standard view transform after a compositor
- * highlight soft clip (render.configure_compositor), per channel in scene-linear light — identity up to the knee, then
+ * highlight soft clip (render.configure_compositor), per channel in scene-linear light: identity up to the knee, then
  * an exponential roll-off toward 1.0 (C1 at the knee):  y = x (x ≤ k),  y = 1 − (1 − k)·exp(−(x − k)/(1 − k)).
  * Paints are pre-compensated with the exact inverse (targets capped at BRAND_CAP).
  */
@@ -204,7 +204,7 @@ function solve3(cols: number[][], b: Vec3): Vec3 {
 const glslMat = (m: Mat3) => `mat3(${m.map((c) => `vec3(${c.map((v) => v.toString()).join(', ')})`).join(', ')})`
 
 /**
- * GLSL of `vec3 bisToScene(vec3 displayLinear)` (uniforms `bisToneMode`, `bisSaturation`) — the twin of toScene().
+ * GLSL of `vec3 bisToScene(vec3 displayLinear)` (uniforms `bisToneMode`, `bisSaturation`), the twin of toScene().
  * Requires GLSL ES 3.0 (`inverse`).
  */
 export const DISPLAY_INVERSE_GLSL = /* glsl */ `

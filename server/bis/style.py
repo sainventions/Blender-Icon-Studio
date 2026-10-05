@@ -1,10 +1,10 @@
 """Looks, style extraction and style transfer (PLAN §10).
 
-* :func:`resolve_look`  — a named look from ``shared/presets.json`` ("looks") → :class:`StyleSpec`
+* :func:`resolve_look`: a named look from ``shared/presets.json`` ("looks") → :class:`StyleSpec`
   (the look's partial style deep-merged over the StyleSpec defaults).
-* :func:`extract_style` — the transferable style of a project ("Copy style").
-* :func:`apply_style`   — apply a StyleSpec to a project (pure; see the StyleSpec docstring in models.py).
-* :func:`restyle_project` — load → max radii (``bis.svg.build_geometry``, hash-cached) → apply → save.
+* :func:`extract_style`: the transferable style of a project ("Copy style").
+* :func:`apply_style`: apply a StyleSpec to a project (pure; see the StyleSpec docstring in models.py).
+* :func:`restyle_project`: load → max radii (``bis.svg.build_geometry``, hash-cached) → apply → save.
 
 Apply rules (StyleSpec): every layer gets ``layerDefaults`` (material/depth/shadow) or
 ``layerMaterials[i]`` (by index from the bottom, clamped to the last entry); the bevel is clamped to thickness / 2
@@ -27,8 +27,8 @@ see ``bis.materials``), the legacy shadow kinds ``neutral`` / ``chromatic`` beco
 ``camera.explode`` is reset to 1 (real distances; the POV is ``camera.iso``). Per-shape overrides are never part
 of a style - element ids belong to one icon.
 
-Layer mode (round 5): ``layerDefaults.mode`` None — every look in presets.json, and every extracted style
-unless its source's user fused its layers into 'combined' on purpose — keeps each layer's own mode. The SVG pipeline derives
+Layer mode (round 5): ``layerDefaults.mode`` None (every look in presets.json, and every extracted style
+unless its source's user fused its layers into 'combined' on purpose) keeps each layer's own mode. The SVG pipeline derives
 that mode per icon from its art (tiles of one shape → one 'combined' body, ``bis.svg.tiling``), so a look or an
 Icon Pack never turns a tiled icon's 'combined' layer back into seamed 'individual' pieces. A non-None mode (a
 pasted/explicit StyleSpec) is applied to every layer, and the stack uses the max radius of that mode's bodies.
@@ -49,7 +49,7 @@ if TYPE_CHECKING:  # pragma: no cover
 
 log = logging.getLogger("bis.style")
 
-#: plate fills that are a deliberate design choice (not the icon's own source colour) — copied by extract_style
+#: plate fills that are a deliberate design choice (not the icon's own source colour), copied by extract_style
 DESIGN_PLATE_FILLS = ("system-light", "system-dark", "none")
 
 
@@ -110,7 +110,7 @@ def clean_style(style: StyleSpec, presets: Any) -> StyleSpec:
 # ---------------------------------------------------------------------------------------------- extract
 def extracted_mode(layers: list, auto_modes: Optional[Mapping[str, str]]) -> Optional[str]:
     """The ``layerDefaults.mode`` a copied style carries. Rule (round 5): 'combined' ONLY when the user fused
-    the layers on purpose — every given layer is 'combined' and at least one of them is not what the SVG
+    the layers on purpose: every given layer is 'combined' and at least one of them is not what the SVG
     pipeline's tiling heuristic picks for its art (`auto_modes`: layer id → auto mode); otherwise None (= keep
     each target layer's own, art-derived mode). A mode is a property of an icon's geometry (tiles of one
     shape vs separate pieces), not of a look: copying an untouched icon's modes would fuse another icon's
@@ -136,10 +136,10 @@ def extract_style(project: Project, *, plate_fill: Optional[bool] = None, plate_
       the higher one; its top-most layer is the representative). The bevel is the largest bevel among those
       layers (builder clamping only ever lowers a bevel, so the largest is closest to what was requested). Flat
       cards (soft-alpha raster layers) only give the depth when the project has no other layer.
-      ``mode`` is None unless the user fused the visible layers into 'combined' bodies on purpose — see
-      :func:`extracted_mode`; `auto_modes` (layer id → the pipeline's auto mode, :meth:`ProjectStore.auto_modes`)
+      ``mode`` is None unless the user fused the visible layers into 'combined' bodies on purpose (see
+      :func:`extracted_mode`); `auto_modes` (layer id → the pipeline's auto mode, :meth:`ProjectStore.auto_modes`)
       tells the two apart. Without it the mode is never copied.
-    * layerMaterials: every layer's material by index from the bottom — only when they are not all equal.
+    * layerMaterials: every layer's material by index from the bottom, only when they are not all equal.
     * zGap: median clearance of the stacked layers, z(i) − max over its overlapped lower layers j of
       (z(j) + H(j)) ≥ 0 (overlap-aware real heights: `max_radii` = layer id → ``bis.stacking.LayerShape`` /
       ``LayerGeometry.maxRadius`` (footprint unknown: every layer overlaps), else a bbox bound); None when no layer
@@ -293,7 +293,7 @@ def resolve_style_request(
 ) -> Optional[StyleSpec]:
     """StyleSpec named by a StyleRequest / BatchRequest (exactly one of look / style / fromProject).
     `extract` (project id → its style; default: :func:`extract_style` of `load_project`, which never copies
-    layer modes) — the server passes :func:`project_style`, which knows the pipeline's auto modes.
+    layer modes). The server passes :func:`project_style`, which knows the pipeline's auto modes.
 
     Raises StyleError (none or several given; none is allowed with `allow_none` → returns None),
     LookNotFound, or the store's ProjectNotFound for an unknown ``fromProject``. The result is cleaned

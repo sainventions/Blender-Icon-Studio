@@ -1,4 +1,4 @@
-// The light-angle rig shared by the environment, the key light and the rim shader — a port of
+// The light-angle rig shared by the environment, the key light and the rim shader: a port of
 // blender_worker/lighting.py (glass doc §6.2, PLAN D1 axes: icon in XY, camera on +Z).
 import * as THREE from 'three'
 import type { Lighting, Presets } from '../../types'
@@ -19,7 +19,7 @@ export interface Rig {
 
 /**
  * Worker lighting.DIFFUSE_CAL / WORLD_CAL (exposure calibration, QA round 2 #12): the key + fill (diffuse) energy and
- * the world (dome wash, its key softbox spot and front term — diffuse wash + coat sheen on every face) are scaled so a
+ * the world (dome wash, its key softbox spot and front term: diffuse wash + coat sheen on every face) are scaled so a
  * face-on satin plate reads ≈ its SVG colour instead of being pushed into the tone mapper's highlight compression
  * (washed-out brand colours); the grazing rim strips (glass edge highlights) keep their energy.
  */
@@ -34,8 +34,8 @@ export const WORLD_CAL = 0.65
  */
 export const LIVE_CAL = 1.088
 /**
- * Per-component live calibration (round 5): the face-on diffuse response of each rig component — key, fill, the world's
- * gradient dome, its front term and key softbox spot (all three × environment), the rim strips — measured against Cycles
+ * Per-component live calibration (round 5): the face-on diffuse response of each rig component (key, fill, the world's
+ * gradient dome, its front term and key softbox spot (all three × environment), the rim strips) measured against Cycles
  * one component at a time (grey satin plate, 256 px, 'brand' mode) so every lighting preset, not only studio, lights a
  * plate like the worker. Multiplies the worker-mirrored energies below (× LIVE_CAL).
  */
@@ -43,12 +43,12 @@ export const LIVE_LIGHT_CAL = { key: 1.29, fill: 0.595, dome: 0.935, front: 0.94
 
 /**
  * Typical caster → receiver gap (art units) the key's single VSM blur radius is sized for: a layer's body over the plate
- * or the layer below it (z gap 0.13 − thickness 0.1, or its own 0.1 height) — round 5: was 0.25, which smeared the
+ * or the layer below it (z gap 0.13 − thickness 0.1, or its own 0.1 height). Round 5: was 0.25, which smeared the
  * contact shadows Cycles draws along every glyph's lower edge into a faint wide haze.
  */
 export const SHADOW_GAP = 0.05
 /**
- * Tall bodies (thick round glass, sphere heads, inflated domes: 0.3–0.5 high) cast from well above the plate: Cycles' big
+ * Tall bodies (thick round glass, sphere heads, inflated domes: 0.3-0.5 high) cast from well above the plate: Cycles' big
  * disk key spreads their shadow into a wide, faint penumbra, while the fixed 0.05 gap drew a hard, long, dark slab beside
  * them. The gap follows half the tallest caster's height (default 0.1-thick layers keep SHADOW_GAP), up to this.
  */
@@ -81,7 +81,7 @@ export function resolveRig(lighting: Lighting, presets: Presets | null | undefin
   }
 }
 
-/** Unit vector from the icon toward a light: (0,0,1)·cos e + (sin a, cos a, 0)·sin e — in the CAMERA's frame (x =
+/** Unit vector from the icon toward a light: (0,0,1)·cos e + (sin a, cos a, 0)·sin e, in the CAMERA's frame (x =
  *  screen right, y = screen up, z = toward the viewer); viewLightDir turns it into world space. */
 export function lightDir(angleDeg: number, elevDeg: number, out = new THREE.Vector3()): THREE.Vector3 {
   const a = THREE.MathUtils.degToRad(angleDeg)
@@ -92,7 +92,7 @@ export function lightDir(angleDeg: number, elevDeg: number, out = new THREE.Vect
 /**
  * CAMERA-RELATIVE lighting (PLAN §11 round 7, worker lighting.py `view`): the key / fill rig and the studio world are
  * laid out for the head-on view and turned with the camera's world rotation `view` (identity = head-on: camera on +Z
- * looking −Z, +Y up — the same convention as Blender's camera), so the iso / orbit views light like the head-on one
+ * looking −Z, +Y up, the same convention as Blender's camera), so the iso / orbit views light like the head-on one
  * and `lighting.angle` is relative to the view (at iso 1 a world-fixed key sat 5° from the mirror direction of the flat
  * tops: glyphs washed to white). World-space unit vector toward a light.
  */

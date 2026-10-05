@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 /* ------------------------------------------------------------------------------------------------
-   Blender Icon Studio — design tokens
+   Blender Icon Studio: design tokens
    Dark graphite pro-tool UI · hairline borders · glass panels · violet→cyan accent used sparingly.
    ------------------------------------------------------------------------------------------------ */
 @theme {
@@ -136,7 +136,7 @@
     margin: 0;
   }
 
-  /* Custom scrollbars — thin, unobtrusive, brighter on hover. */
+  /* Custom scrollbars: thin, unobtrusive, brighter on hover. */
   * {
     scrollbar-width: thin;
     scrollbar-color: rgb(255 255 255 / 0.12) transparent;

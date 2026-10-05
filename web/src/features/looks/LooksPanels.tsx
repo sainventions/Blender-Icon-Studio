@@ -98,7 +98,7 @@ export function LooksButton() {
         size="sm"
         icon={<Wand2 />}
         onClick={() => ref.current && pop.toggle(ref.current)}
-        tipLabel={activeLabel ? `Looks · current: ${activeLabel}` : 'Looks — restyle the whole icon in one click'}
+        tipLabel={activeLabel ? `Looks · current: ${activeLabel}` : 'Looks: restyle the whole icon in one click'}
         aria-label="Looks"
         aria-haspopup="dialog"
         aria-expanded={pop.open}
@@ -114,7 +114,7 @@ export function LooksButton() {
           <div className="min-w-0 flex-1">
             <div className="text-[13px] font-semibold text-fg">Looks</div>
             <div className="text-2xs text-fg-3">
-              Materials, depth, plate and lighting in one click — applied to every layer as a single undo step.
+              Materials, depth, plate and lighting in one click, applied to every layer as a single undo step.
             </div>
           </div>
         </div>

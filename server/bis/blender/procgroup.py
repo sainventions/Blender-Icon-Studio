@@ -1,7 +1,7 @@
 """Tie Blender child processes to the server's lifetime (Windows Job Object, KILL_ON_JOB_CLOSE).
 
 If the server dies without a clean shutdown (crash, `taskkill /F`, closed console, uvicorn --reload), the
-kernel closes our job handle and terminates every Blender process assigned to it — no orphaned worker keeps
+kernel closes our job handle and terminates every Blender process assigned to it, so no orphaned worker keeps
 holding VRAM on the shared 8 GB GPU. The "Open in Blender" GUI process is deliberately NOT assigned.
 On non-Windows platforms this is a no-op.
 """

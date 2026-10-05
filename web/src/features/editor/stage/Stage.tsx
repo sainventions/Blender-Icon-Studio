@@ -379,7 +379,7 @@ function RenderInfoChip({
               ? 'Actual pixels: one render pixel per screen pixel'
               : scale < 1
                 ? `Shown at ${Math.round(scale * 100)}% of the render's pixels`
-                : `Zoomed past the render's resolution (${Math.round(scale * 100)}%) — render larger for more detail`
+                : `Zoomed past the render's resolution (${Math.round(scale * 100)}%). Render larger for more detail`
           }
           className={cn(
             'ml-0.5 rounded-[4px] px-1 tabular leading-[14px] ring-1 ring-inset',
@@ -641,7 +641,7 @@ function StageToolbar({ layout, native }: { layout: StageLayout; native: number 
 }
 
 /**
- * View angle (PLAN §11 View): a CAD-style POV between head-on and isometric with the REAL layer distances — bound to
+ * View angle (PLAN §11 View): a CAD-style POV between head-on and isometric with the REAL layer distances, bound to
  * project.camera.iso, so the live view and every Blender render use the same camera. Front / Iso swing there.
  */
 function ViewAngleControl() {
@@ -653,7 +653,7 @@ function ViewAngleControl() {
     <div
       className={cn('flex items-center gap-1 px-0.5', perspective && 'opacity-60')}
       data-testid="view-angle"
-      data-tip={perspective ? 'The render camera is in perspective — moving this switches it back to the CAD view' : undefined}
+      data-tip={perspective ? 'The render camera is in perspective; moving this switches it back to the CAD view' : undefined}
     >
       <IconButton label="Top-down view (head-on)" kbd="X" size="sm" active={iso < 0.005 && !perspective} onClick={() => animateIso(0)}>
         <Square />

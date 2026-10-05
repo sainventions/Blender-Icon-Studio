@@ -1,6 +1,6 @@
 // Real-height, overlap-aware layer stacking in the editor (PLAN §11 rounds 7 + 8; the model is ./stackModel.ts): keeps a
 // recognised stack across client-side edits (thickness / inflate / position / scale / order / delete / hide / unhide:
-// hidden layers take no stack slot, QA r11 N12 — a PUT stores the project as sent, so the server cannot re-stack those)
+// hidden layers take no stack slot, QA r11 N12; a PUT stores the project as sent, so the server cannot re-stack those)
 // by installing keepProjectStack as the store's commit transform, and reports the collisions of a hand-placed stack (the
 // Re-stack hints of the Depth section and the Layers panel).
 import { useMemo } from 'react'

@@ -213,7 +213,7 @@ def _background_done(task: asyncio.Task) -> None:
 
 def background(coro: Coroutine[Any, Any, Any], name: str | None = None) -> asyncio.Task:
     """create_task() that keeps a strong reference until the task finishes (the event loop only holds weak
-    references — an unreferenced task can be garbage-collected mid-flight) and logs its failure."""
+    references; an unreferenced task can be garbage-collected mid-flight) and logs its failure."""
     task = asyncio.get_running_loop().create_task(coro, name=name)
     _BACKGROUND.add(task)
     task.add_done_callback(_background_done)

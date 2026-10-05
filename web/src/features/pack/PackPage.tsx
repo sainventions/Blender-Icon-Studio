@@ -78,7 +78,7 @@ interface PackRun {
 const PREFS_KEY = 'bis.pack.v1'
 const RUN_KEY = 'bis.pack.lastRun'
 const SELECTION_KEY = 'bis.pack.selection'
-// Pack renders are draft/preview only, and the server clamps those tiers to ≤ 512 px (GPU rule) — never offer more.
+// Pack renders are draft/preview only, and the server clamps those tiers to ≤ 512 px (GPU rule), so never offer more.
 const SIZES = [256, 512] as const
 const MAX_PACK_SIZE = 512
 
@@ -176,7 +176,7 @@ function useBatchJob(jobId: string | null): { job: Job | null; missing: boolean 
           return
         }
       }
-      // WS already streams the job (partial `result.items` included): poll slowly then, as a safety net only —
+      // WS already streams the job (partial `result.items` included): poll slowly then, as a safety net only, since
       // a long pack's result grows with every icon.
       timer = window.setTimeout(tick, useAppStore.getState().ws === 'open' ? 5000 : 1500)
     }
@@ -412,10 +412,10 @@ function Intro() {
     <section className="flex flex-wrap items-end justify-between gap-6 pb-6 pt-9 animate-slide-up">
       <div>
         <h1 className="font-display text-[34px] font-semibold leading-tight tracking-[-0.03em] text-fg">
-          Icon Pack <span className="text-gradient">— one look, every icon.</span>
+          Icon Pack: <span className="text-gradient">one look, every icon.</span>
         </h1>
         <p className="mt-2 max-w-[620px] text-[13.5px] leading-relaxed text-fg-3">
-          Got a whole icon set? Select the icons, pick a look and Blender renders them all on your GPU — each one becomes a project you can fine-tune later.
+          Got a whole icon set? Select the icons, pick a look and Blender renders them all on your GPU, and each one becomes a project you can fine-tune later.
         </p>
       </div>
       <ol className="flex gap-2">
@@ -608,7 +608,7 @@ function SourcePicker({ selected, setSelected }: { selected: Set<SourceKey>; set
       )}
       {tab === 'projects' && projects && projectList.length === 0 && (
         <EmptyState icon={<Layers />} title={query ? `No projects match “${query}”` : 'No projects yet'}>
-          {query ? 'Try another name.' : 'Import an SVG or open a sample on the home screen — your projects show up here.'}
+          {query ? 'Try another name.' : 'Import an SVG or open a sample on the home screen. Your projects show up here.'}
         </EmptyState>
       )}
     </div>
@@ -723,7 +723,7 @@ function Settings({
     : st.kind === 'keep'
       ? { title: 'Keep each icon’s style', body: 'Samples get the default stack; your projects keep their own materials and lighting.' }
       : st.kind === 'copied'
-        ? { title: 'Copied style', body: copied ? `The style you copied from “${copied.sourceName}”.` : 'Nothing copied — copy a style in the editor (Ctrl+Alt+C).' }
+        ? { title: 'Copied style', body: copied ? `The style you copied from “${copied.sourceName}”.` : 'Nothing copied. Copy a style in the editor (Ctrl+Alt+C).' }
         : st.kind === 'project'
           ? { title: 'Style of a project', body: `Materials, depth, plate and lighting of “${projects?.find((p) => p.id === st.id)?.name ?? '…'}”.` }
           : { title: 'Pick a look', body: '' }
@@ -847,7 +847,7 @@ function Settings({
           <div className="flex items-start gap-1.5 rounded-md border border-warn/20 bg-warn/[0.07] px-2 py-1.5 text-3xs leading-snug text-warn/90">
             <TriangleAlert className="mt-px h-3 w-3 shrink-0" />
             <span>
-              {projectCount} existing project{projectCount === 1 ? ' is' : 's are'} restyled in place — duplicate {projectCount === 1 ? 'it' : 'them'} first to keep the original.
+              {projectCount} existing project{projectCount === 1 ? ' is' : 's are'} restyled in place. Duplicate {projectCount === 1 ? 'it' : 'them'} first to keep the original.
             </span>
           </div>
         )}
@@ -863,7 +863,7 @@ function Settings({
         </div>
         {running ? (
           <Button variant="secondary" size="lg" className="w-full" icon={<LayoutGrid />} onClick={onShowResults}>
-            A pack is rendering — show results
+            A pack is rendering: show results
           </Button>
         ) : (
           <Button variant="primary" size="lg" className="w-full" icon={<Play className="fill-current" />} loading={submitting} disabled={disabled} onClick={onRun}>
@@ -932,7 +932,7 @@ function Results({ run, job, onNew, onClear }: { run: PackRun; job: Job | null; 
   // server publishes partial `result.items`).
   const m = active ? /Icon\s+(\d+)\s*\/\s*(\d+)/.exec(job?.message ?? '') : null
   const current = m ? Math.max(0, Number(m[1]) - 1) : run.sources.findIndex((s) => !byKey.has(s.key))
-  // Highest "Icon i/n" seen — a cancelled job reports no items, but the icons before it were rendered.
+  // Highest "Icon i/n" seen: a cancelled job reports no items, but the icons before it were rendered.
   const seen = useRef(0)
   const passedNow = m ? current : done
   if (passedNow > seen.current) seen.current = passedNow
@@ -960,7 +960,7 @@ function Results({ run, job, onNew, onClear }: { run: PackRun; job: Job | null; 
                 <RefreshCw className="h-3.5 w-3.5 animate-spin text-accent-2" />
               )}
               {state === 'done'
-                ? `Pack ready — ${rendered} of ${run.sources.length} icon${run.sources.length === 1 ? '' : 's'} rendered`
+                ? `Pack ready: ${rendered} of ${run.sources.length} icon${run.sources.length === 1 ? '' : 's'} rendered`
                 : state === 'error'
                   ? 'The pack stopped with an error'
                   : state === 'cancelled'
@@ -1101,7 +1101,7 @@ function ResultTile({
         />
       )}
       {pending === 'rendered' ? (
-        <span className="absolute bottom-1.5 right-1.5 flex items-center gap-0.5 rounded bg-black/45 px-1 text-[9px] font-medium text-ok" data-tip="Rendered — the project is already in Your projects">
+        <span className="absolute bottom-1.5 right-1.5 flex items-center gap-0.5 rounded bg-black/45 px-1 text-[9px] font-medium text-ok" data-tip="Rendered: the project is already in Your projects">
           <Check className="h-2.5 w-2.5" /> Done
         </span>
       ) : pending === 'rendering' ? (

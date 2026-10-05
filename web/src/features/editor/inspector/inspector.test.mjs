@@ -133,7 +133,7 @@ test('updateElementMaterials adds / removes overrides of the layer’s own shape
 })
 
 // ------------------------------------------------------------------------------------------ depth
-test('Roundness = bevel / (thickness / 2) — the renderers’ own clamp; 1 = full pill edge', () => {
+test('Roundness = bevel / (thickness / 2): the renderers’ own clamp; 1 = full pill edge', () => {
   const l = layer()
   assert.equal(bevelLimit(l), 0.05)
   assert.ok(Math.abs(roundnessOf(l) - 0.9) < 1e-9)
@@ -187,14 +187,14 @@ test('Re-stack: z0 = stackLift, z(i+1) = z(i) + H(i) + stackGap; locked layers k
   const [l2, n2] = restack([locked, layer({ id: 'L2' })])
   assert.equal(l2, locked)
   assert.ok(Math.abs(n2.depth.z - 0.73) < 1e-9)
-  // the running z is not rounded (server stacking.stack_z): Photos' import stack (H = 0.25024641327) is a no-op —
+  // the running z is not rounded (server stacking.stack_z): Photos' import stack (H = 0.25024641327) is a no-op;
   // accumulating the 5-decimal values gave 0.5605 / 0.84075 instead of the server's 0.56049 / 0.84074
   const photos = [0, 0.28025, 0.56049, 0.84074].map((z, i) => layer({ id: `P${i}`, depth: { ...layer().depth, z } }))
   assert.equal(restack(photos, () => 0.25024641327), photos)
   // the Depth section's Re-stack button uses the shared rule with the bundle's maxRadius (features/editor/stacking.ts)
   const inspector = read('src/features/editor/inspector/LayerInspector.tsx')
   assert.match(inspector, /restackProject\(p, geometry, presets\)/)
-  // (round 8: the model lives in stackModel.ts — overlap-aware, footprints from the bundle; stacking.test.mjs runs it
+  // (round 8: the model lives in stackModel.ts: overlap-aware, footprints from the bundle; stacking.test.mjs runs it
   // against the server)
   const model = read('src/features/editor/stackModel.ts')
   assert.match(model, /ruleHeight\(l, lg\?\.maxRadius, S\)/)
@@ -287,7 +287,7 @@ test('a recognised real-height stack is kept across edits (server stack_gap); cu
   const custom = mk([0, 0.4, 0.6])
   const edited = custom.map((l) => ({ ...l, depth: { ...l.depth, inflate: 1 } }))
   assert.equal(keepStack(custom, edited, H, H), edited)
-  // which edits can move the stack: heights, order, layer set, scale — never a plain z drag
+  // which edits can move the stack: heights, order, layer set, scale; never a plain z drag
   assert.equal(stackAffected(stack, stack, 1, 1), false)
   assert.equal(stackAffected(stack, after, 1, 1), true)
   assert.equal(stackAffected(stack, [stack[1], stack[0], stack[2]], 1, 1), true)
@@ -295,7 +295,7 @@ test('a recognised real-height stack is kept across edits (server stack_gap); cu
   const zOnly = stack.map((l, i) => (i === 2 ? { ...l, depth: { ...l.depth, z: 0.9 } } : l))
   assert.equal(stackAffected(stack, zOnly, 1, 1), false)
   // the editor keeps the stack on every commit: the editor page installs keepProjectStack as the store's commit
-  // transform (injected, so the store — loaded by the home page too — does not bundle the 3D geometry code)
+  // transform (injected, so the store, loaded by the home page too, does not bundle the 3D geometry code)
   const store = read('src/store/editor.ts')
   assert.match(store, /raw !== s\.project && commitTransform \? commitTransform\(s\.project, raw, s\.geometry\) : raw/)
   const imports = store.split(/\r?\n/).filter((l) => l.startsWith('import')).join(' ')

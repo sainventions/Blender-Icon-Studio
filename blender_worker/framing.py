@@ -6,7 +6,7 @@ CAD iso view (PLAN §11 View): the head-on view is the CAD "top" view of the ico
 toward the viewer, art +Y up on screen). ``camera.iso`` t in 0..1 turns an ORTHOGRAPHIC camera along the
 shortest rotation (quaternion slerp) from that head-on basis to the standard isometric basis: view direction
 (1, −1, 1)/√3 (camera front-right-top: elevation 35.264° above the icon plane, azimuth 45°), screen up = the
-stack axis +Z (camera x = (1, 1, 0)/√2, y = (−1, 1, 2)/√6) — the plate becomes a diamond, the art's +Y
+stack axis +Z (camera x = (1, 1, 0)/√2, y = (−1, 1, 2)/√6): the plate becomes a diamond, the art's +Y
 points up-right and layers rise straight up on screen at their REAL z distances (no explode).
 :func:`ortho_plan` fits the subject: every visible piece's convex hull at its back and front z (the plate's
 outline spans −1..1; without a plate the canvas square −1..1 at z = 0 stands in), projected onto the camera's
@@ -20,13 +20,13 @@ subject*: the convex hull of every visible piece at its back and front z (plate 
 ``z = −thickness .. 0``, each layer's silhouette over its real z span after float offsets).
 
 * The camera orbits ``target`` (centre of the subject's 3D bounds) at a distance that only depends on the
-  field of view (perspective strength), never on the subject — so animations orbit a fixed point.
+  field of view (perspective strength), never on the subject, so animations orbit a fixed point.
 * The frame is then fitted exactly in *tangent space* (``x/−z, y/−z`` in camera coordinates): the lens
   angle scales the frame uniformly and the lens shift centres it, both without moving the camera. Under a
   pinhole projection the image of a planar convex polygon is the convex hull of its projected vertices,
   so the hull vertices bound the subject exactly.
 * Animations fit the UNION of the per-frame tangent-space bounds over sampled frames: one lens angle and one
-  shift for the whole clip — the subject never leaves the frame and never "breathes" or jitters.
+  shift for the whole clip: the subject never leaves the frame and never "breathes" or jitters.
 """
 from __future__ import annotations
 

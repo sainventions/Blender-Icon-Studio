@@ -1,8 +1,8 @@
 """Material swatches + synthetic scenes (swatch gallery, worker warm-up, tests).
 
-``render_swatches`` renders every preset of shared/presets.json on a standard swatch scene — a light
+``render_swatches`` renders every preset of shared/presets.json on a standard swatch scene: a light
 squircle plate with three dark bars (so glass shows its refraction/lensing) under a thick disc in the
-preset material painted with a vivid gradient — with Cycles preview quality at 192 px into
+preset material painted with a vivid gradient, rendered with Cycles preview quality at 192 px into
 ``web/public/swatches/<preset>.png``.
 """
 from __future__ import annotations

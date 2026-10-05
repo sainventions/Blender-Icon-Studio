@@ -1,4 +1,4 @@
-// Animated layered "Liquid Glass" icon for the home hero — pure CSS 3D (no WebGL on the home screen).
+// Animated layered "Liquid Glass" icon for the home hero: pure CSS 3D (no WebGL on the home screen).
 import { useId, useMemo } from 'react'
 import { squirclePath } from './icons'
 

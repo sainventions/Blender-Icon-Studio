@@ -8,11 +8,11 @@
 // box shows around the live view (Khronos PBR Neutral alone turns a #17171c checker into ~#02020c).
 //
 // The wallpaper is defined in world units (like the worker's wallpaper plane behind the plate), so the background
-// texture is framed to match the front camera (ortho_scale 2.24 / zoom across the icon frame — the editor's view
-// window, store.frame — so it zooms and pans with the icon).
+// texture is framed to match the front camera (ortho_scale 2.24 / zoom across the icon frame: the editor's view
+// window, store.frame, so it zooms and pans with the icon).
 //
 // What REFRACTED light sees behind the icon (round 7): in Cycles only camera rays see the backdrop colour / the
-// transparent film — rays refracted through glass reach the studio world. three.js refracts by looking up its
+// transparent film; rays refracted through glass reach the studio world. three.js refracts by looking up its
 // transmission pass (the scene rendered behind the glass), so without help, glass floating above the plate in the iso
 // view (Photos' petals on a real-height stack) showed the dark stage and rendered black. TransmissionWorld draws the
 // studio environment behind everything in that pass only (camera-relative like the lights: the screen spans a wide

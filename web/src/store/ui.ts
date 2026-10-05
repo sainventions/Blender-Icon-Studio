@@ -24,7 +24,7 @@ interface UiState {
   isoAnim: number | null
   showGrid: boolean
   /** CAD-style stage view (zoom at the cursor / pan; features/editor/stage/view.ts) shared by Live, Render and
-   *  Compare. A VIEW transform only — never the project's render framing (camera.zoom). null = Fit. Not persisted. */
+   *  Compare. A VIEW transform only, never the project's render framing (camera.zoom). null = Fit. Not persisted. */
   stageView: StageView | null
   /** Live / Blender divider of the Compare view, as a fraction of the stage width. */
   compareSplit: number

@@ -80,8 +80,8 @@ Confidence labels:
 |---|---|---|---|
 | **Mode** | Individual / Combined | same | Individual. *Individual* treats each layer as its own piece of glass. *Combined* treats the group's layers as one glass object (one shared rim around the union, no inner edges at overlaps) [Apple] |
 | **Specular** | On/Off toggle. Turning it off removes "the slight blur to the background and a light highlight around the edges" | **Off / Automatic / Inside / Outside** (`specular-highlight-placement`). *Inside* is best when the foreground is darker than the background; *Outside* when the background is darker. *Automatic* decides from layer colors | On / Automatic. On OS versions before 27, Inside and Outside simply mean "on" [Apple] |
-| **Blur** (frosting) | toggle + % | toggle + % (`blur-material`, 0–1, default 0.5) | 50% [Obs]. Frosts whatever is behind the group inside its shapes |
-| **Refraction** | — (not available) | **toggle + 2D pad** (drag a puck) plus % fields for **Height/Depth** (radius of the lensing band, "how rounded") and **Strength** ("how much artwork is drawn into the shape"); optional **inverse refraction** | 0–1 each. Has no effect before OS 27 [Apple; WWDC26 lab] |
+| **Blur** (frosting) | toggle + % | toggle + % (`blur-material`, 0-1, default 0.5) | 50% [Obs]. Frosts whatever is behind the group inside its shapes |
+| **Refraction** | not available | **toggle + 2D pad** (drag a puck) plus % fields for **Height/Depth** (radius of the lensing band, "how rounded") and **Strength** ("how much artwork is drawn into the shape"); optional **inverse refraction** | 0-1 each. Has no effect before OS 27 [Apple; WWDC26 lab] |
 | **Translucency** | toggle + % | toggle + % | 50% [Obs]. Described as "transparent at the bottom, retains color at top". Used less by default in 2.0 to get sharper icons [WWDC26 lab] |
 | **Shadow** | **Neutral** (UI label sometimes "Natural") / **Chromatic** / Off, plus opacity % | same kinds, but rendered as **"ring shadows"** with more definition around edges | Neutral 50% [Obs]. JSON kinds: `neutral`, `layer-color` (chromatic), `none`, `automatic` [3P] |
 | **Opacity** (group) | % | % | per appearance |
@@ -147,8 +147,8 @@ Confidence labels:
 |---|---|---|---|---|
 | iOS / iPadOS / macOS | 1024×1024 square | Rounded rectangle (continuous-curvature "squircle", rounder radius since 26, concentric with hardware) | Yes ("iOS, macOS", Shared by default; 2.0 can specialize iOS vs macOS) | 6 |
 | watchOS | 1088×1088 square | Circle | Yes (toggle) | none |
-| visionOS | 1024×1024, 2–3 layers | Circle, 3D | **No** (Xcode image stack) | — |
-| tvOS | 800×480, 2–5 layers | Rounded rectangle, parallax | **No** (image stack) | — |
+| visionOS | 1024×1024, 2-3 layers | Circle, 3D | **No** (Xcode image stack) | - |
+| tvOS | 800×480, 2-5 layers | Rounded rectangle, parallax | **No** (image stack) | - |
 
 - The **Document inspector** has a platforms toggle: "iOS, macOS" [Shared ▾] [on/off] and "watchOS" [on/off]. It hides the controls for platforms you don't ship [Obs].
 - **Color spaces:** sRGB, Gray Gamma 2.2, Display P3 [HIG]. JSON also allows `extended-srgb` and `extended-gray` values above 1.0, and 2.0 adds **HDR export** [3P; WWDC26].
@@ -192,8 +192,8 @@ These are toolbar capsules above the canvas. They change only the preview.
   - `lighting` (`individual|combined`);
   - `specular` (bool);
   - (2.0) `specular-highlight-placement` (`automatic|inside|outside`);
-  - `blur` (1.x) or `blur-material` (2.0, 0–1);
-  - (2.0) `refractivity {enabled, strength 0–1, depth 0–1}`;
+  - `blur` (1.x) or `blur-material` (2.0, 0-1);
+  - (2.0) `refractivity {enabled, strength 0-1, depth 0-1}`;
   - `translucency {enabled, value}`;
   - `shadow {kind, opacity}`;
   - `blend-mode`, `opacity`, `hidden`;
@@ -286,7 +286,7 @@ Icon Composer 1.x layout, based on Apple's annotated screenshot; 2.0 differences
 **UI lessons for us:**
 - Apple's single big preview forces you to toggle variants one at a time. We should offer a **variant matrix**: every appearance × platform × several sizes at once. This is a "waterfall" plus contact sheet.
 - Apple's override model is good and should be copied: scope pop-up, nested override rows, "Vary for…".
-- Its value ranges are too coarse: binary toggles and 0–100% with no units. We should expose real physical units (mm or px depth, IOR, roughness, light angle and elevation) behind "simple" presets.
+- Its value ranges are too coarse: binary toggles and 0-100% with no units. We should expose real physical units (mm or px depth, IOR, roughness, light angle and elevation) behind "simple" presets.
 - Apple shows no 3D or exploded view of the stack. Our three.js viewport can offer a **tilt/orbit "exploded" view** of the layer stack, a direct win.
 
 ---
@@ -496,7 +496,7 @@ In Blender this maps naturally to real extruded and beveled curves with a Glass 
 
 ## 6. Open questions / to verify
 - The exact squircle path and grid for 26/27: extract from the Apple Design Resources templates (Figma or Sketch).
-- How *inverse* refraction is encoded in `icon.json`: the schema only shows strength and depth in the range 0–1. Inspect a real 2.0 file.
+- How *inverse* refraction is encoded in `icon.json`: the schema only shows strength and depth in the range 0-1. Inspect a real 2.0 file.
 - The exact Icon Composer 2 Export dialog fields: platform, rendition, size, scale, HDR, and whether there is a batch "all" option.
 - The full `ictool` flags in 2.0, for example light angle and tint. The current knowledge comes from third-party wrappers.
 - Whether the 2.0 preview-size control is literally a "waterfall" view, and whether any light-angle preview remains in 2.0.

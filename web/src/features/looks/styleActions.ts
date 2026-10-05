@@ -25,7 +25,7 @@ function setApplying(id: string | null) {
   listeners.forEach((l) => l())
 }
 
-/** Toast "Undo" for a style change — only while that project is still open (the toast outlives navigation). */
+/** Toast "Undo" for a style change, only while that project is still open (the toast outlives navigation). */
 const undoAction = (projectId: string | undefined) => ({
   label: 'Undo',
   onClick: () => {
@@ -62,7 +62,7 @@ export async function copyStyle() {
     if (!p.layers.length) {
       // The server falls back to default layer materials for a project without layers: say so, since pasting
       // this would reset every layer of the target to that default.
-      toast.warning('Style copied — plate and lighting only', {
+      toast.warning('Style copied: plate and lighting only', {
         id: 'style-copied',
         description: `“${p.name}” has no layers, so pasting gives every layer the default material.`,
       })
@@ -70,7 +70,7 @@ export async function copyStyle() {
     }
     toast.success('Style copied', {
       id: 'style-copied',
-      description: `From “${p.name}” — paste it onto any project with ${prettyShortcut('Mod+Alt+V')}.`,
+      description: `From “${p.name}”. Paste it onto any project with ${prettyShortcut('Mod+Alt+V')}.`,
     })
   } catch (e) {
     toast.error('Could not copy the style', { description: errorMessage(e) })

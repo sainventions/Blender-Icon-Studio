@@ -84,7 +84,7 @@ export function AnimateDialog() {
       width={680}
       icon={<Clapperboard />}
       title="Animate"
-      description="Render a short motion clip of your icon — perfect for App Store previews and launch posts."
+      description="Render a short motion clip of your icon, perfect for App Store previews and launch posts."
       footer={
         job ? (
           <>
@@ -131,7 +131,7 @@ export function AnimateDialog() {
                 <img src={url} alt="Animation" className="mx-auto block h-[min(52vh,440px)] w-full object-contain" />
               )
             ) : (
-              <div className="py-10 text-center text-2xs text-fg-3">Finished — download the frames below.</div>
+              <div className="py-10 text-center text-2xs text-fg-3">Finished. Download the frames below.</div>
             )}
             <div className="border-t border-line bg-surface-1/80 px-3 py-2 text-3xs text-fg-4">
               {frames.length ? `${frames.length} frames · ` : ''}

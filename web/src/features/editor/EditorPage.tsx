@@ -109,7 +109,7 @@ function EditorLayout() {
             <ResizeHandle
               side="left"
               onResize={(d, phase) => {
-                // 'end' carries no delta — applying it would snap the panel back to its start width.
+                // 'end' carries no delta: applying it would snap the panel back to its start width.
                 if (phase === 'start') startW.current = useUi.getState().leftWidth
                 else if (phase === 'move') setUi({ leftWidth: clamp(startW.current + d, PANEL_LIMITS.left[0], PANEL_LIMITS.left[1]) })
               }}

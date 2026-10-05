@@ -7,20 +7,20 @@ live in ``Layer.elementMaterials`` (element id → MaterialSpec, merged over ``L
 
 This module keeps stored documents on that schema:
 
-* :func:`clean_params` — drops params the schema does not know (the round ≤ 5 fakes: ``frost``, ``glow``,
+* :func:`clean_params`: drops params the schema does not know (the round ≤ 5 fakes: ``frost``, ``glow``,
   ``rim``, ``translucency``, ``dispersion``, ``absorption``, ``bloom``, ...; and the viewport's never-saved
   ``__*`` intent flags), renames the few legacy params that ARE a Principled input under a new name
   (:data:`LEGACY_PARAM_RENAMES`), and drops/clamps values of the wrong type or outside the slider range.
-* :func:`normalize_project` — what :class:`bis.projects.ProjectStore` applies on every load and save: cleans
+* :func:`normalize_project`: what :class:`bis.projects.ProjectStore` applies on every load and save: cleans
   every material (layers, per-shape overrides, appearance overrides, plate), drops per-shape overrides of
   elements that are no longer in their layer, turns the legacy art-directed shadow kinds (``neutral`` /
-  ``chromatic``) into ``physical`` (Cycles' true shadow — the only kind besides ``none`` §11 renders) and resets
+  ``chromatic``) into ``physical`` (Cycles' true shadow, the only kind besides ``none`` that §11 renders) and resets
   the legacy ``camera.explode`` z-gap multiplier to 1 (renders show REAL distances; the CAD-style POV is
   ``camera.iso``).
-* :func:`carry_element_materials` — keeps per-shape overrides attached to their elements across layer edits
+* :func:`carry_element_materials`: keeps per-shape overrides attached to their elements across layer edits
   (merge / split / move / re-split hand back new Layer objects).
 
-Without a readable schema (presets.json missing) params are left untouched — never wiped.
+Without a readable schema (presets.json missing) params are left untouched, never wiped.
 """
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ def _raw(presets: Any) -> Mapping[str, Any]:
 
 
 def param_schema(presets: Any) -> dict[str, dict]:
-    """``{param: spec}`` — the union of every preset's params (they all share the one Principled schema)."""
+    """``{param: spec}``: the union of every preset's params (they all share the one Principled schema)."""
     out: dict[str, dict] = {}
     for mat in (_raw(presets).get("materials") or {}).values():
         for key, spec in ((mat or {}).get("params") or {}).items():

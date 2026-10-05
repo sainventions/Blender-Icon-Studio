@@ -6,5 +6,5 @@ export { resolveAppearance } from '../../lib/appearance'
 // World height of a layer's height-field bodies (the live mirror of blender_worker scene._body_height). The stacking model
 // (features/editor/stackModel.ts) imports the pure geometry module directly so its node tests need no Viewport.
 export { layerBodyHeight, layerScale } from '../../viewport/geometry/layerGeometry'
-// The round-edge radius a body really gets (round 8: a minimum vertical wall) — the Depth section's read-out.
+// The round-edge radius a body really gets (round 8: a minimum vertical wall), for the Depth section's read-out.
 export { rimBevel } from '../../viewport/geometry/heightfield'

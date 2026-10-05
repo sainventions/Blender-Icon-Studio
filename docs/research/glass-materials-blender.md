@@ -12,7 +12,7 @@ Research for **Blender Icon Studio**: physically recreating Apple-style Liquid G
 - Date: 2026-10-03.
 - How the claims were checked. Each claim carries one of these tags:
   - **[I]**: checked by introspection in Blender 5.0.0 headless (`blender -b --factory-startup --python`): node type ids, socket names, enum values and RNA property names.
-  - **[V]**: checked with a test render. All 14 material recipes below were built by script and rendered in **Cycles (OptiX GPU, 32 spp, OptiX/OIDN denoise, 192–256 px)** and **EEVEE (16–64 samples)**.
+  - **[V]**: checked with a test render. All 14 material recipes below were built by script and rendered in **Cycles (OptiX GPU, 32 spp, OptiX/OIDN denoise, 192-256 px)** and **EEVEE (16-64 samples)**.
   - **[D]**: taken from the Blender 5.0 manual or release notes.
   - **[E]**: my own estimate or inference, not measured.
 - Test harness used for the renders (throwaway): `%TEMP%/claude/.../scratchpad/glass/iconlab.py`. The verified code is reproduced in §9.
@@ -25,7 +25,7 @@ Research for **Blender Icon Studio**: physically recreating Apple-style Liquid G
 ## 0. TL;DR: decisions for the app
 
 1. **Geometry makes the Liquid Glass look; the shader only finishes it.** Lensing at the edges comes from a **pill-shaped (fully rounded) edge profile**: bevel radius about ½ of the layer thickness, shaded smooth. Build each SVG layer as a 2D curve with `extrude` + `bevel_mode='ROUND'` + `bevel_depth`, and set `offset = -bevel_depth` so the silhouette still matches the SVG. [V]
-2. **Liquid Glass shader** = `ShaderNodeBsdfPrincipled` with `Transmission Weight` 1, `Roughness` 0.0–0.35 ("frost"), `IOR` 1.45, `Coat Weight` 1 with `Coat Roughness` 0.02 (the crisp wet highlight), and `Specular IOR Level` 0.6.
+2. **Liquid Glass shader** = `ShaderNodeBsdfPrincipled` with `Transmission Weight` 1, `Roughness` 0.0-0.35 ("frost"), `IOR` 1.45, `Coat Weight` 1 with `Coat Roughness` 0.02 (the crisp wet highlight), and `Specular IOR Level` 0.6.
    - Add an optional **light-angle-locked rim emission** (Geometry Normal · light direction × Layer Weight Fresnel → `Emission Strength`).
    - Wrap it in the **Light Path "Is Shadow Ray" → Transparent BSDF** trick, which gives soft neutral or chromatic shadows. [V, both engines]
 3. **Chromatic shadows:** use the Is-Shadow-Ray trick with a tinted Transparent BSDF.
@@ -52,8 +52,8 @@ Research for **Blender Icon Studio**: physically recreating Apple-style Liquid G
    - Use `object.is_shadow_catcher=True` for floating marketing shots. Shadows land in alpha. [V]
    - EEVEE has no shadow catcher. [D]
 10. **Performance (measured):**
-    - Cycles OptiX at 192–256 px / 32 spp: **about 0.35–0.65 s per frame**, including scene sync.
-    - EEVEE at 256 px: **0.1 s (16 spp, warm) / 0.26 s (64 spp)**, plus a 0.5–1.5 s shader compile the first time.
+    - Cycles OptiX at 192-256 px / 32 spp: **about 0.35-0.65 s per frame**, including scene sync.
+    - EEVEE at 256 px: **0.1 s (16 spp, warm) / 0.26 s (64 spp)**, plus a 0.5-1.5 s shader compile the first time.
     - Peak GPU memory for the whole Blender process was about 1.5 GB. [V]
 
 ---
@@ -65,21 +65,21 @@ Apple describes Liquid Glass as a material that bends and concentrates light in 
 | Visual component | What it is physically | Blender mapping (Cycles) | EEVEE notes |
 |---|---|---|---|
 | **Specular rim highlights** (bright arc on the lit edge, fainter on the opposite inner edge) | Fresnel reflection of bright sources on the rounded edge; the opposite arc is light refracted through the body and reflected off the far inner wall | Pill-profile bevel geometry. Coat layer (`Coat Weight` 1, `Coat Roughness` ≈0.02). **Rim strip lights at grazing angles** plus a softbox in the world. Optional art-directed boost: emission = `Fresnel × max(N·L,0)^3 + 0.45·max(−N·L,0)^3` | Same nodes work. Area lights give shaped specular highlights (LTC). [V] |
-| **Refraction / lensing near edges** | Snell refraction through a thick body whose surface curves at the rim | `Transmission Weight` 1, `IOR` 1.4–1.6, rounded bevel. More bevel radius or more IOR gives stronger lensing | Needs Raytraced Transmission plus scene raytracing. Only content in the depth buffer is refracted (screen-trace). Off-screen content falls back to probes. [D] |
-| **Frosted blur** (Icon Composer "blur") | Microfacet roughness of the transmissive interface | Principled `Roughness` 0.05–0.35 on the transmission. Optional micro bump (Noise, Scale ≈400 → Bump strength 0.05–0.1) for a sandblasted look | Set `trace_max_roughness` ≥ roughness (we use 0.8). Otherwise rough transmission falls back to probe/world and the layers behind disappear. [D/V] |
+| **Refraction / lensing near edges** | Snell refraction through a thick body whose surface curves at the rim | `Transmission Weight` 1, `IOR` 1.4-1.6, rounded bevel. More bevel radius or more IOR gives stronger lensing | Needs Raytraced Transmission plus scene raytracing. Only content in the depth buffer is refracted (screen-trace). Off-screen content falls back to probes. [D] |
+| **Frosted blur** (Icon Composer "blur") | Microfacet roughness of the transmissive interface | Principled `Roughness` 0.05-0.35 on the transmission. Optional micro bump (Noise, Scale ≈400 → Bump strength 0.05-0.1) for a sandblasted look | Set `trace_max_roughness` ≥ roughness (we use 0.8). Otherwise rough transmission falls back to probe/world and the layers behind disappear. [D/V] |
 | **Translucency** (how much shows through) | Mix of clear transmission vs milky scattering or opaque base | Cycles: `Transmission Weight` 1 → 0.6 for milky. Or keep 1 and lighten `Base Color` / raise roughness | **Keep `Transmission Weight`=1.** Values below 1 mix Diffuse + Refraction, which EEVEE renders as visible grain. [V, see figure] Use roughness and `Base Color` instead. |
-| **Tint / fill** | Absorption | `Base Color` tints transmission at every interface (squared through a slab). `ShaderNodeVolumeAbsorption` gives Beer–Lambert, depth-dependent tint | Volumes are not visible through refraction in EEVEE. [D/V] Use `Base Color` only. |
-| **Shadows – neutral / chromatic** | Light attenuated (and coloured) by the glass; physically, focused caustics | Is-Shadow-Ray → Transparent BSDF (`Color` = grey for neutral, tint for chromatic). See §5 | Light Path "Is Shadow" is supported, but shadows are greyscale only. [V] |
+| **Tint / fill** | Absorption | `Base Color` tints transmission at every interface (squared through a slab). `ShaderNodeVolumeAbsorption` gives Beer-Lambert, depth-dependent tint | Volumes are not visible through refraction in EEVEE. [D/V] Use `Base Color` only. |
+| **Shadows (neutral / chromatic)** | Light attenuated (and coloured) by the glass; physically, focused caustics | Is-Shadow-Ray → Transparent BSDF (`Color` = grey for neutral, tint for chromatic). See §5 | Light Path "Is Shadow" is supported, but shadows are greyscale only. [V] |
 | **Inner glow / illumination from within** | Light scattered inside the body | Emission driven by `1 − LayerWeight.Facing` (edge glow inside), or a low-density `ShaderNodeVolumeScatter` (Cycles) | Emission works. Volume does not (it is not seen through refraction). |
 | **Chromatic dispersion at edges** | Wavelength-dependent IOR | 3-lobe first-hit trick (§3.4). Or post: compositor `CompositorNodeLensdist` `Dispersion` input (whole frame) | Not possible in-shader. The 3-lobe material renders as white noise. [V] |
 | **Light responding to motion** | Moving light sources | Animate the single "light angle" parameter of the rig (§6) | Same |
-| **Depth / layer separation** | Parallax plus contact shadows between layers | Real Z gaps between layers (0.1–0.3 × layer thickness), soft area-light shadows | Same (soft shadows via shadow-map raytracing) |
+| **Depth / layer separation** | Parallax plus contact shadows between layers | Real Z gaps between layers (0.1-0.3 × layer thickness), soft area-light shadows | Same (soft shadows via shadow-map raytracing) |
 
 ---
 
 ## 2. Geometry rules (they matter as much as the shader)
 
-1. **Pill edge = lens.** Set `bevel_depth ≈ 0.4–0.5 × thickness` with `bevel_resolution` 6–8 and smooth shading. A sharp extrusion refracts like a window pane, with no lensing and no rim. [V]
+1. **Pill edge = lens.** Set `bevel_depth ≈ 0.4-0.5 × thickness` with `bevel_resolution` 6-8 and smooth shading. A sharp extrusion refracts like a window pane, with no lensing and no rim. [V]
 2. **SVG layer → curve** (verified API, Blender 5.0) [I/V]:
    ```python
    cu = bpy.data.curves.new(name, 'CURVE')
@@ -93,7 +93,7 @@ Apple describes Liquid Glass as a material that bends and concentrates light in 
    ```
    Do **not** leave `offset` at a non-zero default. Setting it to `1.0` grew every shape by 1 unit in the first test. [V]
 3. **Scene convention:** the icon lies in the world **XZ plane facing −Y** (Blender Front view, so Z is "up" for the world gradient and sky). Layers stack toward the camera along −Y. The base plate front is at y≈0.
-4. **Flat faces + orthographic camera reflect exactly one environment direction**, which gives a uniform colour. That is why chrome and iridescent faces look dead unless the world has a **front fill** term (§6). [V] A slight dome ("inflate" 2–5 % of the layer size, via Geometry Nodes or displacement) makes reflections sweep across the face. [E]
+4. **Flat faces + orthographic camera reflect exactly one environment direction**, which gives a uniform colour. That is why chrome and iridescent faces look dead unless the world has a **front fill** term (§6). [V] A slight dome ("inflate" 2-5 % of the layer size, via Geometry Nodes or displacement) makes reflections sweep across the face. [E]
 5. Feed EEVEE the real layer depth through `Material Output ▸ Thickness` (object-space). Use `thickness_mode='SLAB'` for flat layers and `'SPHERE'` for blobby ones. [D/I]
 
 ---
@@ -148,7 +148,7 @@ def thickness(nt, out, value):                # EEVEE only; object-space layer d
 ```
 
 Shadow colour conventions:
-- neutral: `shadow_rgb = (1 - amount)` grey, with amount 0.15–0.4;
+- neutral: `shadow_rgb = (1 - amount)` grey, with amount 0.15-0.4;
 - chromatic: `shadow_rgb = tint ** k` with k between 0.5 (light) and 1.5 (deep);
 - physical: no wrap (dark shadow, or MNEE).
 
@@ -157,14 +157,14 @@ Shadow colour conventions:
 | Socket | Value | App parameter |
 |---|---|---|
 | `Base Color` | (0.96, 0.98, 1.0) | tint / fill |
-| `Roughness` | 0.12 (range 0–0.35) | **blur / frost** |
-| `IOR` | 1.45 (1.4–1.7) | **refraction strength** |
-| `Transmission Weight` | 1.0 (Cycles may use 0.6–1.0) | **translucency** (EEVEE: keep at 1) |
+| `Roughness` | 0.12 (range 0-0.35) | **blur / frost** |
+| `IOR` | 1.45 (1.4-1.7) | **refraction strength** |
+| `Transmission Weight` | 1.0 (Cycles may use 0.6-1.0) | **translucency** (EEVEE: keep at 1) |
 | `Coat Weight` / `Coat Roughness` / `Coat IOR` | 1.0 / 0.02 / 1.5 | **specular** on/off |
 | `Specular IOR Level` | 0.6 | specular amount |
 | `Emission Color` / `Emission Strength` | white / rim mask × 3.0 | **specular rim** amount |
 | Shadow wrap | grey (0.75, 0.78, 0.82) or tint | **shadow neutral/chromatic + amount** |
-| `Thickness` output | layer depth (0.12 in tests) | — |
+| `Thickness` output | layer depth (0.12 in tests) | - |
 
 Rim mask, all world-space and engine-agnostic. `L` = the light-angle direction from §6:
 
@@ -211,7 +211,7 @@ shadow_wrap(surf, grey 0.8)
 ### 3.6 Tinted Glass with chromatic shadow [V]
 - Principled: `Base Color` = tint (for example (1, 0.25, 0.45)), `Transmission Weight` 1, `Roughness` 0.04, `IOR` 1.5.
 - `shadow_wrap(tint)`. Cycles gives a soft pink/red shadow on a white plate, and the light reaching layers underneath is tinted too.
-- For depth-dependent tint (thicker = deeper), use a white Principled surface plus `ShaderNodeVolumeAbsorption(Color=tint, Density 2–10)` on `Volume`. This is Cycles only.
+- For depth-dependent tint (thicker = deeper), use a white Principled surface plus `ShaderNodeVolumeAbsorption(Color=tint, Density 2-10)` on `Volume`. This is Cycles only.
 - EEVEE: the glass renders tinted, but the shadow is grey and dithered. See §5 for fakes.
 
 ![Plain glass vs MNEE vs Is-Shadow-Ray trick](img/glass-materials/shadows-mnee-plain-trick.png)
@@ -220,10 +220,10 @@ shadow_wrap(surf, grey 0.8)
 - **Glossy plastic:** `Base Color` saturated, `Roughness` 0.35, `Coat Weight` 1, `Coat Roughness` 0.03. Both engines.
 - **Candy (translucent hard candy):** `Base Color` (1, 0.1, 0.25), `Roughness` 0.15, `Subsurface Weight` 1, `Subsurface Radius` (1, 0.25, 0.3), `Subsurface Scale` 0.08 (scene units), `Coat Weight` 1 / `Coat Roughness` 0.02.
   - `subsurface_method='RANDOM_WALK'` (default) is Cycles only. EEVEE uses its own approximation, which looked nearly identical in the test.
-  - A glassier candy: `Transmission Weight` 0.6–0.9 + Coat (Cycles).
+  - A glassier candy: `Transmission Weight` 0.6-0.9 + Coat (Cycles).
 
 ### 3.8 Chrome / Polished Metal [V]
-- Principled: `Metallic` 1, `Base Color` (0.92, 0.93, 0.95), `Roughness` 0.03–0.08.
+- Principled: `Metallic` 1, `Base Color` (0.92, 0.93, 0.95), `Roughness` 0.03-0.08.
 - Physically exact alternative: `ShaderNodeBsdfMetallic` with `fresnel_type='PHYSICAL_CONDUCTOR'` and the `IOR`/`Extinction` vectors of the metal. Or use `F82` with `Base Color` + `Edge Tint`.
 - **Chrome is the environment.** With the gradient-only world the face rendered almost black. Adding the front-fill and softbox terms (§6) fixed it. [V]
 
@@ -232,25 +232,25 @@ shadow_wrap(surf, grey 0.8)
 - `Anisotropic` 0.8, `Anisotropic Rotation` 0, `Tangent ← ShaderNodeTangent(direction_type='RADIAL', axis='Z')`. Object-local Z is the layer normal, so this gives **circular/spun brushing**. Use `UV_MAP` for linear brushing.
 - Streaks that also work in EEVEE: `TexCoord.Object → Mapping(Scale=(1,300,1)) → Noise(Scale 20, Detail 8) → Bump(Strength 0.15, Distance 0.001) → Normal`.
 - Anisotropy is **Cycles only**. EEVEE gives plain blue metal with faint streaks. [D/V]
-- Real anodizing is a thin oxide film. Optionally set `Thin Film Thickness` 250–450 nm and `Thin Film IOR` 2.0–2.4 for titanium-like interference colours (Cycles 5.0 supports thin film on metals). [D]
+- Real anodizing is a thin oxide film. Optionally set `Thin Film Thickness` 250-450 nm and `Thin Film IOR` 2.0-2.4 for titanium-like interference colours (Cycles 5.0 supports thin film on metals). [D]
 
 ### 3.10 Matte Clay [V]
 - Principled: `Base Color` (0.8, 0.76, 0.72), `Roughness` 0.9, `Specular IOR Level` 0.3, `Diffuse Roughness` 0.5.
-- Oren-Nayar diffuse roughness is Cycles only; EEVEE is Lambertian. Optional `Sheen Weight` 0.1–0.2 for a soft-touch look; Sheen is a crude approximation in EEVEE.
+- Oren-Nayar diffuse roughness is Cycles only; EEVEE is Lambertian. Optional `Sheen Weight` 0.1-0.2 for a soft-touch look; Sheen is a crude approximation in EEVEE.
 
 ### 3.11 Iridescent (thin film): Cycles only [V]
 - Metal variant (oil on metal, anodized): `Metallic` 1, `Base Color` (0.9, 0.9, 0.92), `Roughness` 0.15, `Thin Film IOR` 1.6.
 - `Thin Film Thickness ← MapRange(Noise(Object coords, Scale 3).Factor, 0..1 → 250..900 nm)` gives banded oil-slick colours.
 - Dielectric variant (soap, coated glass): `Base Color` near-black or transmissive, `Metallic` 0, same film inputs.
 - Rules [D]:
-  - The effect is strongest at 100–1000 nm.
+  - The effect is strongest at 100-1000 nm.
   - `Thin Film IOR` must differ from both 1.0 and the base `IOR`.
   - The `Thin Film` inputs also exist on `ShaderNodeBsdfGlass` and `ShaderNodeBsdfMetallic`.
 - EEVEE ignores thin film entirely; it rendered plain grey metal. [V] Fallback idea [E]: `LayerWeight.Facing → ColorRamp(rainbow) → Specular Tint`/`Coat Tint`.
 - In the test the iridescence was subtle. It needs a bright, varied environment to reflect.
 
 ### 3.12 Emissive Neon [V]
-- Principled: `Base Color` (0.05, 0.05, 0.05), `Roughness` 0.2, `Emission Color` = neon colour, `Emission Strength` 3–5.
+- Principled: `Base Color` (0.05, 0.05, 0.05), `Roughness` 0.2, `Emission Color` = neon colour, `Emission Strength` 3-5.
 - Glow comes from the **compositor**. Blender 5.0 changed the API [I/V]:
   ```python
   ng = bpy.data.node_groups.new("IconComp", "CompositorNodeTree")
@@ -266,7 +266,7 @@ shadow_wrap(surf, grey 0.8)
   - `CompositorNodeComposite` no longer exists, and `scene.node_tree` is replaced by `scene.compositing_node_group`.
   - Bloom worked identically in Cycles and EEVEE. EEVEE no longer has built-in bloom. [V]
   - `render.compositor_device` ∈ {`CPU`,`GPU`}.
-- Under Khronos Neutral or AgX, high emission strengths desaturate toward white (strength 12 rendered almost white). [V] Keep the core around 3–5 and let the bloom carry the colour.
+- Under Khronos Neutral or AgX, high emission strengths desaturate toward white (strength 12 rendered almost white). [V] Keep the core around 3-5 and let the bloom carry the colour.
 - ![](img/glass-materials/neon-bloom.png)
 
 ### 3.13 Jelly / Gummy [V]
@@ -282,13 +282,13 @@ shadow_wrap(surf, grey 0.8)
 | Preset | Cycles | EEVEE | EEVEE fallback |
 |---|---|---|---|
 | Liquid Glass | full | good (refraction, rim, grey shadow) | lower glass groups → "fake glass" (§4) |
-| Clear / Frosted Glass | full | good | — |
+| Clear / Frosted Glass | full | good | - |
 | Dispersive Crystal | 3-lobe first-hit | broken (white noise) | plain clear glass via `target='EEVEE'` output |
 | Tinted + chromatic shadow | full | glass ok, shadow grey | shadow card / compositor tint (§5) |
-| Glossy Plastic, Candy, Gummy, Matte Clay, Chrome | full | good | — |
+| Glossy Plastic, Candy, Gummy, Matte Clay, Chrome | full | good | - |
 | Brushed / Anodized | full | no anisotropy | bump streaks only |
 | Iridescent | full | none | rainbow ramp hack [E] |
-| Neon | + compositor bloom | + compositor bloom | — |
+| Neon | + compositor bloom | + compositor bloom | - |
 | Jelly (volume) | full | no volume through glass | Gummy SSS |
 
 ---
@@ -315,7 +315,7 @@ Hard limits (from the [5.0 manual](https://docs.blender.org/manual/en/5.0/render
 - **Only one refraction event is modelled.** The thickness workflow approximates the second one.
 - **Only dithered materials *not* using Raytraced Transmission can be refracted.** In the test, an orange glass layer under a top glass layer **disappeared** where they overlapped. ![](img/glass-materials/eevee-glass-on-glass.png)
   - **Fix for drafts:** only the top-most glass group uses `use_raytrace_refraction=True`.
-  - Lower glass groups use a *fake glass*: Principled `Alpha` 0.35–0.5 + `Coat Weight` 1, `surface_render_method='DITHERED'`, no transmission. It is visible through the top glass, but grainy at 32 spp, so use 64+.
+  - Lower glass groups use a *fake glass*: Principled `Alpha` 0.35-0.5 + `Coat Weight` 1, `surface_render_method='DITHERED'`, no transmission. It is visible through the top glass, but grainy at 32 spp, so use 64+.
 - Blended materials are not in the depth buffer, so they cannot be refracted or ray-traced.
 - Transmission falls back to light probes or the world when the ray leaves the screen or roughness exceeds `trace_max_roughness`.
 - Volumes are only rendered for camera rays, so they are invisible through refraction. Thin film, anisotropy, Diffuse Roughness, Random-Walk SSS, Bevel node and Light Falloff node are unsupported.
@@ -333,7 +333,7 @@ Hard limits (from the [5.0 manual](https://docs.blender.org/manual/en/5.0/render
 | **Physical-plain** (no trick) | Glass is opaque to shadow rays, so you get a dark shadow. Light reaches the floor only through slow, noisy indirect caustics, and only if `caustics_refractive=True`. | dark grey shadow | free |
 | **Neutral** (Icon Composer "Neutral") | `shadow_wrap(grey = 1 - amount)` gives a soft grey shadow whose softness follows light size | works (lighter grey, dithered) | free |
 | **Chromatic** (Icon Composer "Chromatic") | `shadow_wrap(tint)` gives a coloured shadow, and also tints whatever lies under the glass | **grey only** | free |
-| **MNEE shadow caustics** | Set `light.cycles.is_caustics_light`, `caster.cycles.is_caustics_caster`, `receiver.cycles.is_caustics_receiver`. Light only passed through with `caustics_refractive=True` in our test. It is subtle with large soft area lights. | n/a | **one-time ~164 s OptiX kernel compile**, then ~0.6–0.8 s at 224 px |
+| **MNEE shadow caustics** | Set `light.cycles.is_caustics_light`, `caster.cycles.is_caustics_caster`, `receiver.cycles.is_caustics_receiver`. Light only passed through with `caustics_refractive=True` in our test. It is subtle with large soft area lights. | n/a | **one-time ~164 s OptiX kernel compile**, then ~0.6-0.8 s at 224 px |
 
 MNEE limitations [D]:
 - refractive caustics inside shadows only;
@@ -354,8 +354,8 @@ Option 1 is recommended for the Draft tier.
 ## 6. Lighting rig, world and background plate
 
 ### 6.1 Camera
-- Use an orthographic camera for exports: `cam.type='ORTHO'`, `ortho_scale = icon_size × 1.15–1.2`. The margin leaves room for shadows and glow. Place it at (0, −10, 0) with rotation (90°, 0, 0), looking +Y.
-- Optional "hero" perspective camera for marketing shots: 85–135 mm lens, 10–20° tilt. Perspective also makes flat reflective faces sweep. [E]
+- Use an orthographic camera for exports: `cam.type='ORTHO'`, `ortho_scale = icon_size × 1.15-1.2`. The margin leaves room for shadows and glow. Place it at (0, −10, 0) with rotation (90°, 0, 0), looking +Y.
+- Optional "hero" perspective camera for marketing shots: 85-135 mm lens, 10-20° tilt. Perspective also makes flat reflective faces sweep. [E]
 
 ### 6.2 One "light angle" drives everything [V]
 Direction from the icon toward a light, with `a` = light angle (0 = from top, positive = clockwise toward +X) and `e` = elevation from the view axis:
@@ -399,8 +399,8 @@ world    = Mix Shader(Fac = LightPath.Is Camera Ray,
 - Alternative outdoor look: `ShaderNodeTexSky` with `sky_type` ∈ {`SINGLE_SCATTERING`, **`MULTIPLE_SCATTERING`** (5.0 default), `PREETHAM`, `HOSEK_WILKIE`}. Drive `sun_rotation` / `sun_elevation` from the light angle. EEVEE ignores the sun disc. [I/D]
 
 ### 6.4 Background plate (squircle base)
-- Superellipse outline (n≈5) → same curve pipeline, with a small bevel (2–4 % of size).
-- Opaque Principled material: `Roughness` 0.4–0.5, colour gradient from `TexCoord.Generated → SeparateXYZ.Y → Mix(RGBA) inputs[6]/[7] → Base Color` (curve-local Y = world up). It receives layer shadows and acts as the "wallpaper" that glass refracts.
+- Superellipse outline (n≈5) → same curve pipeline, with a small bevel (2-4 % of size).
+- Opaque Principled material: `Roughness` 0.4-0.5, colour gradient from `TexCoord.Generated → SeparateXYZ.Y → Mix(RGBA) inputs[6]/[7] → Base Color` (curve-local Y = world up). It receives layer shadows and acts as the "wallpaper" that glass refracts.
 - For Apple delivery, also export **layers without plate/mask**. Icon Composer and the OS add their own squircle mask and glass treatment. [E]
 - **Shadow catcher** (Cycles): put a large plane behind or under the icon with `obj.is_shadow_catcher = True`, and optionally `view_layer.cycles.use_pass_shadow_catcher = True` to capture all indirect light.
 - EEVEE has no shadow catcher ([BA thread](https://blenderartists.org/t/shadow-catcher-in-eevee-next-blender-4-2/1548135)). Render marketing composites in Cycles.
@@ -422,7 +422,7 @@ scene.render.use_persistent_data = True   # keep BVH/kernels between renders in 
 - The engine identifiers are `'CYCLES'`, `'BLENDER_EEVEE'` (renamed from `BLENDER_EEVEE_NEXT`) and `'BLENDER_WORKBENCH'`. [I/D]
 - First-use costs:
   - OptiX kernels for new feature sets compile once and are then cached; MNEE took 164 s.
-  - EEVEE compiles shaders per material: about 0.5–1.5 s cold, near zero warm.
+  - EEVEE compiles shaders per material: about 0.5-1.5 s cold, near zero warm.
   - **Warm both up at worker start.** [V]
 
 ### 7.2 Quality tiers
@@ -430,16 +430,16 @@ scene.render.use_persistent_data = True   # keep BVH/kernels between renders in 
 | Setting | **Draft** (EEVEE) | **Preview** (Cycles) | **Final** (Cycles) |
 |---|---|---|---|
 | Engine | `BLENDER_EEVEE` | `CYCLES`, GPU OptiX | `CYCLES`, GPU OptiX |
-| Resolution | 256–512 | 256–512 | 1024 (master); 2048 hero |
-| Samples | `taa_render_samples` 16 (drafts), 64 (clean) | `samples` 32–64, `use_adaptive_sampling` True, `adaptive_threshold` 0.05 | `samples` 1024 (cap), `adaptive_threshold` 0.005–0.01, `adaptive_min_samples` 64; dispersion preset ≥ 256 effective |
+| Resolution | 256-512 | 256-512 | 1024 (master); 2048 hero |
+| Samples | `taa_render_samples` 16 (drafts), 64 (clean) | `samples` 32-64, `use_adaptive_sampling` True, `adaptive_threshold` 0.05 | `samples` 1024 (cap), `adaptive_threshold` 0.005-0.01, `adaptive_min_samples` 64; dispersion preset ≥ 256 effective |
 | Denoise | built-in RT denoise | `use_denoising` True, `denoiser='OPTIX'` (or `'OPENIMAGEDENOISE'` + `denoising_use_gpu`), `denoising_input_passes='RGB_ALBEDO_NORMAL'` | `denoiser='OPENIMAGEDENOISE'`, `denoising_use_gpu=True`, `denoising_prefilter='ACCURATE'`, `denoising_quality='HIGH'` |
-| Raytracing / bounces | `use_raytracing` True, `resolution_scale` '2' (drafts) / '1', `trace_max_roughness` ≥ max frost | `max_bounces` 16, `transmission_bounces` 16, `transparent_max_bounces` 16, `glossy_bounces` 6, `diffuse_bounces` 2, `volume_bounces` 0 (2 if jelly) | `max_bounces` 32, `transmission_bounces` 24–32, `transparent_max_bounces` 32, `glossy_bounces` 8, `diffuse_bounces` 4, `volume_bounces` 2 only if a volume preset is used |
-| Caustics / clamps | — | `caustics_reflective=False`, `caustics_refractive=False`, `blur_glossy` 1.0, `sample_clamp_indirect` 5 | caustics off (on only in MNEE mode), `blur_glossy` 0.5, `sample_clamp_indirect` 10 |
-| Misc | `use_overscan` True; shadows `shadow_ray_count` 1–2 | `use_persistent_data` True | `pixel_filter_type='BLACKMAN_HARRIS'`, `filter_width` 1.5 (1.0–1.2 for crisper edges); `tile_size` 1024 when output ≥ 2048 to cap VRAM |
-| Measured / estimated time | **0.10 s** @256 px 16 spp warm; **0.26 s** @64 spp [V] | **0.35–0.65 s** @192–256 px 32 spp [V] | ~10–60 s @1024 px [E: extrapolated from 0.3 s per 256²×32 spp, ×16 pixels, ×2–8 for effective adaptive spp] |
+| Raytracing / bounces | `use_raytracing` True, `resolution_scale` '2' (drafts) / '1', `trace_max_roughness` ≥ max frost | `max_bounces` 16, `transmission_bounces` 16, `transparent_max_bounces` 16, `glossy_bounces` 6, `diffuse_bounces` 2, `volume_bounces` 0 (2 if jelly) | `max_bounces` 32, `transmission_bounces` 24-32, `transparent_max_bounces` 32, `glossy_bounces` 8, `diffuse_bounces` 4, `volume_bounces` 2 only if a volume preset is used |
+| Caustics / clamps | - | `caustics_reflective=False`, `caustics_refractive=False`, `blur_glossy` 1.0, `sample_clamp_indirect` 5 | caustics off (on only in MNEE mode), `blur_glossy` 0.5, `sample_clamp_indirect` 10 |
+| Misc | `use_overscan` True; shadows `shadow_ray_count` 1-2 | `use_persistent_data` True | `pixel_filter_type='BLACKMAN_HARRIS'`, `filter_width` 1.5 (1.0-1.2 for crisper edges); `tile_size` 1024 when output ≥ 2048 to cap VRAM |
+| Measured / estimated time | **0.10 s** @256 px 16 spp warm; **0.26 s** @64 spp [V] | **0.35-0.65 s** @192-256 px 32 spp [V] | ~10-60 s @1024 px [E: extrapolated from 0.3 s per 256²×32 spp, ×16 pixels, ×2-8 for effective adaptive spp] |
 
 Why the bounce counts are this high:
-- Each glass layer is **2 transmission events**, and the pill edges add total internal reflections. Four stacked glass groups plus the plate is already ≥ 8–10 events.
+- Each glass layer is **2 transmission events**, and the pill edges add total internal reflections. Four stacked glass groups plus the plate is already ≥ 8-10 events.
 - If paths hit the limit, glass interiors render **black**.
 - The Is-Shadow-Ray trick turns every glass layer into a *transparent* surface for shadow rays (2 transparent bounces per layer), so `transparent_max_bounces` must also be ≥ 16.
 - Defaults in 5.0 [I]: max 12, transmission 12, transparent 8, diffuse 4, glossy 4, volume 0.
@@ -473,12 +473,12 @@ img.file_format = 'PNG'; img.color_mode = 'RGBA'; img.color_depth = '16'   # '8'
 
 | Test | Result |
 |---|---|
-| Cycles OptiX, 192 px, 32 spp, OptiX denoise, 14 presets | 0.35–0.65 s each, including scene build and sync |
-| EEVEE, 192 px, 32 spp, 14 presets | 0.09–0.8 s each (the first material compile dominates) |
+| Cycles OptiX, 192 px, 32 spp, OptiX denoise, 14 presets | 0.35-0.65 s each, including scene build and sync |
+| EEVEE, 192 px, 32 spp, 14 presets | 0.09-0.8 s each (the first material compile dominates) |
 | EEVEE, 256 px, 16 spp, cold → warm | 0.69 s → 0.11 s |
 | EEVEE, 256 px, 64 spp | 0.26 s |
-| MNEE first render (kernel compile) → subsequent | 164 s → 0.6–0.8 s |
-| Peak VRAM used on the GPU during a mixed EEVEE + Cycles + OIDN-GPU run | 5.0 GB total vs 3.3–3.5 GB baseline, so the Blender process used about 1.5 GB |
+| MNEE first render (kernel compile) → subsequent | 164 s → 0.6-0.8 s |
+| Peak VRAM used on the GPU during a mixed EEVEE + Cycles + OIDN-GPU run | 5.0 GB total vs 3.3-3.5 GB baseline, so the Blender process used about 1.5 GB |
 
 ---
 

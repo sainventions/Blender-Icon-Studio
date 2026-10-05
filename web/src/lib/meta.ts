@@ -10,11 +10,11 @@ export const STRATEGIES: { id: SplitStrategy; label: string; description: string
 ]
 
 export const EXPORT_TARGETS: { id: ExportTarget; label: string; description: string; badge?: string }[] = [
-  { id: 'ios', label: 'iOS / iPadOS', description: 'AppIcon.appiconset — 1024 master with dark & tinted variants.' },
+  { id: 'ios', label: 'iOS / iPadOS', description: 'AppIcon.appiconset: 1024 master with dark & tinted variants.' },
   { id: 'macos', label: 'macOS', description: '.icns + .iconset with Tahoe margins and baked shadow.' },
   { id: 'watchos', label: 'watchOS', description: '1088 px circular master.' },
   { id: 'android', label: 'Android', description: 'Adaptive foreground / background / monochrome + legacy mipmaps.' },
-  { id: 'windows', label: 'Windows', description: 'Multi-size .ico (16 – 256 px).' },
+  { id: 'windows', label: 'Windows', description: 'Multi-size .ico (16-256 px).' },
   { id: 'web', label: 'Web / PWA', description: 'Favicons, apple-touch-icon, maskable PWA icons + manifest snippet.' },
   { id: 'marketing', label: 'Marketing', description: 'High-resolution hero PNGs for stores and landing pages.' },
   { id: 'icon', label: 'Apple .icon', description: 'Icon Composer bundle (icon.json + layer assets).', badge: 'Beta' },
@@ -25,8 +25,8 @@ export const ANIMATION_KINDS: { id: AnimateRequest['kind']; label: string; descr
   { id: 'tilt', label: 'Tilt', description: 'Gentle gyro-style parallax wobble.' },
   { id: 'turntable', label: 'Turntable', description: 'Full 360° rotation of the layer stack.' },
   { id: 'float', label: 'Float', description: 'Layers bob softly in depth.' },
-  { id: 'light-sweep', label: 'Light sweep', description: 'The key light orbits — highlights race around rims.' },
-  { id: 'iso', label: 'Iso sweep', description: 'The camera swings from head-on to isometric and back — the real layer distances, like a CAD view.' },
+  { id: 'light-sweep', label: 'Light sweep', description: 'The key light orbits, so highlights race around rims.' },
+  { id: 'iso', label: 'Iso sweep', description: 'The camera swings from head-on to isometric and back, showing the real layer distances like a CAD view.' },
 ]
 
 /** Visual of each appearance for chips (background + foreground hint). */

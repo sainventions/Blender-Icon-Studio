@@ -34,7 +34,7 @@ export function imageStats(image: CanvasImageSource, size = 64): PaintStats | nu
     const data = ctx.getImageData(0, 0, size, size).data
     let alphaMax = 0
     for (let i = 3; i < data.length; i += 4) if (data[i] > alphaMax) alphaMax = data[i]
-    // Colour statistics over the opaque pixels — or, for a translucent overlay, over everything visible.
+    // Colour statistics over the opaque pixels or, for a translucent overlay, over everything visible.
     const cut = alphaMax >= 128 ? 128 : 8
     let r = 0
     let g = 0

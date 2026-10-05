@@ -1,8 +1,8 @@
-// Height-field bodies (PLAN §11 Geometry) — the three.js twin of blender_worker/heightfield.py, used for EVERY piece,
+// Height-field bodies (PLAN §11 Geometry): the three.js twin of blender_worker/heightfield.py, used for EVERY piece,
 // silhouette, raster contour, card and the plate.
 //
 // A body is a watertight, smooth solid over a 2D outline: a round edge that only depends on the inward distance d to
-// that outline (thin parts simply taper, tips / corners never fold over or self-intersect) plus — with inflate — a
+// that outline (thin parts simply taper, tips / corners never fold over or self-intersect) plus, with inflate, a
 // POISSON dome (PLAN §11 round 7): −∇²u = 4 on the triangulation, u = 0 on the outline, dome = inflate · D_P ·
 // √(u / max_P u) per connected part P (a disc becomes a hemisphere-like dome, thin parts round tapering tubes, no
 // medial-axis creases / fins). The profile, the sampling (graded offset rings along inward bisectors + medial points
@@ -71,8 +71,8 @@ export const APEX_TIE = 1e-4
 type Ring = Float64Array // flat x,y pairs, no repeated closing point
 
 // ================================================================================================ profile
-/** The round-edge radius a body really gets: b = min(bevel, (1 − WALL_MIN)·t/2) — a minimum vertical wall of WALL_MIN ×
- *  the half thickness (round 8: knife-thin rims made tube ends refract the studio's dark side — Gemini's tip notch). */
+/** The round-edge radius a body really gets: b = min(bevel, (1 − WALL_MIN)·t/2), leaving a minimum vertical wall of WALL_MIN ×
+ *  the half thickness (round 8: knife-thin rims made tube ends refract the studio's dark side, e.g. Gemini's tip notch). */
 export function rimBevel(thickness: number, bevel: number): number {
   return Math.max(0, Math.min(bevel, ((1 - WALL_MIN) * thickness) / 2))
 }
@@ -99,9 +99,9 @@ export function rimSlopes(d: number, beta: number): [number, number] {
 }
 
 /** Top height z(d) = e + hb(d; min(b, D)) + inflate·D·sqrt(1 − (1 − min(d/D, 1))²) (mirrored for the bottom): the DISC
- *  MODEL of an island of inradius D — its local half-width is D everywhere, so the round edge is capped at D (round 8: a
- *  disc narrower than the bevel is a sphere) — plus the disc model of the Poisson dome (a body itself uses its solved u
- *  and the local half-width — buildBody). Used for sampling and the half height. b = rimBevel(thickness, bevel). */
+ *  MODEL of an island of inradius D (its local half-width is D everywhere, so the round edge is capped at D; round 8: a
+ *  disc narrower than the bevel is a sphere), plus the disc model of the Poisson dome (a body itself uses its solved u
+ *  and the local half-width; see buildBody). Used for sampling and the half height. b = rimBevel(thickness, bevel). */
 export function profile(d: number, thickness: number, bevel: number, inflate: number, D: number): number {
   const dd = Math.max(d, 0)
   const b = rimBevel(thickness, bevel)
@@ -593,7 +593,7 @@ class SegmentSet {
   }
 
   /**
-   * Visit every segment whose distance to p may be ≤ limit(best) — cells are scanned in growing square rings until the
+   * Visit every segment whose distance to p may be ≤ limit(best): cells are scanned in growing square rings until the
    * ring's lower distance bound exceeds the (shrinking or fixed) limit. `visit` returns the current limit.
    */
   scan(px: number, py: number, visit: (g: number) => number): void {
@@ -651,7 +651,7 @@ export interface NearestResult {
 /**
  * Distance of points P (flat x,y) to the segments -> (d, segment, g). With kappa > 0, g is the two-cluster softmin
  * over FOOT POINTS (segments whose distance is a local minimum along their ring), weights exp(−(dist − d)/κ),
- * κ = max(kappa, rel·d) — heightfield.nearest with `nbr`.
+ * κ = max(kappa, rel·d) (heightfield.nearest with `nbr`).
  */
 function nearest(P: ArrayLike<number>, S: SegmentSet, kappa = 0, rel = 0): NearestResult {
   const N = P.length >> 1
@@ -834,9 +834,9 @@ function arange(start: number, stop: number, step: number): number[] {
 /**
  * Estimated inradius D per ring's island (holes carry their island's value): max d over a grid × grid scanline raster
  * refined by 12 steps of pattern search from each island's best cell; `centres` receives {island: apex}.
- * DETERMINISTIC APEX (round 8, heightfield.island_inradius — float32 there, float64 here, so exact ties must not decide):
+ * DETERMINISTIC APEX (round 8, heightfield.island_inradius; float32 there, float64 here, so exact ties must not decide):
  * the island's tied cells are those with d ≥ max d − APEX_TIE·h; the start cell is the tied cell nearest the tied cells'
- * centroid (the first in list order — rows bottom → top, x left → right — within APEX_TIE·h of the nearest); every move
+ * centroid (the first in list order, rows bottom → top and x left → right, within APEX_TIE·h of the nearest); every move
  * takes the FIRST of the eight directions within APEX_TIE·h of their best, and only when it beats the current d by
  * more than APEX_TIE·h.
  */
@@ -931,7 +931,7 @@ const f32 = Math.fround
  * The segment the WORKER takes as nearest to p, among segment k (this module's float64 choice) and its ring neighbours
  * sharing its endpoints: heightfield.nearest runs in float32 (its hot loop) and takes numpy's argmin, the lowest index
  * among equal distances. Where p's nearest outline point is a vertex shared by two segments, both are (almost exactly)
- * as near, and at a sharp corner the material-side test of localWidth depends on which one is taken — mirroring the
+ * as near, and at a sharp corner the material-side test of localWidth depends on which one is taken; mirroring the
  * worker's float32 arithmetic keeps the local half-width (hence the capped round edge) identical to the worker's
  * (without it ~0.4 % of the corpus' outline vertices got a different width, up to 17 % of the bevel at Earth's coast).
  */
@@ -965,10 +965,10 @@ function workerNearestSeg(S: SegmentSet, k: number, px: number, py: number): num
 
 /**
  * LOCAL HALF-WIDTH w at every sample-ring vertex (local units, in the sample segment order; heightfield.local_width,
- * SAMPLING 3c): the radius of the largest disc tangent to the outline at the vertex — centred on its inward bisector —
+ * SAMPLING 3c): the radius of the largest disc tangent to the outline at the vertex, centred on its inward bisector,
  * that stays inside the piece (centre on the material side of its nearest shape segment, true distance ≥
  * (1 − RING_TOL)·r − tolAbs), by WIDTH_BISECT bisection steps in [0, 1.05·D] (`Dr`: the inradius per ring). `window`
- * (the bevel b): then the sliding MAX over ±b of arclength along the ring, then the sliding MEAN over ±b/2 — a part is
+ * (the bevel b): then the sliding MAX over ±b of arclength along the ring, then the sliding MEAN over ±b/2. A part is
  * thin where it stays thin along its outline, not at the corner of a wide part.
  */
 export function localWidth(ol: OutlineQuery, Dr: ArrayLike<number>, tolAbs: number, window = 0): Float64Array {
@@ -1039,7 +1039,7 @@ export function localWidth(ol: OutlineQuery, Dr: ArrayLike<number>, tolAbs: numb
   return lo
 }
 
-/** First index of the sorted `a` with a[i] ≥ x (side 'left') / a[i] > x (side 'right') — numpy.searchsorted. */
+/** First index of the sorted `a` with a[i] ≥ x (side 'left') / a[i] > x (side 'right'), like numpy.searchsorted. */
 function searchSorted(a: ArrayLike<number>, x: number, right: boolean): number {
   let lo = 0
   let hi = a.length
@@ -1105,8 +1105,8 @@ export interface WidthResult {
 
 /**
  * (w, ∇w, d, ∇d) at points P (heightfield.blend_width): d = the distance to the sample outline; w = the local
- * half-width `wv` at P's FOOT POINTS — sample segments whose distance is a local minimum along their ring and at most
- * d·(1 + 5·WIDTH_BLEND) away (the nearest one always) — each interpolated linearly at P's projection onto it, the feet
+ * half-width `wv` at P's FOOT POINTS (sample segments whose distance is a local minimum along their ring and at most
+ * d·(1 + 5·WIDTH_BLEND) away, the nearest one always), each interpolated linearly at P's projection onto it, the feet
  * weighted by exp(−(dist − d) / (WIDTH_BLEND·d)). On a medial axis both sides blend evenly (no crease). Analytic
  * gradients (feet fixed).
  */
@@ -1374,9 +1374,9 @@ export function greedyThin(P: number[], rad: number[]): number[] {
 /**
  * Dome sampling of an inflated island (heightfield._dome_rows, SAMPLING 3b): per ray its MEDIAL distance t_m (BISECT
  * bisection steps on "true distance ≥ (1 − RING_TOL) × distance along the ray", bracketed by its last valid / first
- * failing round-edge ring) and rows at t_m·(1 − cos(jπ/2J)), j = 1..J−1, J = clamp(segments, 3, 12) — the disc model's
+ * failing round-edge ring) and rows at t_m·(1 − cos(jπ/2J)), j = 1..J−1, J = clamp(segments, 3, 12): the disc model's
  * dome rings scaled to the LOCAL width, so thin parts get as many rows across as discs (the Poisson dome is a round
- * tube there) — plus the medial point at t_m. A row closer than 0.35 × its gap to a valid round-edge ring of the same
+ * tube there), plus the medial point at t_m. A row closer than 0.35 × its gap to a valid round-edge ring of the same
  * ray is dropped; rows are thinned per size class on grids of cell max(0.45·min(gap, maxEdge), 0.8·s(x)), s the
  * slope-based spacing of the disc model of radius t_m; medial points are dropped within 0.35·min(t_m − last row,
  * maxEdge) of a kept point and thinned greedily. `sel` = the island's rays (indices into ox / oy / dx / dy / sc).
@@ -1483,7 +1483,7 @@ function domeRows(
   return rows.concat(med)
 }
 
-/** Graded ring points + medial points (SAMPLING 2–3 of heightfield.py; inflated islands: dome rows, 3b). Flat x,y pairs. */
+/** Graded ring points + medial points (SAMPLING 2-3 of heightfield.py; inflated islands: dome rows, 3b). Flat x,y pairs. */
 export function steinerPoints(
   ol: OutlineQuery,
   Dr: Float64Array,
@@ -1567,7 +1567,7 @@ export function steinerPoints(
     const D = Dr[I]
     // inflated bodies: global rings for the round edge only; the dome gets per-ray rows (SAMPLING 3b, domeRows).
     // flat bodies: the round edge's rings at the island's capped radius min(b, D) (round 8: an island narrower than the
-    // bevel is a round tube / sphere of radius D — rings graded to b stopped short of its spine)
+    // bevel is a round tube / sphere of radius D; rings graded to b stopped short of its spine)
     const kRing = dome ? 0 : inflate
     const ds = ringDistances(dome ? bevel : Math.min(bevel, D), kRing, D, segments)
     const K = ds.length
@@ -1605,7 +1605,7 @@ export function steinerPoints(
       for (const v of rows) out.push(v)
       continue
     }
-    // medial points: ON the ray's medial crossing — BISECT bisection steps between the last valid ring (or the outline
+    // medial points: ON the ray's medial crossing: BISECT bisection steps between the last valid ring (or the outline
     // vertex) and the first failure (round 8: the spine of a thin part is the top of its round tube; halfway between the
     // two rings left it 20-40 % short and the tube's top a coarse fold)
     let med: number[] = []
@@ -1738,12 +1738,12 @@ function islandOf(ol: OutlineQuery, x: number, y: number, guess: number, groups:
 
 /**
  * Deterministic sub-tolerance jitter (JITTER local units) of the triangulator's INPUT copy of every point: poly2tri
- * rejects exactly collinear constraint points ("EdgeEvent: Collinear not supported!" — straight runs subdivided by
+ * rejects exactly collinear constraint points ("EdgeEvent: Collinear not supported!"; straight runs subdivided by
  * MAX_EDGE, axis-aligned edges). The mesh keeps the exact positions (poly2tri only returns indices).
  */
 export const JITTER = 1e-8
 /** × JITTER of the last poly2tri attempt before the ear-clipping fallback: a vertex of one ring ON another ring's edge
- *  (or a Steiner point on it) stays "collinear" for poly2tri's 1e-12 orientation test at 1e-8 — the island then fell back
+ *  (or a Steiner point on it) stays "collinear" for poly2tri's 1e-12 orientation test at 1e-8; the island then fell back
  *  to a FLAT ear-clipped body while the worker's CDT domes it (Home's silhouette and Scandit's dot at layer scale 0.7,
  *  Recorder / Translate pieces at 1.3: 61 of the corpus' 97 such builds now triangulate). */
 export const JITTER_RETRY = 100
@@ -2060,7 +2060,7 @@ export function delaunayFlips(V: ArrayLike<number>, T: number[], constrained: (a
 }
 
 // ------------------------------------------------------------------------------------------------ ear clipping
-// Compact earcut (mapbox/earcut algorithm, ISC) — only used as the last-resort fallback triangulator.
+// Compact earcut (mapbox/earcut algorithm, ISC), only used as the last-resort fallback triangulator.
 function earcut(data: number[], holeIndices: number[]): number[] {
   type N = { i: number; x: number; y: number; prev: N; next: N; steiner: boolean }
   const node = (i: number, x: number, y: number): N => {
@@ -2272,7 +2272,7 @@ export interface PoissonInfo {
  * heightfield.poisson: solve −∇²u = f on the triangulated region (V flat x,y; CCW triangles T), u = 0 at the `fixed`
  * vertices. Cotangent Laplacian with the circumcentric dual area: K u = b with K_ij = −w_ij, K_ii = Σ_j w_ij, edge weight
  * w_ij = ½(cot α_ij + cot β_ij) (the angles opposite edge ij in its one or two triangles, summed per undirected edge and
- * clamped to ≥ 0) and load b_i = f·Σ_j w_ij·|x_j − x_i|²/4 (quadratics — a disc's R² − r² — come out exact at the
+ * clamped to ≥ 0) and load b_i = f·Σ_j w_ij·|x_j − x_i|²/4 (quadratics, e.g. a disc's R² − r², come out exact at the
  * vertices). Jacobi-preconditioned conjugate gradients from u = 0 until |r| ≤ tol·|b|; u clamped to ≥ 0.
  */
 export function poisson(
@@ -2410,7 +2410,7 @@ export function poisson(
 
 /**
  * heightfield.components: connected component id per vertex over the triangle edges whose both ends are NOT `cut` (the
- * free vertices of the Poisson problem — separate islands, and parts joined only through the outline, are solved and
+ * free vertices of the Poisson problem; separate islands, and parts joined only through the outline, are solved and
  * normalised apart). Ids follow the smallest vertex index of each component; cut vertices get −1.
  */
 export function components(n: number, T: ArrayLike<number>, cut: ArrayLike<number>): { comp: Int32Array; count: number } {
@@ -2444,7 +2444,7 @@ export function components(n: number, T: ArrayLike<number>, cut: ArrayLike<numbe
   return { comp, count: id.size }
 }
 
-/** heightfield._triangle_gradient: ∇u at the vertices of a P1 field — the area-weighted mean of the adjacent triangles'
+/** heightfield._triangle_gradient: ∇u at the vertices of a P1 field: the area-weighted mean of the adjacent triangles'
  *  constant gradients (∇φ_k = left normal of the edge opposite corner k / (2·area)). Flat gx, gy pairs. */
 export function triangleGradient(V: ArrayLike<number>, T: ArrayLike<number>, u: ArrayLike<number>): Float64Array {
   const n = V.length >> 1
@@ -2519,10 +2519,10 @@ function solveDense(A: Float64Array, y: Float64Array, m: number): number {
 }
 
 /**
- * heightfield.vertex_gradient: ∇u at the vertices (only `where`, when given; the rest stay 0) — a least-squares QUADRATIC
+ * heightfield.vertex_gradient: ∇u at the vertices (only `where`, when given; the rest stay 0) from a least-squares QUADRATIC
  * fit of u over each vertex's one-ring (u_j − u_i ≈ g·δ + ½δᵀHδ, δ = x_j − x_i scaled by the ring's mean edge length;
  * exact for quadratics, so a disc's dome normals are exact on any mesh). Five unknowns at valence ≥ 5 when the normal
- * matrix is well conditioned (det > 1e-8 × the product of its diagonal); else (valence 3–4 too) isotropic curvature
+ * matrix is well conditioned (det > 1e-8 × the product of its diagonal); else (valence 3-4 too) isotropic curvature
  * H = c·I; otherwise the area-weighted mean of the adjacent triangles' constant gradients. Flat gx, gy pairs.
  */
 export function vertexGradient(
@@ -2839,7 +2839,7 @@ export function buildBody(
   const nt = new Float64Array(nv * 3)
   const vertical = new Uint8Array(nv)
   // the round-edge rim e + hb(d; β), β capped at the LOCAL half-width (round 8: thin parts are round tubes, small discs
-  // spheres — heightfield.local_width / rim_radius), and its gradient ∂hb/∂d·g + ∂hb/∂β·∇β (g = the unit gradient of d)
+  // spheres; heightfield.local_width / rim_radius), and its gradient ∂hb/∂d·g + ∂hb/∂β·∇β (g = the unit gradient of d)
   const beta = new Float64Array(nv).fill(b)
   const gbeta = new Float64Array(nv * 2)
   const cand: number[] = []
@@ -3187,7 +3187,7 @@ export function buildBody(
   }
 }
 
-/** Largest island inradius of a piece (local units) — framing / lift estimates (heightfield.inradius). */
+/** Largest island inradius of a piece (local units) for framing / lift estimates (heightfield.inradius). */
 export function inradius(splines: Spline[], scale = 1): number {
   const sc = Math.max(scale, 1e-9)
   const o = outline(splines, CHORD_TOL / sc, MAX_EDGE / sc, MERGE_EPS / sc)
@@ -3198,7 +3198,7 @@ export function inradius(splines: Spline[], scale = 1): number {
 }
 
 // ================================================================================================ pieces of one layer
-/** heightfield.piece_rings: the sample rings (local units) of a piece's outline — outline() at the body tolerances. */
+/** heightfield.piece_rings: the sample rings (local units) of a piece's outline (outline() at the body tolerances). */
 export function pieceRings(splines: Spline[], scale = 1): Ring[] {
   const sc = Math.max(scale, 1e-9)
   return outline(splines, CHORD_TOL / sc, MAX_EDGE / sc, MERGE_EPS / sc).rings
@@ -3247,9 +3247,9 @@ export function interiorProbes(rings: Ring[], depth: number): number[] {
 }
 
 /**
- * heightfield.rings_relation — how two pieces (lists of rings) meet: 0 apart, 1 TOUCH (outlines within `tol` of each
- * other — a shared edge — but the interiors do not overlap), 2 OVERLAP (some vertex of one lies inside the other,
- * farther than `tol` from its outline: a translucent piece over another — or the outlines (nearly) COINCIDE: caught by
+ * heightfield.rings_relation, how two pieces (lists of rings) meet: 0 apart, 1 TOUCH (outlines within `tol` of each
+ * other, a shared edge, but the interiors do not overlap), 2 OVERLAP (some vertex of one lies inside the other,
+ * farther than `tol` from its outline: a translucent piece over another; or the outlines (nearly) COINCIDE: caught by
  * interior probes 4·tol inside each piece).
  */
 export function ringsRelation(ra: Ring[], rb: Ring[], tol: number): 0 | 1 | 2 {
@@ -3285,7 +3285,7 @@ export function ringsRelation(ra: Ring[], rb: Ring[], tol: number): 0 | 1 | 2 {
   for (let i = 0; i < da.length; i++) if (da[i] > tol && insideRings(A[2 * i], A[2 * i + 1], rb)) return 2
   for (let i = 0; i < db.length; i++) if (db[i] > tol && insideRings(B[2 * i], B[2 * i + 1], ra)) return 2
   if (!da.some((v) => v <= tol) && !db.some((v) => v <= tol)) return 0
-  // the outlines meet: a shared edge (TOUCH) — or (nearly) the same outline, interiors on the same side (OVERLAP)
+  // the outlines meet: a shared edge (TOUCH), or (nearly) the same outline, interiors on the same side (OVERLAP)
   for (const [r1, r2, s2] of [
     [ra, rb, sb],
     [rb, ra, sa],
@@ -3299,7 +3299,7 @@ export function ringsRelation(ra: Ring[], rb: Ring[], tol: number): 0 | 1 | 2 {
 }
 
 /**
- * heightfield.inset_rings: piece A's rings pulled back from piece B (they touch along a shared edge) — every vertex of A
+ * heightfield.inset_rings: piece A's rings pulled back from piece B (they touch along a shared edge): every vertex of A
  * inside B or closer than `gap` to B's outline moves to B's outline + `gap` along B's outward normal there (into A).
  */
 export function insetRings(ra: Ring[], rb: Ring[], gap: number): Ring[] {
@@ -3338,7 +3338,7 @@ export function ringsToSplines(rings: Ring[]): Spline[] {
 }
 
 /**
- * heightfield.stack_shifts — real-height stacking INSIDE one layer (paint order): every body is centred at base[j] +
+ * heightfield.stack_shifts, real-height stacking INSIDE one layer (paint order): every body is centred at base[j] +
  * shift; a body that touches / overlaps an earlier one (`pairs` = [i, j], i < j) is lifted until its lowest point clears
  * that body's top by `gap`: shift_j = max(0, max_i (base_i + shift_i + h_i + gap + h_j) − base_j).
  */

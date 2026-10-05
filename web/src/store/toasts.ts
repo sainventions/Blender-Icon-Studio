@@ -1,4 +1,4 @@
-// Toast notifications (bottom-right stack). Use the `toast` helpers from anywhere — no React needed.
+// Toast notifications (bottom-right stack). Use the `toast` helpers from anywhere; no React needed.
 import { create } from 'zustand'
 
 export type ToastKind = 'info' | 'success' | 'error' | 'warning' | 'progress'

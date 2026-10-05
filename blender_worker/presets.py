@@ -101,7 +101,7 @@ def quality(tier: str) -> dict:
     return q.get(tier) or q["draft"]
 
 
-# render.colorMode the worker uses when a project carries none (commands._project) — the same default as
+# render.colorMode the worker uses when a project carries none (commands._project): the same default as
 # models.RenderSettings (the round-5 'brand' decision).
 DEFAULT_COLOR_MODE = "brand"
 

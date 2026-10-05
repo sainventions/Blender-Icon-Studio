@@ -10,7 +10,7 @@ Everything is derived from the repository root and can be overridden with enviro
     BIS_FAKE_BLENDER=1  use the in-process FakeBridge instead of Blender (UI development without a GPU)
     BIS_EXPORT_MAX_SIZE cap (px) for export master renders (debugging)
 
-Use :func:`load_settings` (or ``Settings.from_env(**overrides)``) — never module-level globals — so tests can
+Use :func:`load_settings` (or ``Settings.from_env(**overrides)``), never module-level globals, so tests can
 create isolated apps with temporary workspaces.
 """
 from __future__ import annotations
@@ -79,7 +79,7 @@ class Settings:
     sample_dirs: tuple[Path, ...] = field(default_factory=tuple)
     #: start the persistent worker in the background at app startup (it is started lazily otherwise)
     start_worker: bool = True
-    #: use the FakeBridge (no Blender) — UI development / demos without a GPU
+    #: use the FakeBridge (no Blender) for UI development / demos without a GPU
     fake_blender: bool = False
     #: seconds to wait for BIS_WORKER_READY (cold NVIDIA shader cache: first EEVEE RT compile ~12 s+)
     worker_startup_timeout: float = 300.0

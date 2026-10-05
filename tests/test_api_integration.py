@@ -1,7 +1,7 @@
 """Integration tests across workstreams.
 
 * Real ``bis.svg`` (workstream A) + FakeBridge: runs whenever the pipeline is importable.
-* Real Blender 5.0 worker (workstream B), opt-in: ``BIS_REAL_BLENDER=1`` — imports a corpus icon, builds
+* Real Blender 5.0 worker (workstream B), opt-in (``BIS_REAL_BLENDER=1``): imports a corpus icon, builds
   geometry and renders a tiny draft (128 px) through the persistent worker; plus a tiny one-shot preview.
   GPU rule: ≤ 256 px, ≤ 32 spp.
 """

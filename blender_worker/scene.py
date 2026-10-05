@@ -14,7 +14,7 @@ Layout (PLAN §3, D1): icon in the XY plane, camera on +Z looking −Z, 1 BU = 1
     BIS Rig (collection)              camera (front / CAD iso orthographic / perspective), then the light rig and
                                       the world turned with the camera (camera-relative lighting, round 7), wallpaper,
                                       BIS Probe: EEVEE sphere probe of the plate (refraction fallback, round 8)
-                                      BIS Glyph Probe: glass plates — the EEVEE probe of the layers' space (round 9)
+                                      BIS Glyph Probe: the EEVEE probe of the layers' space for glass plates (round 9)
 
 Everything is updated in place between renders: objects/empties are reused by name, piece meshes come from
 heightfield's cache (layer hash + depth params), materials update their node values in place.
@@ -217,7 +217,7 @@ WALLPAPER_MATERIAL = "BIS Wallpaper"
 
 def touching_opaque(g: dict, images: Optional[dict] = None) -> bool:
     """True when some regions of a layer share edges (the union silhouette has fewer outer contours than the
-    regions together) and every region is opaque vector paint — the layer then renders as one body."""
+    regions together) and every region is opaque vector paint; the layer then renders as one body."""
     regions = g.get("regions") or []
     if len(regions) < 2 or not g.get("silhouette"):
         return False
@@ -282,7 +282,7 @@ class SceneBuilder:
               full_bleed: bool = False, backdrop: Optional[str] = None, backdrop_color: Optional[str] = None,
               overrides: Optional[dict] = None, editable: bool = False, engine: Optional[str] = None) -> dict:
         """Build/update the scene. ``overrides`` (animations): {'lightAngle', 'camera', 'layerZ': {id: dz},
-        'framing': one shared framing plan}. ``editable`` (save_blend): kept for the API — renders and .blend
+        'framing': one shared framing plan}. ``editable`` (save_blend): kept for the API; renders and .blend
         files use the same plain body meshes. ``engine`` (render engine id of the tier about to render)
         selects the per-engine light calibration (lighting.ENGINE_CAL)."""
         self.warnings = []
@@ -431,7 +431,7 @@ class SceneBuilder:
         cd.clip_start = 0.05
         cd.clip_end = 200.0
         # head-on views are pitched by FRONT_TILT (0.01°, < 0.05 px at 512) about the world origin: an orthographic view
-        # EXACTLY parallel to a flat face's normal makes EEVEE's forward (alpha-blended) refraction NaN — flat
+        # EXACTLY parallel to a flat face's normal makes EEVEE's forward (alpha-blended) refraction NaN: flat
         # translucent glass and flat soft-alpha raster cards rendered as pure black discs in drafts at some art scales
         # (whether the transformed normal stays exactly (0, 0, 1) depends on float rounding; round-8 review)
         tilt = Matrix.Rotation(FRONT_TILT, 4, "X")
@@ -547,8 +547,8 @@ class SceneBuilder:
 
     def _relations(self, g: dict, lid: str, pids: list, S: float) -> dict:
         """How the pieces of one layer meet (PLAN §11 round 7; pieces = regions 'r<k>' in paint order, cached by the
-        layer geometry): {'stack': [(i, j)] — piece j OVERLAPS the earlier piece i (a translucent piece over another;
-        A only occlusion-cuts under opaque art): j is stacked on i by their real heights; 'inset': {i: splines} —
+        layer geometry): {'stack': [(i, j)] where piece j OVERLAPS the earlier piece i (a translucent piece over another;
+        A only occlusion-cuts under opaque art): j is stacked on i by their real heights; 'inset': {i: splines} where
         piece i only TOUCHES later pieces along a shared edge (Secure Folder's tab and folder): its outline pulls back
         INSET_GAP from them, so the bodies' walls never coincide and nothing changes height}. Indices into ``pids``."""
         key = (geo_key(g, lid), tuple(pids), round(float(S), 6))
@@ -598,7 +598,7 @@ class SceneBuilder:
 
     def plan_animation(self, project: dict, bundle: dict, appearance: str, frame_overrides: list,
                        camera: Optional[dict] = None) -> Optional[dict]:
-        """One framing plan for every frame of an animation: the union of the sampled frames' subject bounds —
+        """One framing plan for every frame of an animation: the union of the sampled frames' subject bounds, from
         framing.plan for perspective frames, framing.ortho_plan for CAD iso frames (front view with iso > 0 in
         some frame: the iso sweep). None when every frame is the plain front view."""
         proj = norm_project(project)
@@ -639,7 +639,7 @@ class SceneBuilder:
         preset, params = materials.resolve(plate["material"])
         paint = paint_spec(plate["fill"], None, (-1.0, -1.0, 1.0, 1.0))
         # EEVEE: the plate refracts the light probes only (raytrace=False: its frosted glass is rougher than drafts
-        # trace anyway), which draws it in EEVEE's opaque layer — the one glass glyphs' screen-space refraction traces
+        # trace anyway), which draws it in EEVEE's opaque layer, the one glass glyphs' screen-space refraction traces
         # see (surfaces with raytraced transmission are invisible to each other's traces): glass glyphs refract the
         # frosted plate, like Cycles, instead of the wallpaper beneath it (QA r10 N7). Cycles ignores the setting.
         spec = materials.make_spec(preset, params, paint, thickness=th, shape="plate",
@@ -762,7 +762,7 @@ class SceneBuilder:
         bevel_local = min(max(0.0, float(dp.get("bevel", 0.045))), thickness / 2.0) / S
         inflate = max(0.0, min(1.0, float(dp.get("inflate", 0.0) or 0.0)))
         segments = int(dp.get("bevelSegments", 6))
-        placed = []        # (object, z offset, piece index) — positioned once every body's half height is known
+        placed = []        # (object, z offset, piece index), positioned once every body's half height is known
         layer_opacity = float(Lr.get("opacity", 1.0))
 
         # ---- pieces ----------------------------------------------------------------------------------
@@ -812,7 +812,7 @@ class SceneBuilder:
             log(f"layer {lid}: {n_open} open spline(s) treated as closed fills")
             stats["openSplines"] = stats.get("openSplines", 0) + n_open
         # pieces of one layer that overlap / touch (_relations): touching ones pull back from each other, overlapping
-        # ones are stacked by their REAL heights in paint order — bodies of one layer never interpenetrate
+        # ones are stacked by their REAL heights in paint order, so bodies of one layer never interpenetrate
         rel = (self._relations(g, lid, [pc[0] for pc in pieces], S) if len(pieces) > 1 and not combined_body
                else {"stack": [], "inset": {}})
         for n_piece, (pid, splines, zoff, op, rgb, raster) in enumerate(pieces):
@@ -825,7 +825,7 @@ class SceneBuilder:
                 stats["insetPieces"] = stats.get("insetPieces", 0) + 1
                 if not splines:
                     # a sliver no wider than 2 × INSET_GAP along the piece it touches: nothing of it is left once it
-                    # pulls back (kept, it cut into that piece) — heightfield.inset_rings
+                    # pulls back (kept, it cut into that piece); see heightfield.inset_rings
                     log(f"layer {lid} {pid}: sliver along a touching piece dropped")
                     stats["insetSlivers"] = stats.get("insetSlivers", 0) + 1
                     continue
@@ -979,10 +979,10 @@ class SceneBuilder:
                layer_z: Optional[dict] = None, plate: Optional[dict] = None, wp_kind: Optional[str] = None,
                bodies: Optional[list] = None) -> None:
         """EEVEE sphere light probes (Cycles ignores light probes; QA r9 N1 / N2, QA r10 N7). Scene-level only: no
-        material reads a probe on purpose — they are what EEVEE's refraction falls back to.
+        material reads a probe on purpose; they are what EEVEE's refraction falls back to.
 
-        EEVEE refracts by screen-space ray tracing; a ray that finds nothing behind the glass on screen — glass floating
-        above the plate in iso / perspective views, glass beyond the plate's silhouette — every alpha-BLENDED surface
+        EEVEE refracts by screen-space ray tracing; a ray that finds nothing behind the glass on screen (glass floating
+        above the plate in iso / perspective views, glass beyond the plate's silhouette), every alpha-BLENDED surface
         (translucent glass cannot trace) and every surface rougher than the draft's trace_max_roughness falls back to the
         light probes. Without a probe that was the studio world behind the icon, which is dark: Photos' floating petals at
         iso read (76,65,50) against Cycles' (155,126,85), and a 66 % Contacts head rendered near-black.
@@ -990,9 +990,9 @@ class SceneBuilder:
         ``BIS Probe`` (the plate probe) captures the scene from just above the plate's front face with the layer bodies
         hidden from it (Object.hide_probe_sphere: their undersides would cover the plate): its lower hemisphere is the lit
         plate (and the wallpaper / world beyond its edge), what Cycles' rays reach through the glass. A GLASS plate
-        (clear / tinted-light renditions: frosted glass over the wallpaper) must not capture itself — the frosted plate
+        (clear / tinted-light renditions: frosted glass over the wallpaper) must not capture itself: the frosted plate
         refracted a flat grey copy of itself (round-8 review); it refracts the wallpaper beneath it. What the glyphs above
-        it should read differs with the wallpaper — in Cycles a frosted glyph is
+        it should read differs with the wallpaper; in Cycles a frosted glyph is
         * over a LIGHT wallpaper: the wallpaper seen through the plate. The plate is hidden from the probe (which shows
           the wallpaper), and drafts trace frosted glyphs against the plate on screen (``traceMaxRoughness``; the plate
           is drawn in EEVEE's opaque layer for that, :meth:`_plate`).
@@ -1008,7 +1008,7 @@ class SceneBuilder:
           soft-alpha card refracted the single-sample capture of the bodies' transparent shadows on the plate (Vanced
           Neon's glow halo, dashed).
         The viewport draws the studio behind the icon in its transmission pass instead. Limits: a capture is a single
-        EEVEE sample with the bodies' (transparent) shadows on the plate in it, noisy — flat glass that would read it
+        EEVEE sample with the bodies' (transparent) shadows on the plate in it, noisy, so flat glass that would read it
         through a large magnification stays raytraced (materials.art_alpha_is_soft); EEVEE's frosted glass has no
         multiple scattering, so clear-dark glyphs stay darker than Cycles' milky ones.
         The plate probe exists whenever something reads it: layer bodies over a plate, or a GLASS plate on its own (QA r11

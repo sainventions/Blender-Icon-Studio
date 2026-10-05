@@ -56,7 +56,7 @@ interface RenderState {
   pin: (jobId: string | null) => void
 }
 
-/** Signature submitted per `${appearance}:${quality}` — skip identical auto renders. */
+/** Signature submitted per `${appearance}:${quality}`, to skip identical auto renders. */
 const submittedSig = new Map<string, string>()
 const manualToasts = new Map<string, string>()
 
@@ -87,7 +87,7 @@ function resultUrl(job: Job): string | undefined {
 const STATE_RANK: Record<JobState, number> = { queued: 0, running: 1, done: 2, error: 2, cancelled: 2 }
 
 /** Entries kept per open project. Every edit adds a draft (and usually a preview), and several selectors scan
- *  all entries on each update — so a long session must not grow the table without bound. */
+ *  all entries on each update, so a long session must not grow the table without bound. */
 const MAX_ENTRIES = 160
 
 function pruneEntries(entries: Record<string, RenderEntry>, s: RenderState, incoming: string): Record<string, RenderEntry> {

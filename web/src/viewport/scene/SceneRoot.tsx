@@ -33,7 +33,7 @@ export interface SceneRootProps {
   showGrid: boolean
   /** Tinted renditions: the worker's env mono (lib/appearance.appearanceMono). */
   mono: MonoParams | null
-  /** Element whose CSS background the transparent (checker) backdrop continues — see Backdrop.tsx. */
+  /** Element whose CSS background the transparent (checker) backdrop continues; see Backdrop.tsx. */
   stage?: StageElementGetter
 }
 
@@ -95,7 +95,7 @@ export function SceneRoot(p: SceneRootProps) {
 
   // What covered glass shows through itself (three.js has no transmission through transmission): under the plate the
   // backdrop (the rendition wallpaper is kept under a glass plate even when the backdrop is a colour); under the layers
-  // the plate — its paint, or for a glass plate its base colour over that backdrop.
+  // the plate: its paint, or for a glass plate its base colour over that backdrop.
   const wall = appearanceWallpaper(p.appearance)
   const plateGlass = plateVisible && isTransmissive(plateParams)
   const glassLayers = stack.some((e) => e.transmissive)

@@ -160,7 +160,7 @@ test('Fit never shows a render above its native pixels; zoom and Actual pixels s
     assert.ok(Math.abs(side * dpr - 512) < 1e-9, `dpr ${dpr}: ${side}`)
   }
   // At 125 % / 150 % the box lays out 1/64 px short of N device px (170.65625 CSS px = 255.98 device px at 1.5×), and
-  // smooth sampling re-filters the whole render (measured mean |Δ| 0.48–0.94 levels, max 76–80 vs the PNG); the 1:1
+  // smooth sampling re-filters the whole render (measured mean |Δ| 0.48-0.94 levels, max 76-80 vs the PNG); the 1:1
   // image is drawn nearest-neighbour instead (measured exact: mean 0, max 0).
   assert.equal(frame.isOneToOne(1), true)
   assert.equal(frame.isOneToOne(255.984 / 256), true)

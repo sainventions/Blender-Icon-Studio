@@ -1,6 +1,6 @@
 """Batch "Icon Pack" jobs (PLAN §10): FakeBridge + the real ``bis.svg`` pipeline (corpus samples).
 
-Opt-in real-Blender test: ``BIS_REAL_BLENDER=1`` — a batch of 3 samples at draft 128 px through the persistent
+Opt-in real-Blender test (``BIS_REAL_BLENDER=1``): a batch of 3 samples at draft 128 px through the persistent
 worker (GPU rule: ≤ 256 px drafts).
 """
 from __future__ import annotations

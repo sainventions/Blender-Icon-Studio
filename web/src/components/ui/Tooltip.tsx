@@ -1,5 +1,5 @@
 // Global tooltip layer. Any element with `data-tip="Label"` (optional `data-tip-kbd="Mod+Z"`,
-// `data-tip-side="top|bottom|left|right"`) gets a tooltip — no wrapper components needed.
+// `data-tip-side="top|bottom|left|right"`) gets a tooltip; no wrapper components needed.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { prettyShortcut } from '../../lib/format'

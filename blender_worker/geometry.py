@@ -1,6 +1,6 @@
 """2D outline helpers (bpy-free): plate outlines, simple test / swatch shapes, flattening and scanline rasters.
 
-Every BODY — layer pieces, silhouettes, raster contours, image cards and the plate — is a height-field mesh built
+Every BODY (layer pieces, silhouettes, raster contours, image cards and the plate) is a height-field mesh built
 by :mod:`blender_worker.heightfield` (PLAN §11 Geometry). The curve-bevel route (round curve bevel with
 ``offset = −bevel``, convex-corner fillets, guard points, safe-radius clamps, the Fill Curve → Solidify → Bevel
 fallback and the ray-cast cap verification) is retired: thin parts and tips taper by construction there.
@@ -164,7 +164,7 @@ def _ring_segments(rings: list):
 
 def _scan_inside(segs, xs, ys):
     """Even-odd raster (len(ys), len(xs)) of closed polylines given as segments (E, 4): one scanline per
-    row (crossings sorted + searchsorted) — O(rows · E) instead of O(points · E)."""
+    row (crossings sorted + searchsorted): O(rows · E) instead of O(points · E)."""
     import numpy as np
     xa, ya, xb, yb = segs[:, 0], segs[:, 1], segs[:, 2], segs[:, 3]
     out = np.zeros((len(ys), len(xs)), dtype=bool)

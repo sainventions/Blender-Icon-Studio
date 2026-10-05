@@ -43,12 +43,12 @@ export const TINTED_PLATE = { tint: 0.6, transmission: 1.0, roughness: 0.45, ior
 /** Tinted renditions: luminance stretched to MONO_FLOOR..1 over at least MONO_MIN_RANGE (worker constants). */
 export const MONO_FLOOR = 0.08
 export const MONO_MIN_RANGE = 0.5
-/** tinted-dark: the darkest art still reflects 30 % of the tint (lit, not self-lit — worker MONO_FLOOR_DARK). */
+/** tinted-dark: the darkest art still reflects 30 % of the tint (lit, not self-lit; worker MONO_FLOOR_DARK). */
 export const MONO_FLOOR_DARK = 0.3
 /**
- * Dark renditions (dark, tinted-dark — worker DARK_GLYPH): clear glass over a near-black plate only transmits that plate
+ * Dark renditions (dark, tinted-dark; worker DARK_GLYPH): clear glass over a near-black plate only transmits that plate
  * (the glyphs vanished, QA r8 #2). Principled inputs only: at most `transmission` of the glyph stays specular
- * transmission, the rest scatters inside (subsurface) and the art colour is the base (tint ≥ tintMin) — lit glass / opal
+ * transmission, the rest scatters inside (subsurface) and the art colour is the base (tint ≥ tintMin): lit glass / opal
  * that keeps its colour over any plate.
  */
 export const DARK_GLYPH = { transmission: 0.5, subsurfaceWeight: 1.0, tintMin: 0.9 } as const
@@ -68,7 +68,7 @@ export const DARK_ENV_SCALE = 0.6
 export const DARK_KEY_SCALE = 0.85
 
 /**
- * Wallpapers behind the clear / tinted renditions — the same data as the worker's appearance.WALLPAPERS: a vertical
+ * Wallpapers behind the clear / tinted renditions, the same data as the worker's appearance.WALLPAPERS: a vertical
  * gradient (top → bottom over world y = +2.2 … −2.2) plus soft colour blobs centred at (x, y) × 1.6 (world units)
  * with a smoothstep falloff out to r × 1.9, mixed 0.85 in linear light. Colours are sRGB hex.
  */
@@ -181,7 +181,7 @@ export function darkParams(preset: string, params: Params, presets: Presets | nu
 
 /**
  * worker appearance._dark_glyphs: every visible layer (and its per-shape materials) that transmits more than DARK_GLYPH
- * allows gets the DARK_GLYPH inputs — except layers whose dark material the user set explicitly (`explicit`) and layers
+ * allows gets the DARK_GLYPH inputs, except layers whose dark material the user set explicitly (`explicit`) and layers
  * with the glass effects off.
  */
 function darkGlyphs(p: Project, explicit: Set<string>, presets: Presets | null | undefined): void {

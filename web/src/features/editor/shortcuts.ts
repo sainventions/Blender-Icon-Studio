@@ -26,7 +26,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { keys: 'Mod+Alt+V', label: 'Paste style onto this project', group: 'General' },
   { keys: 'E', label: 'Export…', group: 'General' },
   { keys: '?', label: 'Keyboard shortcuts', group: 'General' },
-  { keys: '1 – 6', label: 'Switch appearance (Default, Dark, Clear Light, Clear Dark, Tinted Light, Tinted Dark)', group: 'View' },
+  { keys: '1-6', label: 'Switch appearance (Default, Dark, Clear Light, Clear Dark, Tinted Light, Tinted Dark)', group: 'View' },
   { keys: 'V', label: 'Cycle stage: Viewport → Render → Compare → Matrix', group: 'View' },
   { keys: 'X', label: 'Top-down ↔ isometric view, animated (I works too)', group: 'View' },
   { keys: 'Wheel', label: 'Zoom at the cursor (trackpad pinch too)', group: 'View' },

@@ -20,7 +20,7 @@ export function decimalsForStep(step: number | undefined): number {
 }
 
 export function formatNumber(v: number, decimals = 2): string {
-  if (!Number.isFinite(v)) return '—'
+  if (!Number.isFinite(v)) return '-'
   const fixed = v.toFixed(decimals)
   // trim trailing zeros but keep at least one decimal when decimals > 0 for visual stability
   if (decimals <= 1) return fixed
@@ -28,7 +28,7 @@ export function formatNumber(v: number, decimals = 2): string {
 }
 
 export function formatSeconds(s: number | null | undefined): string {
-  if (s == null || !Number.isFinite(s)) return '—'
+  if (s == null || !Number.isFinite(s)) return '-'
   if (s < 1) return `${Math.round(s * 1000)} ms`
   if (s < 60) return `${s.toFixed(s < 10 ? 2 : 1)} s`
   const m = Math.floor(s / 60)
@@ -44,7 +44,7 @@ export function formatElapsed(ms: number): string {
 }
 
 export function formatMB(mb: number | null | undefined): string {
-  if (mb == null) return '—'
+  if (mb == null) return '-'
   return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`
 }
 

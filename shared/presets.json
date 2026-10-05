@@ -4997,7 +4997,7 @@
     },
     "soft-3d": {
       "label": "Soft 3D",
-      "description": "Subtle depth on satin — closest to the original art.",
+      "description": "Subtle depth on satin, closest to the original art.",
       "style": {
         "layerDefaults": {
           "material": {

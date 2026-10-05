@@ -2,7 +2,7 @@
 // footprints / overlap_lists / interpenetrations). Pure (no three.js, no store): the node tests import it directly.
 //
 // A layer's FOOTPRINT is its silhouette + its regions (occlusion-cut pieces) + the bbox of every raster image that has no
-// region (a flat card), from the geometry bundle, in ART units — the server's shape_from_geometry. Placed on the canvas
+// region (a flat card), from the geometry bundle, in ART units (the server's shape_from_geometry). Placed on the canvas
 // like the worker places the bodies: p · art.scale · layer.scale + art.xy · layer.scale + layer.xy. Two layers OVERLAP
 // when their footprints come closer than the clearance (the presets' stackGap): shapely.dwithin. The server simplifies
 // its footprints by 0.002 first; this test is exact on the flattened splines (≪ the 0.03 clearance either way).
@@ -113,7 +113,7 @@ export function layerFootprint(lg: LayerGeometry): Footprint {
   return fp
 }
 
-/** The canvas placement of a layer's art: p · a + (ox, oy) — the worker's (p · art.scale + art.xy) · layer.scale + layer.xy. */
+/** The canvas placement of a layer's art: p · a + (ox, oy), matching the worker's (p · art.scale + art.xy) · layer.scale + layer.xy. */
 export function placement(art: ArtTransform, l: Pick<Layer, 'transform'>): [number, number, number] {
   const sl = Math.max(0, num(l.transform?.scale, 1))
   const a = Math.max(0, num(art?.scale, 1)) * sl
@@ -199,7 +199,7 @@ function segSegDist2(a0x: number, a0y: number, a1x: number, a1y: number, b0x: nu
 }
 
 /** shapely.dwithin(A, B, c) of two placed footprints (c = 0: they intersect or touch): some outline of one comes
- *  within c of the other's, or one lies inside the other (a ring vertex inside it — outlines farther than c apart
+ *  within c of the other's, or one lies inside the other (a ring vertex inside it: outlines farther than c apart
  *  cannot cross, so any vertex of a ring decides for the whole ring). Empty footprints overlap nothing. */
 export function dwithin(A: Placed, B: Placed, c: number): boolean {
   if (!A.ax.length || !B.ax.length) return false

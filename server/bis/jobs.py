@@ -1,4 +1,4 @@
-"""JobManager — one global, serial GPU queue (asyncio).
+"""JobManager: one global, serial GPU queue (asyncio).
 
 * Jobs (bis.models.Job) run one at a time: the persistent worker and one-shot Blender processes share one
   8 GB GPU with the desktop, so nothing renders concurrently.
@@ -303,7 +303,7 @@ class JobManager:
         outer = self._running
         if outer is None or outer.ctx is not ctx or outer.live:
             return
-        # Only the live jobs queued *now* (one pass): a user who keeps editing must not starve the export —
+        # Only the live jobs queued *now* (one pass): a user who keeps editing must not starve the export;
         # newer drafts wait for its next step boundary.
         batch = sorted((e for e in self._queue if e.live), key=lambda e: (e.priority, e.seq))
         for entry in batch:
@@ -377,4 +377,4 @@ class JobManager:
             job.state = "cancelled"
             job.message = "Cancelled"
         if not (isinstance(job.result, dict) and job.result.get("partial")):
-            job.result = None  # (a partial result — what finished before the cancel — stays)
+            job.result = None  # (a partial result, i.e. what finished before the cancel, stays)

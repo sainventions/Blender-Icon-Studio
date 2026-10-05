@@ -58,7 +58,7 @@ class LaunchedProcess:
         return pid_alive(self.pid)
 
 
-# Win32_Process.Create via CIM: the new process is created by the WMI service host — outside the server's
+# Win32_Process.Create via CIM: the new process is created by the WMI service host, outside the server's
 # process tree AND outside every job object the server runs in (a terminal / IDE / agent harness job with
 # KILL_ON_JOB_CLOSE that forbids breakaway would otherwise take Blender down with the server).
 _WMI_LAUNCH_PS = r"""
@@ -125,7 +125,7 @@ def _launch_wmi(cmdline: str, cwd: Path) -> LaunchedProcess:
 
 
 def _launch_cmd_start(exe: Path, blend: Path) -> LaunchedProcess:
-    """Fallback: `cmd /c start` — Blender's parent (cmd) exits at once, so it leaves the server's process tree;
+    """Fallback: `cmd /c start`. Blender's parent (cmd) exits at once, so it leaves the server's process tree;
     job breakaway when the enclosing job allows it."""
     cmdline = f'cmd.exe /d /c start "" /D "{blend.parent}" "{exe}" "{blend}"'
     flags = _DETACHED_PROCESS | _CREATE_NEW_PROCESS_GROUP | _CREATE_NO_WINDOW
@@ -146,7 +146,7 @@ def _launch_cmd_start(exe: Path, blend: Path) -> LaunchedProcess:
 
 
 def open_in_blender(exe: Path, blend: Path) -> LaunchedProcess:
-    """Open a .blend in the Blender GUI — the given Blender 5.0 exe (never the .blend file association),
+    """Open a .blend in the Blender GUI with the given Blender 5.0 exe (never the .blend file association),
     deliberately WITHOUT -b/--factory-startup so the user's preferences (already OptiX) apply.
 
     The window must outlive the server: on Windows it is started through WMI (Win32_Process.Create), which

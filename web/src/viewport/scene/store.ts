@@ -6,8 +6,8 @@ import type * as THREE from 'three'
 type Listener = () => void
 
 /**
- * Where the icon frame — the square the Blender camera renders (FRONT_ORTHO_SCALE / zoom at iso 0, auto-framed
- * otherwise) — sits on the canvas: top-left + side in CSS px from the canvas's top-left. The editor's CAD-style
+ * Where the icon frame, the square the Blender camera renders (FRONT_ORTHO_SCALE / zoom at iso 0, auto-framed
+ * otherwise), sits on the canvas: top-left + side in CSS px from the canvas's top-left. The editor's CAD-style
  * view zoom / pan moves and scales it (a view transform: the render framing is unchanged); the canvas may show
  * more than the frame around it.
  */
@@ -32,7 +32,7 @@ export class ViewportStore {
   readonly iso = { current: 0, target: 0 }
   /** The editor's view window (Viewport `frame` prop); null = the centred inscribed square. Read every frame. */
   frame: ViewFrame | null = null
-  /** Layer being dragged (front view) — suppresses hover outlines while moving. */
+  /** Layer being dragged (front view); suppresses hover outlines while moving. */
   dragging: string | null = null
   version = 0
 

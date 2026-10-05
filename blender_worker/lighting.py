@@ -2,7 +2,7 @@
 
 One light angle drives everything (glass doc §6.2):  key softbox disk, a grazing rim strip on the lit side,
 a weaker opposite rim strip, a front fill and the world's gradient/softbox. ``light_dir(a, e)`` =
-(0,0,1)·cos e + (sin a, cos a, 0)·sin e  — angle 0 = from the top (+Y), +90 = from the right (+X).
+(0,0,1)·cos e + (sin a, cos a, 0)·sin e; angle 0 = from the top (+Y), +90 = from the right (+X).
 No HDRI files are used.
 
 CAMERA-RELATIVE (PLAN §11 round 7): those axes are the CAMERA's (x = screen right, y = screen up, z = toward the
@@ -37,7 +37,7 @@ WORLD_CAL = 0.65
 # The world is left alone (changing it makes EEVEE re-bake its probes on every draft <-> preview switch).
 ENGINE_CAL = {"CYCLES": 0.95, "BLENDER_EEVEE": 1.075}
 # Key distance (round 5): at 6 BU the key's irradiance fell from 1.46x (top-left corner) to 0.68x (bottom-right)
-# of the centre across a flat plate — with a brand-exact transform every plate showed that spread (Spotify, Syno
+# of the centre across a flat plate; with a brand-exact transform every plate showed that spread (Spotify, Syno
 # Photos VPN plate dE 5.5, Life360's shading). The key now sits KEY_DIST away, scaled in size (same angular size:
 # same shadow softness and highlight shapes) and energy (same radiance: same centre irradiance), spread 0.83-1.21.
 KEY_DIST = 12.0
@@ -81,7 +81,7 @@ def key_vector(rig: dict) -> tuple:
 
 
 def _look_rotation(d: Vector) -> "Matrix":
-    """Rotation whose −Z axis points along −d (toward the origin) — glass doc §6.2 orientation."""
+    """Rotation whose −Z axis points along −d (toward the origin), the glass doc §6.2 orientation."""
     return (-d).to_track_quat("-Z", "Y").to_matrix().to_4x4()
 
 
@@ -102,7 +102,7 @@ def update_lights(scene: bpy.types.Scene, collection: bpy.types.Collection, rig:
     ``engine`` (render engine id) selects the per-engine exposure calibration (ENGINE_CAL).
 
     CAMERA-RELATIVE (PLAN §11 round 7): the rig is laid out for the head-on view (camera on +Z, angle 0 = screen up)
-    and then turned with the camera — ``view`` is the camera's world rotation (3×3, columns = its x, y, z axes; None
+    and then turned with the camera: ``view`` is the camera's world rotation (3×3, columns = its x, y, z axes; None
     = head-on). Every view (iso, perspective, tilt / turntable / iso animations) is lit like the head-on view: the key
     stays up-left of the SCREEN, never behind the camera at the mirror direction of the tilted flat tops."""
     objs = []
@@ -160,7 +160,7 @@ GRADIENT = [(0.00, (0.02, 0.02, 0.025), 1.0), (0.55, (0.18, 0.18, 0.20), 1.0),
 
 
 def _world_graph(g: Graph, rig: dict, backdrop: tuple, strength_scale: float = 1.0, view=None) -> None:
-    """Studio world: a gradient along the light's screen direction, a soft key spot and a front glow — all three axes
+    """Studio world: a gradient along the light's screen direction, a soft key spot and a front glow, all three axes
     in the CAMERA frame (``view``: the camera's world rotation, None = head-on), turned into world space."""
     a = math.radians(rig["angle"])
     R = _view4(view).to_3x3()
@@ -193,7 +193,7 @@ def update_world(scene: bpy.types.Scene, rig: dict, backdrop_rgb: tuple = (0.05,
                  engine: Optional[str] = None, view=None) -> bpy.types.World:
     """Procedural studio world. Not engine-calibrated (``engine`` is accepted for symmetry): a world change
     makes EEVEE re-bake its probes, ~50 ms on every draft <-> preview switch; the lights carry ENGINE_CAL.
-    ``view``: the camera's world rotation — the world turns with the camera like the light rig."""
+    ``view``: the camera's world rotation; the world turns with the camera like the light rig."""
     world = bpy.data.worlds.get("BIS World")
     fresh = world is None
     if fresh:

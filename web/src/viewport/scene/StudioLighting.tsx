@@ -1,4 +1,4 @@
-// Lighting: the procedural studio environment (rotated by the light angle) + the key light and a cool fill —
+// Lighting: the procedural studio environment (rotated by the light angle) + the key light and a cool fill,
 // mirroring the worker's rig, CAMERA-RELATIVE like it (PLAN §11 round 7): rig and environment are laid out for the
 // head-on view and turned with the camera every frame the camera turns (iso swing, orbit), so the iso view lights like
 // the head-on one and the light angle is relative to the view. The key is a spot at the rig's distance (lighting.KEY_DIST, 12 units since round 5) with
@@ -23,7 +23,7 @@ interface Props {
 
 /**
  * Worker lighting.KEY_DIST / KEY_SCALE (round 5): the key moved from 6 to 12 units at the same centre irradiance and the
- * same angular size (size × KEY_SCALE), so a flat plate is lit 0.83–1.21× of its centre instead of 0.68–1.46×.
+ * same angular size (size × KEY_SCALE), so a flat plate is lit 0.83-1.21× of its centre instead of 0.68-1.46×.
  */
 export const KEY_DISTANCE = 12
 export const KEY_SCALE = KEY_DISTANCE / 6
@@ -90,7 +90,7 @@ export function StudioLighting({ rig, shadowIntensity, casterHeight = 0 }: Props
 
   // Camera-relative rig (runs after the camera rigs' frame callbacks, before the render): the light angle turns the
   // environment about the view axis (0 = top, clockwise positive) and the camera's rotation carries environment, key
-  // and fill into world space — only when the camera turned or the angle changed.
+  // and fill into world space, only when the camera turned or the angle changed.
   useFrame((state) => {
     const L = laid.current
     const q = state.camera.quaternion
@@ -120,7 +120,7 @@ export function StudioLighting({ rig, shadowIntensity, casterHeight = 0 }: Props
     const half = Math.atan(SHADOW_HALF / KEY_DISTANCE)
     key.shadow.focus = Math.min(1, half / KEY_ANGLE)
     // A tight depth range around the icon: the shadow map stores perspective depth, whose resolution falls with
-    // near / d² — with near 1 the 0.1-unit caster → receiver gaps at d = 12 drowned in the bias (no shadows at all).
+    // near / d²: with near 1 the 0.1-unit caster → receiver gaps at d = 12 drowned in the bias (no shadows at all).
     key.shadow.camera.near = KEY_DISTANCE - SHADOW_DEPTH
     key.shadow.camera.far = KEY_DISTANCE + SHADOW_DEPTH
     key.shadow.mapSize.set(SHADOW_MAP, SHADOW_MAP)
@@ -152,7 +152,7 @@ export function StudioLighting({ rig, shadowIntensity, casterHeight = 0 }: Props
         distance={0}
         castShadow={shadows}
       />
-      {/* Worker 'BIS Fill': an area light FILL_DISTANCE away — a point light with inverse-square falloff, so the plate
+      {/* Worker 'BIS Fill': an area light FILL_DISTANCE away; here a point light with inverse-square falloff, so the plate
           gets the same gentle gradient (its centre irradiance = the former directional fill's). */}
       <pointLight
         ref={fillRef}

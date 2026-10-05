@@ -20,7 +20,7 @@ the only pre-processing is the paint and a few classic texture helpers:
 
 No Mix/Add Shader, no Emission/Transparent/Glass/Refraction/Volume shader nodes, no Light Path tricks: Cycles
 does the physics (refraction, real shadows, subsurface, thin film), EEVEE draws the same graph as a draft
-(raytraced refraction where transmissive; glass seen through other glass is beyond it — Cycles is the truth).
+(raytraced refraction where transmissive; glass seen through other glass is beyond it; Cycles is the truth).
 
 A material is described by a plain ``spec`` dict (:func:`make_spec`) and built through :class:`nodes.Graph`, so a
 value-only change (slider drag, colours, texture swap, preset switch with the same graph shape) updates the tree in
@@ -91,7 +91,7 @@ def max_emission(specs) -> float:
 
 
 def shape_name(layer_name: str, element: str) -> str:
-    """'BIS <layer name> / <element id>' — trimmed to Blender's ID name limit (the element id is kept)."""
+    """'BIS <layer name> / <element id>', trimmed to Blender's ID name limit (the element id is kept)."""
     tail = f" / {element}"
     head = f"BIS {layer_name}"
     if len(head) + len(tail) > MAX_NAME:
@@ -201,7 +201,7 @@ def _settings(mat: bpy.types.Material, spec: dict) -> None:
     # translucent shapes (piece opacity / alpha < 1, art alpha on opaque materials, SOFT art alpha on glass: shine /
     # glow rasters, gradient stops) are alpha-BLENDED. DITHERED alpha does not converge in EEVEE (a hashed per-pixel
     # pattern: Calculator's 44 % ÷ and Find Device's shine image stayed grainy even at 128 TAA samples; QA r8 #9).
-    # Blended surfaces cannot raytrace: their transmission reads the light probes — the scene's plate probe
+    # Blended surfaces cannot raytrace: their transmission reads the light probes, namely the scene's plate probe
     # (scene.SceneBuilder._probe: the plate beneath, not the dark studio world; a translucent Contacts head rendered
     # near-black without it, QA r9 N1). That probe is a single-sample capture whose plate carries the bodies' noisy
     # transparent shadows: a FLAT blended glass piece magnifies it into blotches (iMessage / Feit / Outlook rasters,
@@ -211,9 +211,9 @@ def _settings(mat: bpy.types.Material, spec: dict) -> None:
     _set_if(mat, "surface_render_method", "BLENDED" if blended else "DITHERED")
     if blended:
         # only the front-most surface of a blended body: with overlap its back faces (the underside) were drawn over
-        # the front in object order — blotchy raster glass (iMessage's bubble) without its key highlight
+        # the front in object order: blotchy raster glass (iMessage's bubble) without its key highlight
         _set_if(mat, "use_transparency_overlap", False)
-    # spec 'raytrace' False (the plate, scene.SceneBuilder._plate): refraction from the light probes only — the surface
+    # spec 'raytrace' False (the plate, scene.SceneBuilder._plate): refraction from the light probes only; the surface
     # stays in EEVEE's opaque layer, which the raytraced glass above it traces against
     _set_if(mat, "use_raytrace_refraction", transmissive and not blended and bool(spec.get("raytrace", True)))
     _set_if(mat, "thickness_mode", "SPHERE" if transmissive else "SLAB")
@@ -444,7 +444,7 @@ def _build(nt: bpy.types.NodeTree, spec: dict, update: bool) -> None:
 # spec helpers used by scene.py / swatches.py
 # ================================================================================================
 def resolve(layer_material: Optional[dict], element_material: Optional[dict] = None) -> tuple[str, dict]:
-    """(preset, full params) of a shape — presets.resolve_material (layer material merged with the shape's own)."""
+    """(preset, full params) of a shape, via presets.resolve_material (layer material merged with the shape's own)."""
     return P.resolve_material(layer_material, element_material)
 
 

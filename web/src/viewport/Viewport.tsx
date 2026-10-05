@@ -1,4 +1,4 @@
-// Instant three.js preview of the icon — a draft of the Blender scene (PLAN §3/§4 D2, §11): the same height-field
+// Instant three.js preview of the icon, a draft of the Blender scene (PLAN §3/§4 D2, §11): the same height-field
 // bodies, ONE Principled material per shape mapped onto MeshPhysicalMaterial, real layer distances in the CAD iso view.
 import { useCallback, useLayoutEffect, useMemo, useRef, type CSSProperties, type JSX } from 'react'
 import { Canvas, type RootState } from '@react-three/fiber'
@@ -33,7 +33,7 @@ export interface ViewportProps {
   stageElement?: () => HTMLElement | null
   /**
    * CAD-style view window: where the icon frame (the square Blender renders) sits on the canvas, CSS px from the
-   * canvas's top-left (scene/store.ts ViewFrame). The editor's zoom / pan moves it — the cameras zoom and shift so
+   * canvas's top-left (scene/store.ts ViewFrame). The editor's zoom / pan moves it; the cameras zoom and shift so
    * the auto-framed view fills it at any iso value, the canvas showing the scene around it. Omitted / null: the
    * canvas's centred inscribed square. Changing it re-renders only the camera (no scene re-render).
    */
@@ -117,7 +117,7 @@ export function Viewport(p: ViewportProps): JSX.Element {
   const effective = useMemo(() => resolveAppearance(p.project, p.appearance, p.presets), [p.project, p.appearance, p.presets])
   const geoLayers = p.geometry?.layers
   const mono = useMemo(() => appearanceMono(p.project, p.appearance, geoLayers), [p.project, p.appearance, geoLayers])
-  // watchOS ignores appearances (always light) — keep the backdrop consistent with resolveAppearance.
+  // watchOS ignores appearances (always light), so keep the backdrop consistent with resolveAppearance.
   const appearance = p.project.canvas.platform === 'watchos' ? 'light' : p.appearance
   const selectRef = useRef(p.onSelectLayer)
   selectRef.current = p.onSelectLayer

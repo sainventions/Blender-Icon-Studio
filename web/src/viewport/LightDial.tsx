@@ -30,7 +30,7 @@ const R_TRACK = 35
 const SQUIRCLE = plateOutlinePath('squircle', 0, 30)
 
 export function LightDial({ angle, onChange, size = 132 }: LightDialProps) {
-  // React's ids contain characters (':', '«»') that break url(#…) references in some engines — keep [A-Za-z0-9_-].
+  // React's ids contain characters (':', '«»') that break url(#…) references in some engines, so keep [A-Za-z0-9_-].
   const uid = 'ld' + useId().replace(/[^A-Za-z0-9_-]/g, '')
   const svgRef = useRef<SVGSVGElement>(null)
   const [dragging, setDragging] = useState(false)

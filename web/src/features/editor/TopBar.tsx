@@ -77,7 +77,7 @@ export function TopBar() {
             size="sm"
             icon={<Clapperboard />}
             onClick={() => useUi.getState().openDialog('animate')}
-            tipLabel="Animate — turntable, tilt, light sweep…"
+            tipLabel="Animate: turntable, tilt, light sweep…"
             aria-label="Animate"
           >
             <span className="hidden 2xl:inline">Animate</span>
@@ -221,7 +221,7 @@ function AppearanceSwitcher() {
             role="radio"
             aria-checked={active}
             onClick={() => setAppearance(a as AppearanceId)}
-            data-tip={`${long}${supported ? '' : ' — not used on this platform'}`}
+            data-tip={`${long}${supported ? '' : ' (not used on this platform)'}`}
             aria-label={long}
             data-tip-kbd={String(i + 1)}
             className={cn(
@@ -305,7 +305,7 @@ function ViewToggle() {
       onChange={(v) => set({ view3d: v })}
       options={[
         { value: 'front', icon: <ScanLine />, tip: 'Front view (matches the Blender camera)', kbd: 'O' },
-        { value: 'orbit', icon: <Orbit />, tip: 'Orbit view — drag to rotate the stack', kbd: 'O' },
+        { value: 'orbit', icon: <Orbit />, tip: 'Orbit view: drag to rotate the stack', kbd: 'O' },
       ]}
     />
   )

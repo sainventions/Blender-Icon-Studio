@@ -182,7 +182,7 @@ export function DocumentInspector() {
             value={camera.view}
             onChange={(v) => setCamera('view', { view: v })}
             options={[
-              { value: 'front', label: 'Orthographic', tip: 'Orthographic, like the OS draws icons — head-on or a CAD-style angled view' },
+              { value: 'front', label: 'Orthographic', tip: 'Orthographic, like the OS draws icons: head-on or a CAD-style angled view' },
               { value: 'perspective', label: 'Perspective', tip: 'Tilted perspective hero shot' },
             ]}
           />
@@ -310,7 +310,7 @@ export function DocumentInspector() {
               </button>
             </div>
           ))}
-          <p className="pt-0.5 text-3xs leading-snug text-fg-4">Switch appearance (1–6) and set a section’s scope to vary fills, opacity, blend and materials.</p>
+          <p className="pt-0.5 text-3xs leading-snug text-fg-4">Switch appearance (1-6) and set a section’s scope to vary fills, opacity, blend and materials.</p>
         </div>
       </Section>
     </div>

@@ -5,9 +5,9 @@ This module is THE contract between the SVG pipeline, the server, the Blender wo
 attribute names are identical to the JSON keys (no alias handling anywhere).
 
 Coordinate spaces (see docs/PLAN.md §3):
-  * SVG space  — original viewBox units, y down.
-  * Art space  — origin at viewBox centre, y UP, longer viewBox side spans 2.0 (−1..1).
-  * Canvas     — the icon plate spans −1..1 (x, y). Artwork root = canvas.art (scale, x, y).
+  * SVG space:   original viewBox units, y down.
+  * Art space:   origin at viewBox centre, y UP, longer viewBox side spans 2.0 (−1..1).
+  * Canvas:      the icon plate spans −1..1 (x, y). Artwork root = canvas.art (scale, x, y).
                  Blender: XY plane, camera on +Z looking −Z, 1 BU = 1 art unit.
 """
 from __future__ import annotations
@@ -82,7 +82,7 @@ Paint = Annotated[Union[FillNone, FillSolid, FillLinear, FillRadial], Field(disc
 
 
 # ----------------------------------------------------------------------------------------------
-# Elements (shapes found in the SVG) — owned by the SVG pipeline
+# Elements (shapes found in the SVG), owned by the SVG pipeline
 # ----------------------------------------------------------------------------------------------
 class DropShadow(_Model):
     """Drop shadow parsed from an SVG <filter> (feOffset/feGaussianBlur/feFlood). Units: art space."""
@@ -132,7 +132,7 @@ class LayerTransform(_Model):
 class LayerDepth(_Model):
     z: float = 0.0              # back face of the layer above the plate's front face (art units)
     thickness: float = 0.10     # total extrusion thickness
-    bevel: float = 0.045        # round-edge radius (roundness); clamped to thickness/2 — height-field bodies taper thin parts
+    bevel: float = 0.045        # round-edge radius (roundness); clamped to thickness/2; height-field bodies taper thin parts
     bevelSegments: int = 6
     inflate: float = 0.0        # 0..1 dome on the front face (reflections sweep across flat faces)
 
@@ -217,7 +217,7 @@ class CameraSpec(_Model):
     fov: float = 30.0                    # degrees (perspective)
     zoom: float = 1.0
     iso: float = 0.0                     # CAD-style POV: 0 = head-on (front) .. 1 = isometric; REAL distances, orthographic
-    explode: float = 1.0                 # legacy z-gap multiplier — keep 1.0 (the UI uses `iso` instead)
+    explode: float = 1.0                 # legacy z-gap multiplier; keep 1.0 (the UI uses `iso` instead)
 
 
 class LayerOverride(_Model):
@@ -366,7 +366,7 @@ class ExportRequest(_Model):
 
 
 # ----------------------------------------------------------------------------------------------
-# Styles, looks and batch ("Icon Pack") — apply one look to many icons
+# Styles, looks and batch ("Icon Pack"): apply one look to many icons
 # ----------------------------------------------------------------------------------------------
 class StyleLayerDefaults(_Model):
     material: MaterialSpec = MaterialSpec()
@@ -385,7 +385,7 @@ class StylePlate(_Model):
 
 class StyleSpec(_Model):
     """A transferable look. Applying it to a project (see bis.style.apply_style):
-    - every layer gets layerDefaults (material/depth/shadow/mode) — or layerMaterials[i] by index from the bottom
+    - every layer gets layerDefaults (material/depth/shadow/mode), or layerMaterials[i] by index from the bottom
       (clamped to the last entry) when given; bevel is clamped to thickness/2;
     - layers are re-stacked at their REAL heights, overlap-aware (shared/presets.json "geometry", PLAN 11 round 8):
       a layer stacks only above the lower layers it overlaps in XY, z(i) = max(stackLift, max over overlapped
@@ -405,7 +405,7 @@ class StyleSpec(_Model):
 
 
 class StyleRequest(_Model):
-    """POST /api/projects/{id}/style — exactly one of look / style / fromProject."""
+    """POST /api/projects/{id}/style: exactly one of look / style / fromProject."""
     look: Optional[str] = None            # key into presets.json "looks"
     style: Optional[StyleSpec] = None
     fromProject: Optional[str] = None     # copy the style of another project (bis.style.extract_style)
@@ -417,7 +417,7 @@ class BatchSource(_Model):
 
 
 class BatchRequest(_Model):
-    """POST /api/batch — 'Icon Pack': create/update projects from many sources, apply one style, render
+    """POST /api/batch ('Icon Pack'): create/update projects from many sources, apply one style, render
     each, optionally export everything into one zip."""
     sources: list[BatchSource]
     look: Optional[str] = None

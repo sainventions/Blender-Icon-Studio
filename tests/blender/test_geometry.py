@@ -1,5 +1,5 @@
 """2D outline helpers of the Blender worker (blender_worker/geometry.py): plate outlines, test / swatch shapes,
-flattening and scanline rasters — pure Python, no Blender needed. Bodies themselves are height fields
+flattening and scanline rasters. Pure Python, no Blender needed. Bodies themselves are height fields
 (test_heightfield.py / test_heightfield_corpus.py); the retired curve-bevel route (fillets, guard points, safe
 radii, adaptive curve resolution) has no tests any more."""
 from __future__ import annotations

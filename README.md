@@ -1,5 +1,9 @@
 <div align="center">
 
+<video src="https://github.com/sainventions/Blender-Icon-Studio/raw/main/docs/img/brag.mp4" poster="docs/img/brag-poster.jpg" width="860" controls muted playsinline>
+  <a href="docs/img/brag.mp4"><img src="docs/img/brag-poster.jpg" width="860" alt="Blender Icon Studio launch video: a flat SVG becomes a Liquid Glass icon rendered by Cycles (click to play)"></a>
+</video>
+
 # Blender Icon Studio
 
 **Flat SVG in. Liquid Glass out.**<br>
@@ -41,10 +45,10 @@ and dark glass on a dark plate looks dark.
    - creates `.venv` and installs `requirements.txt`;
    - runs `npm install` and builds the web UI into `web/dist`;
    - starts the server on <http://127.0.0.1:8420>;
-   - opens the app in your default browser — as a chromeless app window for Chromium browsers
+   - opens the app in your default browser, as a chromeless app window for Chromium browsers
      (Brave, Chrome, Vivaldi, Opera, Edge). Override with `scripts/start.ps1 -Browser chrome` (or a path).
 2. Pick a sample or drop an SVG anywhere on the home screen.
-3. Edit layers, materials and lighting — the live view, the EEVEE draft and the Cycles preview follow.
+3. Edit layers, materials and lighting; the live view, the EEVEE draft and the Cycles preview follow.
 4. Click **Export**, choose the targets and download the zip.
 
 Close the launcher console to quit; the Blender processes are tied to the server and exit with it, even if the
@@ -60,7 +64,7 @@ server is killed. If the server is already running, the launcher just opens a ne
 
 ## A tour of the app
 
-### Home — import, samples and Icon Pack
+### Home: import, samples and Icon Pack
 
 <img src="docs/img/ui-home.png" width="100%" alt="Home page: hero, Icon Pack card and the recent projects">
 
@@ -79,22 +83,22 @@ version and the OptiX GPU.
 - **Stage** in the middle, with four views and a view-angle control (Front · slider · Iso). Navigation is
   CAD-style: the wheel zooms at the cursor, middle-drag (or <kbd>Space</kbd>+drag) pans, <kbd>X</kbd> swings
   between top-down and isometric, and <kbd>0</kbd> fits the view again. Live, Render and Compare share one view.
-  - **Live** — an instant three.js preview that mirrors the Blender scene: the same height-field bodies, one
+  - **Live**: an instant three.js preview that mirrors the Blender scene: the same height-field bodies, one
     physical material per shape mapped input by input from its Principled values, the same lighting, camera
     and colour mode.
-  - **Render** — the latest Blender render. *Fit* never enlarges a render past its own pixels (a 512 px preview
+  - **Render**: the latest Blender render. *Fit* never enlarges a render past its own pixels (a 512 px preview
     is shown at 512 device pixels, centred); the chip under it says `1:1`, or the actual scale when you zoom.
-  - **Compare** — drag a divider between the live view and the Blender render.
-  - **Matrix** — all six appearances side by side plus a size waterfall (180 → 20 px).
-- **Renditions strip** at the bottom: Default, Dark, Clear Light/Dark, Tinted Light/Dark — click to edit one.
+  - **Compare**: drag a divider between the live view and the Blender render.
+  - **Matrix**: all six appearances side by side plus a size waterfall (180 → 20 px).
+- **Renditions strip** at the bottom: Default, Dark, Clear Light/Dark, Tinted Light/Dark. Click to edit one.
 - **Inspector** on the right:
-  - *Layer* — **Material** (preset picker + the Principled BSDF inputs, see [Materials](#materials-one-principled-bsdf-per-shape)),
-    **Colour** (fill overrides with a gradient editor, opacity, blend mode — used by the `.icon` export only),
+  - *Layer*: **Material** (preset picker + the Principled BSDF inputs, see [Materials](#materials-one-principled-bsdf-per-shape)),
+    **Colour** (fill overrides with a gradient editor, opacity, blend mode; used by the `.icon` export only),
     **Depth** (Z position, thickness, roundness, inflate, segments, individual / combined bodies, re-stack, and a
     warning with a **Re-stack** button when hand-placed layers collide; layers of soft images, such as glows and
     shines, are marked as flat cards),
     position & scale, **Shadow** (Physical / None), the layer's **Shapes** and per-appearance overrides.
-  - *Document* — platform, plate (shape, fill and its own Principled material), lighting, camera (view angle,
+  - *Document*: platform, plate (shape, fill and its own Principled material), lighting, camera (view angle,
     orthographic / perspective), colour mode and render settings.
 - **Status bar**: worker state, OptiX GPU, VRAM, utilisation, the GPU queue and the last render time.
 
@@ -102,7 +106,7 @@ The shot above is the *Contacts* sample in Clear Glass (Roughness 0, IOR 1.6, Tr
 with the light at +45°: the head is a glass sphere, the body a domed glass pebble (Inflate 0.5), and the orange
 plate refracts through both. Head and body don't overlap, so both rest on the plate.
 
-### CAD view — head-on to isometric
+### CAD view: head-on to isometric
 
 <img src="docs/img/ui-iso.png" width="100%" alt="Earth's four layers in the live view at view angle 0.7: Blue 2 and Blue 3 share one level above Blue; the Depth inspector shows Blue 3 at Z 0.338">
 
@@ -111,7 +115,7 @@ orthographic camera from head-on toward a true isometric view (pitch 35.264°, y
 swing is one undo step. Roll the wheel to zoom at the cursor and drag with the middle button to pan; neither
 changes the render framing, and <kbd>0</kbd>, <kbd>Home</kbd> or a double middle-click fits the view again.
 Nothing is spread apart: the layers sit at their **real** Z positions, so the depth you see is the depth you
-render. The live view and every Blender render share the same camera (`camera.iso`, 0 – 1) and its auto-framing;
+render. The live view and every Blender render share the same camera (`camera.iso`, 0 to 1) and its auto-framing;
 the Matrix renditions and the export masters stay head-on. **Animate → Iso sweep** renders head-on → isometric →
 head-on. The key, rim and fill lights and the studio environment turn with the camera (`lighting.angle` is
 relative to the view), so an iso, perspective or animated view is lit like the head-on one instead of catching a
@@ -131,9 +135,9 @@ don't overlap, so all of them rest on the plate; the thin brackets are round tub
 
 <img src="docs/img/ui-matrix.png" width="100%" alt="Matrix view: the six renditions of the Photos icon and the size waterfall">
 
-Icon Composer's six renditions — **Default**, **Dark**, **Clear Light**, **Clear Dark**, **Tinted Light** and
-**Tinted Dark** — rendered in one go (<kbd>Shift</kbd>+<kbd>M</kbd>). Appearances change only Principled inputs and
-the plate: *Dark* swaps in a dark plate fill and keeps glass glyphs readable — a glyph that lets more than half the
+Icon Composer's six renditions (**Default**, **Dark**, **Clear Light**, **Clear Dark**, **Tinted Light** and
+**Tinted Dark**) rendered in one go (<kbd>Shift</kbd>+<kbd>M</kbd>). Appearances change only Principled inputs and
+the plate: *Dark* swaps in a dark plate fill and keeps glass glyphs readable: a glyph that lets more than half the
 light through is capped at Transmission 0.5 with Subsurface 1, so it scatters light in its own colour instead of
 showing the near-black plate (a layer whose dark material you set is left alone); *Clear* turns every shape into
 white transmissive glass (roughness 0.22) over a frosted plate and a wallpaper; *Tinted* uses the art's luminance ×
@@ -147,7 +151,7 @@ override fills, opacity, blend mode and materials per layer.
 <img src="docs/img/ui-pack.png" width="100%" alt="Icon Pack page: eight icons rendered with the Liquid Glass look, with the contact sheet">
 
 Pick many icons, apply one look (or a style copied from another project) and render them all in one queued job,
-with a contact sheet and — optionally — every platform export packed into one zip.
+with a contact sheet and, optionally, every platform export packed into one zip.
 
 ## Materials: one Principled BSDF per shape
 
@@ -157,10 +161,10 @@ with a contact sheet and — optionally — every platform export packed into on
 <td width="50%"><img src="docs/img/hero-gemini-frosted.png" alt="Gemini in frosted tinted glass with clean star tips"></td>
 </tr>
 <tr>
-<td><sub><b>Clear Glass</b> — Roughness 0, IOR 1.6, Transmission 1. The head is as thick as it is wide with
+<td><sub><b>Clear Glass</b>: Roughness 0, IOR 1.6, Transmission 1. The head is as thick as it is wide with
 Roundness 100 %, so it is a near-sphere (a 15 % straight band at its equator); the body has a full round edge and
 Inflate 0.5. View angle 0.45, light at +45°.</sub></td>
-<td><sub><b>Frosted Glass</b> — Roughness 0.267, IOR 1.6, Transmission 1, Base Color = the SVG gradient. Inflate 0.4:
+<td><sub><b>Frosted Glass</b>: Roughness 0.267, IOR 1.6, Transmission 1, Base Color = the SVG gradient. Inflate 0.4:
 the Poisson dome turns the star tips into round, tapering tubes. Head-on.</sub></td>
 </tr>
 </table>
@@ -169,7 +173,7 @@ the Poisson dome turns the star tips into round, tapering tubes. Head-on.</sub><
   shape (`BIS <layer> / <shape id>`; the plate is `BIS Plate`). The graph is the layer art (image texture, or a
   gradient / solid fill override) → Mix (white → art, *Art Colour Amount*) → **one Principled BSDF** → Material
   Output. There are no Mix / Add Shader nodes, no Emission / Transparent / Glass / Refraction / Volume shader
-  nodes, no light-path tricks and no glow cards — Cycles works out the refraction, reflections and shadows.
+  nodes, no light-path tricks and no glow cards; Cycles works out the refraction, reflections and shadows.
 - **The Principled inputs are the sliders.** The inspector shows the 28 parameters grouped like Blender's panel:
   *Paint* (use the art colour as Base Color, Emission or both; Art Colour Amount; Surface Grain; Film Variation),
   *Base* (Metallic, Roughness, IOR, Alpha, Diffuse Roughness), *Subsurface*, *Specular*, *Transmission*, *Coat*,
@@ -178,7 +182,7 @@ the Poisson dome turns the star tips into round, tapering tubes. Head-on.</sub><
   grain, noise → map range for thin-film variation, tint mixes for specular / coat / sheen, a radial tangent for
   brushed metal.
 - **Presets are starting values.** 16 presets in `shared/presets.json`: Liquid Glass, Clear, Frosted and Stained
-  Glass, Diamond (IOR 2.4 + thin film — the Principled BSDF in Blender 5.0 has no dispersion), Jelly
+  Glass, Diamond (IOR 2.4 + thin film; the Principled BSDF in Blender 5.0 has no dispersion), Jelly
   (transmission + subsurface), Glossy Plastic, Satin, Hard Candy, Gummy, Matte Clay, Chrome, Anodized Metal,
   Iridescent (thin film), Neon (emission; the glow is the compositor's Glare, a render setting) and Flat (2D).
 - **Per-shape materials.** Expand a layer and click a shape (or right-click → *Own material*) to give it its own
@@ -193,7 +197,7 @@ the Poisson dome turns the star tips into round, tapering tubes. Head-on.</sub><
 
 - **Height-field bodies for every shape.** Each piece (individual mode) or silhouette (combined mode) becomes one
   watertight body over its 2D outline: a flat middle, a round edge that follows the inward distance *d* from the
-  outline, and a dome on top —
+  outline, and a dome on top:
   `top z = e + hb(d) + inflate · D · √(u / u_max)`, with `hb(d) = √(β² − (β − min(d, β))²)`,
   `β = min(b, max(w, d))`, `b = min(bevel, 0.85 · thickness/2)`, `e = thickness/2 − b` and *D* the body's
   largest inscribed radius; the bottom mirrors the top.
@@ -209,7 +213,7 @@ the Poisson dome turns the star tips into round, tapering tubes. Head-on.</sub><
   ("fins") a distance-based dome leaves along the middle of a star or a stroke. Thin parts get several rows of
   sample points across their width, so they stay round.
 - **Thin parts taper instead of breaking.** Because the round edge is limited by the distance to the outline, star
-  tips, thin strokes and sharp corners simply get thinner — no inverted bevels and no self-intersecting edges.
+  tips, thin strokes and sharp corners simply get thinner, with no inverted bevels and no self-intersecting edges.
   Across the 68-icon corpus at default, maximum roundness and full inflate: zero self-intersections, zero
   non-manifold edges.
 - **Pieces inside one layer.** Where a piece touches another, its outline pulls back to follow the other's outline
@@ -239,7 +243,7 @@ the Poisson dome turns the star tips into round, tapering tubes. Head-on.</sub><
   re-split the layers or apply a look.
 - **Baked highlights are hidden.** A soft card that lies at least half on the body layers below it is a highlight
   baked into the art (*Find Device's* sweep). Cycles lights the bodies for real, so that card imports hidden, with
-  the warning *baked highlight hidden — Blender lighting replaces it*; unhide the layer to keep it. A soft image
+  the warning *baked highlight hidden because Blender lighting replaces it*; unhide the layer to keep it. A soft image
   that doesn't sit on other art (*Vanced Neon's* glow halo) stays a visible card, and merging body art into a
   hidden card turns it into a visible body.
 - **Import defaults.** New imports start as Liquid Glass with Thickness 0.16, Roundness 100 % (bevel 0.08),
@@ -274,7 +278,7 @@ the Poisson dome turns the star tips into round, tapering tubes. Head-on.</sub><
   placed relative to the camera, so an angle means the same thing head-on, at iso and in perspective.
 
 **Looks and styles**
-- **Looks** restyle the whole icon in one click — Liquid Glass, Crystal, Frosted, Prism, Candy, Clay, Chrome,
+- **Looks** restyle the whole icon in one click: Liquid Glass, Crystal, Frosted, Prism, Candy, Clay, Chrome,
   Neon, Iridescent and Soft 3D. A look sets every layer's material, depth (thickness, roundness, inflate) and
   shadow, restacks the layers overlap-aware by real height (Crystal and Prism leave 0.05 between bodies, every
   other look the default 0.03) and sets the plate material plus, when it defines them, lighting, camera, colour
@@ -289,13 +293,13 @@ the Poisson dome turns the star tips into round, tapering tubes. Head-on.</sub><
   deliberate System Light / System Dark / None fill (`?plateFill=true&shape=true` copies fill and shape
   anyway). Per-shape materials never travel (shape ids belong to one icon).
 
-**Rendering** — all Cycles work runs on the OptiX device:
+**Rendering.** All Cycles work runs on the OptiX device:
 
 | Path | Engine | Typical time (RTX 3070 Ti) | Used for |
 |---|---|---|---|
 | Live | three.js (WebGL) | every frame | layout, materials, lighting and view angle while you drag |
 | Draft | EEVEE, 512 px | ~0.3 s warm | automatic after each edit |
-| Preview | Cycles + OptiX denoiser, 512 px, 48 spp | ~0.6–1 s | automatic ~1.2 s after edits settle |
+| Preview | Cycles + OptiX denoiser, 512 px, 48 spp | ~0.6-1 s | automatic ~1.2 s after edits settle |
 | Final / Ultra | Cycles, 1024 / 2048 px | seconds | exports and hero shots (one-shot process) |
 
 EEVEE is a layout draft: it can't show glass through glass. Translucent glass (opacity below 1, or art with soft
@@ -315,9 +319,9 @@ is the first physical view.
 | macOS | `AppIcon.icns`, `AppIcon.iconset` and `AppIcon.appiconset`, with the Tahoe 824/1024 body and transparent margins |
 | watchOS | 1024 appiconset + a 1088 circle |
 | Android | adaptive icon (foreground layers / background plate / themed monochrome, 108 dp, all densities), legacy square + round mipmaps, the XML, and a 512 Play Store icon |
-| Windows | multi-size `app.ico` (16–256) + PNGs |
+| Windows | multi-size `app.ico` (16-256) + PNGs |
 | Web / PWA | `favicon.ico` (16/32/48), `favicon.svg`, `apple-touch-icon`, 192/512 + maskable icons, `manifest.webmanifest` and a `<head>` snippet |
-| Marketing | `hero.png` (three-quarter CAD view, view angle 0.55), `hero-iso.png` (isometric) and `hero-dark.png` — transparent PNGs with the real layer depths |
+| Marketing | `hero.png` (three-quarter CAD view, view angle 0.55), `hero-iso.png` (isometric) and `hero-dark.png`, all transparent PNGs with the real layer depths |
 | Icon Composer | `.icon` bundle (beta): layer SVGs + `icon.json`, groups ordered front→back, dark/tinted specializations; glass, blur and translucency are derived from the Principled values |
 | Blender | the `.blend` scene with packed textures |
 
@@ -326,7 +330,7 @@ Platform masters are always rendered head-on.
 **Also:** animations (turntable, tilt, float, light sweep, iso sweep) as MP4 (H.264), WebP, GIF or a PNG
 sequence · **Icon Pack** batches with progress ("Icon 7/24: Maps"), per-icon failure marking, cancel that
 keeps finished icons, and live drafts that keep running between icons · **Open in Blender** saves the scene and
-opens it in your Blender GUI (started through WMI on Windows, so it stays open after the server stops) — every
+opens it in your Blender GUI (started through WMI on Windows, so it stays open after the server stops); every
 shape's material is an ordinary Principled BSDF you can keep editing there.
 
 <details>
@@ -335,7 +339,7 @@ shape's material is an ordinary Principled BSDF you can keep editing there.
 | | | |
 |---|---|---|
 | <img src="docs/img/hero-photos-liquid-glass.png" width="260" alt="Photos as imported, Liquid Glass"> | <img src="docs/img/hero-maps-dark.png" width="260" alt="Maps as imported, Dark appearance"> | <img src="docs/img/hero-discord-clear-dark.png" width="260" alt="Discord as imported, Clear Dark appearance"> |
-| *Photos* — as imported (Liquid Glass) | *Maps* — as imported, Dark appearance | *Discord* — as imported, Clear Dark appearance |
+| *Photos*: as imported (Liquid Glass) | *Maps*: as imported, Dark appearance | *Discord*: as imported, Clear Dark appearance |
 
 </details>
 
@@ -344,7 +348,7 @@ shape's material is an ordinary Principled BSDF you can keep editing there.
 
 | Keys | Action |
 |---|---|
-| <kbd>1</kbd> – <kbd>6</kbd> | switch appearance (Default, Dark, Clear Light, Clear Dark, Tinted Light, Tinted Dark) |
+| <kbd>1</kbd> to <kbd>6</kbd> | switch appearance (Default, Dark, Clear Light, Clear Dark, Tinted Light, Tinted Dark) |
 | <kbd>V</kbd> | cycle the stage: Live → Render → Compare → Matrix |
 | <kbd>X</kbd> (or <kbd>I</kbd>) | swing the view between top-down and isometric (real layer distances) |
 | wheel · middle-drag (or <kbd>Space</kbd>+drag) | zoom at the cursor · pan the view (CAD-style; doesn't change the render framing) |
@@ -362,7 +366,7 @@ shape's material is an ordinary Principled BSDF you can keep editing there.
 
 - Cycles always uses the **OptiX** device: the CUDA and CPU device entries are disabled and the **OptiX
   denoiser** is used in every Cycles tier. EEVEE drafts run on the same GPU.
-- The GPU is shared with the desktop (an 8 GB card already carries 3.5–4.7 GB from Windows and apps). To stay
+- The GPU is shared with the desktop (an 8 GB card already carries 3.5-4.7 GB from Windows and apps). To stay
   within that:
   - interactive tiers are clamped to **512 px**, and `use_persistent_data` is off;
   - Final (1024 px) and Ultra (2048 px) renders, exports and animations run in **one-shot Blender processes**
@@ -371,22 +375,22 @@ shape's material is an ordinary Principled BSDF you can keep editing there.
     compile); MNEE shadow caustics stay off (a 164 s OptiX kernel compile).
 - The first EEVEE render after a driver or Blender update compiles shaders (about 12 s). The worker warms up
   at startup, and the status bar shows *Worker starting…* until it is ready.
-- Exports at Final quality render up to 13 master images, one Blender process each (about 2–3 s of start-up per
+- Exports at Final quality render up to 13 master images, one Blender process each (about 2-3 s of start-up per
   image on top of the render). Keep Ultra for hero shots.
 
 ## Architecture
 
 ```mermaid
 flowchart TB
-  subgraph web["web/ — React 19 · TypeScript · three.js / R3F · Tailwind 4 · zustand"]
+  subgraph web["web/: React 19 · TypeScript · three.js / R3F · Tailwind 4 · zustand"]
     UI["Home · Editor (layers | live view + Blender render | inspector) · Icon Pack · Export · Animate"]
   end
-  subgraph server["server/bis/ — FastAPI · Python 3.13 · port 8420"]
+  subgraph server["server/bis/: FastAPI · Python 3.13 · port 8420"]
     SVG["svg/: import → elements → split → geometry + textures"]
     CORE["projects · materials · jobs (one serial GPU queue) · rendering · export · icon_format · system"]
     BRIDGE["blender/bridge.py"]
   end
-  subgraph blender["blender_worker/ — runs inside Blender 5.0 (bpy only)"]
+  subgraph blender["blender_worker/: runs inside Blender 5.0 (bpy only)"]
     W["persistent worker: drafts + previews"]
     O["one-shot processes: finals, exports, animations, .blend"]
   end
@@ -403,7 +407,7 @@ flowchart TB
   (geometry bundles, layer textures and layer SVGs), `renders/<jobId>.png`, `exports/<jobId>.zip` and `blend/`.
   Everything under a project is served at `/files/projects/<id>/…`.
 - **Materials on the server:** every project is cleaned on load and save against the Principled schema in
-  `shared/presets.json` — unknown parameters are dropped, values are clamped to the slider ranges and old
+  `shared/presets.json`: unknown parameters are dropped, values are clamped to the slider ranges and old
   parameter names (`frost`, `coat`, `film`, …) are mapped onto Principled inputs, so projects from before the
   single-Principled change still open.
 - **Jobs:** one global GPU queue. Live drafts jump ahead and are *coalesced* (a newer live render replaces a
@@ -440,7 +444,7 @@ flowchart TB
 | `GET /projects/{id}/style` | copy style → `StyleSpec` (`?plateFill=true&shape=true` also copies the plate fill / shape) |
 | `POST /projects/{id}/style` | paste style: exactly one of `{look}`, `{style: StyleSpec}` or `{fromProject}` → the saved `Project` (400 if not exactly one, 404 for an unknown look or project) |
 | `GET /projects/{id}/layers/{layerId}/thumbnail.png` | a layer thumbnail |
-| `POST /projects/{id}/render` | queue a render → `Job` (an optional `camera` with `iso` 0–1 sets the view angle) |
+| `POST /projects/{id}/render` | queue a render → `Job` (an optional `camera` with `iso` 0-1 sets the view angle) |
 | `POST /projects/{id}/renditions` | the six appearances → `Job[]` |
 | `POST /projects/{id}/animate` | queue an animation → `Job` (`kind`: `tilt`, `turntable`, `float`, `light-sweep`, `iso`) |
 | `POST /projects/{id}/export` | queue an export → `Job`; the result holds `zip`, `files` and `previews` |

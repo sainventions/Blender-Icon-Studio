@@ -17,7 +17,7 @@ const FILL_LABEL: Record<FillType, string> = {
 
 const FILL_HELP: Partial<Record<FillType, string>> = {
   auto: 'Uses the artwork’s own colours, gradients and images (rasterised layer texture).',
-  none: 'No paint — glass shows pure refraction, solids render neutral.',
+  none: 'No paint: glass shows pure refraction, solids render neutral.',
   'system-light': 'Apple’s light background gradient (#ffffff → #e4e5ea).',
   'system-dark': 'Apple’s dark background gradient (#3a3a3f → #111114).',
 }

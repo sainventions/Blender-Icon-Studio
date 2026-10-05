@@ -2,7 +2,7 @@
 
 The server imports ``bis.svg`` on first use so it starts (and serves presets, samples, jobs, …) even while the
 pipeline is unavailable. Tests inject a fake module with the same API (see ``bis.testing.FakeSvg``).
-All calls are synchronous and CPU-bound — callers run them in a worker thread.
+All calls are synchronous and CPU-bound, so callers run them in a worker thread.
 """
 from __future__ import annotations
 

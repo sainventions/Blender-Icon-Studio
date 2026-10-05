@@ -183,7 +183,7 @@ function Hero({ onImport, onBrowse }: { onImport: () => void; onBrowse: () => vo
           <span className="text-gradient">Liquid Glass out.</span>
         </h1>
         <p className="mt-5 max-w-[540px] text-[15px] leading-relaxed text-fg-3">
-          Split any icon into layers, extrude them into real glass, metal and candy, and render every Apple appearance on your GPU —
+          Split any icon into layers, extrude them into real glass, metal and candy, and render every Apple appearance on your GPU,
           then export for iOS, macOS, watchOS, Android, Windows and the web.
         </p>
         <div className="mt-8 flex flex-wrap items-center gap-3">
@@ -202,8 +202,8 @@ function Hero({ onImport, onBrowse }: { onImport: () => void; onBrowse: () => vo
         </div>
         <dl className="mt-10 grid max-w-[540px] grid-cols-4 gap-4 border-t border-line pt-5">
           {[
-            [samples ? samples.filter((x) => collectionOf(x) === 'corpus').length || samples.length : '—', 'sample icons'],
-            [presets ? Object.keys(presets.materials).length : '—', 'materials'],
+            [samples ? samples.filter((x) => collectionOf(x) === 'corpus').length || samples.length : '-', 'sample icons'],
+            [presets ? Object.keys(presets.materials).length : '-', 'materials'],
             [6, 'appearances'],
             [9, 'export targets'],
           ].map(([n, l]) => (
@@ -244,7 +244,7 @@ function PackCard() {
             <Badge tone="accent">New</Badge>
           </span>
           <span className="mt-1 block max-w-[560px] text-xs leading-relaxed text-fg-3">
-            Have a whole icon set? Pick the icons, choose one of {lookCount || 'the'} looks and render them all in one go — with a contact sheet and a zip at the end.
+            Have a whole icon set? Pick the icons, choose one of {lookCount || 'the'} looks and render them all in one go, with a contact sheet and a zip at the end.
           </span>
         </span>
         <span className="relative hidden shrink-0 items-center md:flex" aria-hidden>

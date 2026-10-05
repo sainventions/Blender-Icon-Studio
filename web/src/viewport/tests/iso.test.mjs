@@ -23,7 +23,7 @@ test('margins and the iso basis mirror blender_worker/framing.py', () => {
   near(b0.x.x, 1, 1e-12)
   near(b0.y.y, 1, 1e-12)
   near(b0.z.z, 1, 1e-12)
-  // isometric: camera x = (1, 1, 0)/√2, y = (−1, 1, 2)/√6, view along −(1, −1, 1)/√3 — elevation 35.264°, azimuth 45°
+  // isometric: camera x = (1, 1, 0)/√2, y = (−1, 1, 2)/√6, view along −(1, −1, 1)/√3, elevation 35.264°, azimuth 45°
   const b1 = iso.isoBasis(1)
   const s2 = Math.SQRT1_2
   const s6 = 1 / Math.sqrt(6)
@@ -116,7 +116,7 @@ function geo(id, x0, y0, x1, y1) {
   }
 }
 
-test('layers sit at their REAL z (depth.z + ε) — no explode spreading; the framing hull spans their real heights', () => {
+test('layers sit at their REAL z (depth.z + ε) with no explode spreading; the framing hull spans their real heights', () => {
   const layers = [layer('A', 0, 'satin'), layer('B', 0.25, 'liquid_glass'), layer('C', 0.5, 'liquid_glass', { visible: false })]
   const geometry = { A: geo('A', -0.6, -0.6, 0.2, 0.2), B: geo('B', -0.2, -0.2, 0.6, 0.6), C: geo('C', 0, 0, 1, 1) }
   const art = { scale: 1, x: 0, y: 0 }
@@ -230,7 +230,7 @@ test('camera-relative lighting (round 7): rig + environment turn with the camera
     near(e.z, -THREE.MathUtils.degToRad(a), 1e-9, `env angle ${a}`)
   }
   // any view: the light keeps its place on the SCREEN (camera frame), and the environment's key spot (rendered for
-  // angle 0 at lightDir(0, elevation)) lands on the key light — the cube map and the lights stay one rig
+  // angle 0 at lightDir(0, elevation)) lands on the key light; the cube map and the lights stay one rig
   for (const t of [0.35, 0.6, 1]) {
     const q = iso.isoQuaternion(t)
     const { x, y, z } = iso.isoBasis(t)

@@ -103,7 +103,7 @@ export function LayerInspector() {
     }
   }
 
-  /** A material *input* edit only touches those inputs, and only on selected layers that use the same preset —
+  /** A material *input* edit only touches those inputs, and only on selected layers that use the same preset:
    *  multi-selecting a glass and a chrome layer and dragging "Roughness" must not turn the chrome into glass. */
   const editMaterialParams = (next: MaterialSpec, keys: MaterialEditKeys) => {
     const apply = (m: MaterialSpec) => applyParams(m, next, keys)
@@ -194,7 +194,7 @@ export function LayerInspector() {
 
       {allLocked && (
         <div className="mx-3 mt-3 flex items-center gap-2 rounded-lg border border-warn/25 bg-warn/[0.07] px-2.5 py-2 text-2xs text-warn">
-          <Lock className="h-3.5 w-3.5" /> Locked — unlock to edit.
+          <Lock className="h-3.5 w-3.5" /> Locked. Unlock to edit.
         </div>
       )}
 
@@ -233,7 +233,7 @@ export function LayerInspector() {
               {!materialScope.bucket && <OverrideRows project={project} layerIds={[primary.id]} field="material" presets={presets} />}
               {!shapeIds.length && ownShapes.length > 0 && !materialScope.bucket && (
                 <p className="text-3xs leading-snug text-fg-4">
-                  {ownShapes.length} shape{ownShapes.length === 1 ? ' has its' : 's have their'} own material — click it in the Layers panel (expand the layer) to edit it.
+                  {ownShapes.length} shape{ownShapes.length === 1 ? ' has its' : 's have their'} own material. Click it in the Layers panel (expand the layer) to edit it.
                 </p>
               )}
             </>
@@ -429,8 +429,8 @@ function RasterNote({ kind }: { kind: 'card' | 'body' | null }) {
       <ImageIcon className="mt-px h-3 w-3 shrink-0 text-fg-4" />
       <span className="min-w-0 flex-1">
         {kind === 'card'
-          ? 'Soft raster (a glow, shine or shadow): a flat card — imported thin, no dome; looks keep it flat. Inflate still works if you want a pillow.'
-          : 'Raster with a crisp outline: a real body like vector art — its traced silhouette gets the normal thickness, round edge and dome.'}
+          ? 'Soft raster (a glow, shine or shadow): a flat card (imported thin, no dome); looks keep it flat. Inflate still works if you want a pillow.'
+          : 'Raster with a crisp outline: a real body like vector art. Its traced silhouette gets the normal thickness, round edge and dome.'}
       </span>
     </div>
   )
@@ -559,7 +559,7 @@ function ShapeTarget({
       )}
       {!own && !mixed && (
         <p className="text-3xs leading-snug text-fg-4">
-          Inherits <b className="font-semibold text-fg-3">{presets.materials[layer.material.preset]?.label ?? layer.material.preset}</b> from the layer —
+          Inherits <b className="font-semibold text-fg-3">{presets.materials[layer.material.preset]?.label ?? layer.material.preset}</b> from the layer;
           edits below change the whole layer.
         </p>
       )}

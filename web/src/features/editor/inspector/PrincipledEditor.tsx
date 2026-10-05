@@ -1,5 +1,5 @@
 // The material inspector body: the inputs of the ONE Principled BSDF every shape renders with (PLAN §11), in Blender's
-// panel groups (Paint, Base, Subsurface, Specular, Transmission, Coat, Sheen, Emission, Thin Film — presets.json
+// panel groups (Paint, Base, Subsurface, Specular, Transmission, Coat, Sheen, Emission, Thin Film; presets.json
 // "group"). Only groups that do something start expanded; every param and group resets to what it falls back to (the
 // preset's starting value, or the layer material for a shape's own material).
 import { useState, type ReactNode } from 'react'
@@ -73,7 +73,7 @@ function PrincipledPanel({ presets, spec, inherited, onChange, resetTo = 'preset
         <span className="h-2 w-2 shrink-0 rounded-full bg-[#4fa868] shadow-[0_0_6px_rgb(79_168_104/0.6)]" />
         <span
           className="min-w-0 flex-1 truncate text-2xs font-semibold text-fg-2"
-          data-tip="Every shape renders with ONE Principled BSDF — these are its inputs. Cycles does the physics: refraction, real shadows, subsurface, thin film."
+          data-tip="Every shape renders with ONE Principled BSDF; these are its inputs. Cycles does the physics: refraction, real shadows, subsurface, thin film."
         >
           Principled BSDF
         </span>
@@ -117,7 +117,7 @@ function PrincipledPanel({ presets, spec, inherited, onChange, resetTo = 'preset
           ))}
           {g.name === 'Emission' && (
             <p className="text-3xs leading-snug text-fg-4" style={{ paddingLeft: LABEL_W + 8 }}>
-              Colour: {String(value('paintMode')).includes('emission') ? 'the art colour' : 'white — set Paint ▸ Use Art Colour As to light with the art'}
+              Colour: {String(value('paintMode')).includes('emission') ? 'the art colour' : 'white (set Paint ▸ Use Art Colour As to light with the art)'}
             </p>
           )}
         </GroupPanel>

@@ -118,7 +118,7 @@ def test_appearances_only_change_principled_inputs():
 
 
 def test_dark_renditions_keep_glyphs_lit():
-    """QA r8 #2: clear glass over the near-black dark plate only transmits that plate — glyphs vanished. Dark and
+    """QA r8 #2: clear glass over the near-black dark plate only transmits that plate; glyphs vanished. Dark and
     tinted-dark cap transmission (DARK_GLYPH) and let the art scatter (subsurface) as the base colour: Principled
     inputs only, no emission; opaque shapes and a layer whose dark material the user set are left alone."""
     layers = [{"id": "A", "material": {"preset": "liquid_glass", "params": {"roughness": 0.1}},
@@ -283,7 +283,7 @@ def test_element_materials_override_one_shape(worker, outdir):
 
 @needs_blender
 def test_element_material_splits_an_auto_merged_layer(worker, outdir):
-    """Touching opaque pieces render as ONE body (scene.touching_opaque) — unless a shape has its own material:
+    """Touching opaque pieces render as ONE body (scene.touching_opaque), unless a shape has its own material:
     the override must not be dropped silently, so that layer renders its pieces individually."""
     lay = T.layer("A", preset="satin")
     g = T.geo([("e1", [T.rect(-0.5, -0.3, 0.0, 0.3)], "#3366ff", 1.0),
@@ -322,7 +322,7 @@ def test_value_changes_update_in_place(worker, outdir):
 def test_eevee_material_settings(worker, outdir):
     """EEVEE draws the same graph: raytraced refraction through a sphere of the piece's thickness on transmissive
     shapes, alpha-BLENDED translucent ones (only their front-most surface); the scene carries the plate's sphere
-    probe, which sees the plate only (every layer body hidden from it) — Cycles ignores both."""
+    probe, which sees the plate only (every layer body hidden from it); Cycles ignores both."""
     render(worker, two_discs(preset="clear_glass", elem={"e2": {"preset": "satin", "params": {"alpha": 0.5}}}),
            outdir / "eevee.png")
     info = worker.result("scene_info")
@@ -352,8 +352,8 @@ def translucent_disc(z=0.0, opacity=0.66, colour="#ffffff", plate="#ff7c3b", r=0
 
 @needs_blender
 def test_translucent_glass_drafts_track_cycles(worker, outdir):
-    """QA r9 N1: a 66 % white liquid-glass head on an orange plate (Contacts) rendered near-black in EEVEE drafts —
-    (104,70,67) against Cycles' (207,93,67): alpha-blended glass cannot trace and read the dark studio world. With the
+    """QA r9 N1: a 66 % white liquid-glass head on an orange plate (Contacts) rendered near-black in EEVEE drafts
+    ((104,70,67) against Cycles' (207,93,67)): alpha-blended glass cannot trace and read the dark studio world. With the
     plate probe the draft head reads the plate through the glass like the Cycles preview."""
     got = {}
     for q in ("draft", "preview"):
@@ -392,8 +392,8 @@ def _black_pixels(path) -> int:
 @pytest.mark.parametrize("art_scale", [0.9, 1.0, 1.073])
 def test_flat_blended_glass_is_never_black(worker, outdir, art_scale):
     """Round-8 review: an orthographic head-on view EXACTLY parallel to a flat face's normal made EEVEE's forward
-    (alpha-blended) refraction NaN — a flat 60 % glass disc (inflate 0, Contacts' head as a thin card) and Find Device's
-    flat soft-alpha shine card rendered as pure black shapes in drafts at art scales 0.8–1.1 (1.072957 happened to
+    (alpha-blended) refraction NaN: a flat 60 % glass disc (inflate 0, Contacts' head as a thin card) and Find Device's
+    flat soft-alpha shine card rendered as pure black shapes in drafts at art scales 0.8-1.1 (1.072957 happened to
     round clear). The head-on camera is pitched by scene.FRONT_TILT (0.01°)."""
     lay = T.layer("A", preset="liquid_glass", bevel=0.006, thickness=0.02)
     g = T.geo([("e1", [T.circle(0.3, -0.45)], "#ffffff", 0.6), ("e2", [T.circle(0.3, 0.45)], "#ffffff", 0.6)])
@@ -403,7 +403,7 @@ def test_flat_blended_glass_is_never_black(worker, outdir, art_scale):
     render(worker, (proj, bundle), out)
     mats = worker.result("scene_info")["materials"]
     assert {m["renderMethod"] for k, m in mats.items() if k.startswith("BIS A /")} == {"BLENDED"}
-    assert _black_pixels(out) == 0, _black_pixels(out)                    # before: both discs (1571–2223 px)
+    assert _black_pixels(out) == 0, _black_pixels(out)                    # before: both discs (1571-2223 px)
     c = rgb_at(out, -0.45 * art_scale, 0.0)
     assert c[0] > 150 and c[0] > c[2] + 60, c.round()                     # the orange plate through the glass
 
@@ -435,7 +435,7 @@ def raster_cards(outdir: Path):
 def test_raster_glass_dithers_unless_its_alpha_is_soft(worker, outdir):
     """Round-8 review: glass whose art alpha is only a coverage mask stays DITHERED + raytraced; only SOFT art alpha
     (≥ materials.SOFT_ALPHA of the covered pixels partly transparent: a glow / shine) is alpha-blended. Blended glass
-    refracts the plate probe, a single-sample capture that carries the bodies' noisy shadows — iMessage's, Feit's and
+    refracts the plate probe, a single-sample capture that carries the bodies' noisy shadows; iMessage's, Feit's and
     Outlook's flat raster glass turned blotchy."""
     render(worker, raster_cards(outdir), outdir / "raster_cards.png")
     mats = worker.result("scene_info")["materials"]
@@ -448,7 +448,7 @@ def test_raster_glass_dithers_unless_its_alpha_is_soft(worker, outdir):
 @needs_blender
 def test_crisp_raster_is_a_height_field_body(worker, outdir):
     """PLAN §11 round 9: a raster with a crisp alpha silhouette (iMessage's bubble, Feit's house, Outlook) is a real
-    body like vector art — the server gives its layer the default depth; the worker builds the height field over the
+    body like vector art: the server gives its layer the default depth; the worker builds the height field over the
     traced outline and paints it with the PNG (Base Color art). Draft and preview both show the art through the glass
     (never black), the dome is as tall as a vector body's, and the soft glow beside it stays a blended flat card."""
     proj, bundle = raster_cards(outdir)
@@ -480,7 +480,7 @@ def test_crisp_raster_is_a_height_field_body(worker, outdir):
 @needs_blender
 def test_flat_raster_glass_draft_is_smooth(worker, outdir):
     """iMessage's bubble (an opaque raster, a flat image card) in a 256 px draft: its high-pass grain inside the bubble
-    stays at the Cycles preview's level — blended, it was a blotchy pattern from the plate probe (1.5 vs 0.5)."""
+    stays at the Cycles preview's level; blended, it was a blotchy pattern from the plate probe (1.5 vs 0.5)."""
     import make_fixtures
     import numpy as np
     from numpy.lib.stride_tricks import sliding_window_view
@@ -568,9 +568,9 @@ def test_glass_plate_without_layers_keeps_its_probe(worker, outdir, appearance):
 @needs_blender
 @pytest.mark.parametrize("appearance", ["clear-dark", "clear-light", "tinted-light"])
 def test_clear_glyph_drafts_see_the_frosted_plate(worker, outdir, appearance):
-    """QA r10 N7: clear-dark drafts rendered glass glyphs near-black — they refracted the dark wallpaper straight through
+    """QA r10 N7: clear-dark drafts rendered glass glyphs near-black because they refracted the dark wallpaper straight through
     the frosted plate (Gemini (32,35,46) vs Cycles' (70,71,79), Photos (34,38,54) vs (82,84,93)); clear-light / tinted-light
-    drafts read 7–9 L* dark overall. A domed clear glass glyph on the frosted plate: the draft keeps Cycles' glyph-to-plate
+    drafts read 7-9 L* dark overall. A domed clear glass glyph on the frosted plate: the draft keeps Cycles' glyph-to-plate
     contrast and stays within a few L* of the Cycles preview (HEAD clear-dark: the glyph 16 L* darker than Cycles' and
     darker than its plate, where Cycles' is brighter)."""
     lay = T.layer("A", preset="liquid_glass", bevel=0.08, thickness=0.16)
@@ -609,8 +609,8 @@ def rgb_at(path, x, y, r=4):
 
 @needs_blender
 def test_clear_glass_shows_the_plate_beneath(worker, outdir):
-    """Contacts reference: a white glyph in clear glass reads as the ORANGE plate refracted through thick glass —
-    no milky body, no black (light-blocking) interior."""
+    """Contacts reference: a white glyph in clear glass reads as the ORANGE plate refracted through thick glass,
+    with no milky body, no black (light-blocking) interior."""
     out = outdir / "clear_on_orange.png"
     render(worker, disc_on_plate("clear_glass", "#ffffff", "#ff7c3b"), out, quality="preview")
     plate = rgb_at(out, -0.75, 0.6)
@@ -621,7 +621,7 @@ def test_clear_glass_shows_the_plate_beneath(worker, outdir):
 
 @needs_blender
 def test_frosted_glass_carries_the_art_colour(worker, outdir):
-    """Gemini reference: Base Color = the art, transmission 1, roughness 0.267 — frosted tinted glass."""
+    """Gemini reference: Base Color = the art, transmission 1, roughness 0.267, i.e. frosted tinted glass."""
     out = outdir / "frosted_blue.png"
     render(worker, disc_on_plate("frosted_glass", "#4466ff", "#ffffff", z=0.1), out, quality="preview")
     c = rgb_at(out, 0.0, 0.0)

@@ -9,7 +9,7 @@ import { ImportDialog } from './features/dialogs/ImportDialog'
 import { ShortcutsDialog } from './features/dialogs/ShortcutsDialog'
 import { ConfirmHost, Spinner, Toaster, TooltipLayer } from './components/ui'
 
-// The editor pulls in three.js — keep it out of the home screen bundle.
+// The editor pulls in three.js; keep it out of the home screen bundle.
 const EditorPage = lazy(() => import('./features/editor/EditorPage'))
 const PackPage = lazy(() => import('./features/pack/PackPage'))
 

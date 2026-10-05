@@ -99,7 +99,7 @@ export function ExportDialog() {
       width={720}
       icon={<PackageCheck />}
       title="Export icons"
-      description={`${project.name} — rendered with Blender, resized and packaged for every platform you pick.`}
+      description={`${project.name}: rendered with Blender, resized and packaged for every platform you pick.`}
       footer={
         job ? (
           <>
@@ -119,7 +119,7 @@ export function ExportDialog() {
                 <Download className="h-4 w-4" /> Download .zip
               </a>
             )}
-            {running && <span className="text-2xs text-fg-4">You can close this dialog — the export continues in the background.</span>}
+            {running && <span className="text-2xs text-fg-4">You can close this dialog; the export continues in the background.</span>}
           </>
         ) : (
           <>
@@ -233,7 +233,7 @@ export function ExportTargetGrid({
   )
 }
 
-/** Appearance chips — multi-select (Export) or single-select (`single`, Icon Pack render appearance). */
+/** Appearance chips: multi-select (Export) or single-select (`single`, Icon Pack render appearance). */
 export function AppearanceToggles({
   value,
   onChange,
@@ -323,7 +323,7 @@ function ExportProgress({
   return (
     <div>
       <div className="mb-3 flex items-center gap-2 rounded-xl border border-ok/25 bg-ok/[0.07] px-3 py-2.5 text-xs text-fg-2">
-        <Check className="h-4 w-4 text-ok" /> Export complete — {files.length} file{files.length === 1 ? '' : 's'}.
+        <Check className="h-4 w-4 text-ok" /> Export complete: {files.length} file{files.length === 1 ? '' : 's'}.
       </div>
       <div className="max-h-[340px] overflow-y-auto rounded-xl border border-line">
         {files.map((f) => (
@@ -338,7 +338,7 @@ function ExportProgress({
             <Download className="h-3 w-3 text-fg-4" />
           </a>
         ))}
-        {!files.length && <div className="px-3 py-6 text-center text-2xs text-fg-4">The server did not list individual files — use the .zip.</div>}
+        {!files.length && <div className="px-3 py-6 text-center text-2xs text-fg-4">The server did not list individual files; use the .zip.</div>}
       </div>
     </div>
   )

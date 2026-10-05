@@ -1,6 +1,6 @@
 // CAD-style stage navigation (pure, unit-tested in web/src/features/editor/stage/view.test.mjs).
 //
-// The stage view is a VIEW transform — like a CAD viewport it never changes the project's render framing
+// The stage view is a VIEW transform: like a CAD viewport it never changes the project's render framing
 // (camera.zoom): the icon frame (the square the Blender camera renders) is placed on the stage area at
 // `fit × zoom` CSS px, its centre offset from the fitted position by (x, y) × fit. The Live (three.js), Render and
 // Compare views all place the frame from the same view, so switching views keeps the region you were looking at.
@@ -135,7 +135,7 @@ export function isNotchWheel(e: { deltaY: number; deltaMode?: number; ctrlKey?: 
   return !e.ctrlKey && (e.deltaMode !== 0 || Math.abs(e.deltaY) >= 50)
 }
 
-/** Interpolates two views (zoom geometric, centre linear) — the eased Fit / preset transitions. */
+/** Interpolates two views (zoom geometric, centre linear) for the eased Fit / preset transitions. */
 export function lerpView(a: StageView, b: StageView, t: number): StageView {
   return {
     zoom: a.zoom * Math.pow(b.zoom / a.zoom, t),

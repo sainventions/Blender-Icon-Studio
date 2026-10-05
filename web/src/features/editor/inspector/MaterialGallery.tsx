@@ -1,5 +1,5 @@
 // Material preset gallery (grouped by category, rendered swatches with CSS fallback, engine badges). A preset is only
-// a set of starting values for the one Principled BSDF every shape renders with — PrincipledEditor edits the inputs.
+// a set of starting values for the one Principled BSDF every shape renders with; PrincipledEditor edits the inputs.
 import { useMemo, useState } from 'react'
 import { ChevronDown, Info } from 'lucide-react'
 import type { MaterialPreset, Presets } from '../../../types'
@@ -62,7 +62,7 @@ export function MaterialGallery({
         type="button"
         onClick={() => toggle(galleryId)}
         aria-expanded={open}
-        data-tip={open ? undefined : 'Pick a preset — its values are only a starting point for the Principled BSDF below'}
+        data-tip={open ? undefined : 'Pick a preset: its values are only a starting point for the Principled BSDF below'}
         className="flex w-full items-center gap-2.5 rounded-lg border border-line bg-surface-0/60 p-1.5 pr-2 text-left transition-colors hover:border-line-2"
       >
         <MaterialSwatch id={value} preset={current} className="relative h-10 w-10 shrink-0 rounded-md" />
@@ -91,7 +91,7 @@ export function MaterialGallery({
                       key={id}
                       type="button"
                       onClick={() => onChange(id)}
-                      data-tip={`${m.label} — ${m.description}${b ? ` (${b.tip})` : ''}`}
+                      data-tip={`${m.label}: ${m.description}${b ? ` (${b.tip})` : ''}`}
                       aria-label={m.label}
                       aria-pressed={active}
                       className="group flex min-w-0 flex-col items-center gap-1"

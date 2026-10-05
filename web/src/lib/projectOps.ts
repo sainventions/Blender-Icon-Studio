@@ -155,9 +155,9 @@ export function effectivePlateFill(p: Project, appearance: AppearanceId): Fill {
 
 /**
  * Element tally for the UI: `layered` = SVG elements that belong to a layer (what the layer rows' "N el" add up to);
- * `plate` = elements in no layer that are the detected source plate (and its outline) — they became `canvas.plate`
+ * `plate` = elements in no layer that are the detected source plate (and its outline); they became `canvas.plate`
  * (D9 maps the source plate exactly onto −1..1, so their canvas bbox spans the plate), shown under "Canvas & plate";
- * `unused` = any other element in no layer (e.g. left behind by deleted layers) — never counted as the plate.
+ * `unused` = any other element in no layer (e.g. left behind by deleted layers), never counted as the plate.
  */
 export function elementCounts(
   p: Pick<Project, 'elements' | 'layers'> & { canvas?: Pick<Project['canvas'], 'art'>; source?: Pick<Project['source'], 'plateDetected'> },

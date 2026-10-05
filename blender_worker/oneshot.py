@@ -1,4 +1,4 @@
-"""One-shot Blender job (finals, exports, animations, .blend) — PLAN §7 / D8.
+"""One-shot Blender job (finals, exports, animations, .blend), PLAN §7 / D8.
 
     blender.exe -b --factory-startup --python blender_worker/oneshot.py -- --root <repo> --job <job.json>
 

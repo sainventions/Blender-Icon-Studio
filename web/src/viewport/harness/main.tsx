@@ -247,7 +247,7 @@ function Harness() {
       }
       setSelected((sel) => (sel && next.layers.some((l) => l.id === sel) ? sel : null))
     } catch (err) {
-      setStatus(`${String(err)} — using synthetic fixture`)
+      setStatus(`${String(err)}; using synthetic fixture`)
       if (src === 'backend') void load('A')
     }
   }, [])

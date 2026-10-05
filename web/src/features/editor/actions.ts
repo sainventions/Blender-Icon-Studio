@@ -56,7 +56,7 @@ export async function openInBlender() {
     trackJobToast(job, {
       title: 'Building .blend scene',
       done: 'Opened in Blender',
-      doneDescription: (j) => (j.result?.opened === false ? 'Saved the .blend — Blender could not be launched.' : 'Blender 5.0 is starting with your scene.'),
+      doneDescription: (j) => (j.result?.opened === false ? 'Saved the .blend, but Blender could not be launched.' : 'Blender 5.0 is starting with your scene.'),
       links: (j) => (typeof j.result?.url === 'string' ? [{ label: 'Download .blend', href: j.result.url, download: true }] : undefined),
     })
   } catch (e) {
@@ -102,7 +102,7 @@ export function currentIso(): number {
   return anim ?? useEditor.getState().project?.camera.iso ?? 0
 }
 
-/** Set project.camera.iso (0 = head-on … 1 = isometric, real layer distances — PLAN §11 View). The CAD view is
+/** Set project.camera.iso (0 = head-on … 1 = isometric, real layer distances; PLAN §11 View). The CAD view is
  *  orthographic, so a perspective camera switches back to the front projection. One undo step per gesture (slider
  *  drag); `step` = a discrete change (X / I key, Front / Iso buttons) that is always its own undo step. */
 export function setIso(iso: number, step = false) {
@@ -115,7 +115,7 @@ export function setIso(iso: number, step = false) {
   )
 }
 
-/** Swing the view to `target` (default: toggle top-down / head-on ↔ isometric — the X key) — animated in the live
+/** Swing the view to `target` (default: toggle top-down / head-on ↔ isometric, the X key), animated in the live
  *  view, committed ONCE at the end as its own undo step (never merged into a following slider drag or toggle). */
 export function animateIso(target?: number) {
   const from = currentIso()

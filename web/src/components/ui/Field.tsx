@@ -116,7 +116,7 @@ export interface SliderRowProps {
   resetTip?: string
 }
 
-/** Label (scrubbable) + slider + numeric field — the workhorse inspector row. */
+/** Label (scrubbable) + slider + numeric field: the workhorse inspector row. */
 export function SliderRow({
   label,
   value,

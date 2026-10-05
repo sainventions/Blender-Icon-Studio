@@ -1,4 +1,4 @@
-"""Height-field bodies (blender_worker/heightfield.py, PLAN §11 Geometry) — the pure-numpy parts: the profile,
+"""Height-field bodies (blender_worker/heightfield.py, PLAN §11 Geometry), the pure-numpy parts: the profile,
 graded ring distances, outline flattening / cleaning / nesting, distance queries and Steiner sampling. No Blender
 needed (the CDT and mesh checks run inside Blender: test_heightfield_corpus.py)."""
 from __future__ import annotations
@@ -43,7 +43,7 @@ def test_profile_round_edge_and_wall():
 
 
 def test_thin_parts_taper_instead_of_inverting():
-    """An island narrower than the bevel (D < b) is a lens of half height hb(D) < t/2 — never an inverted bevel."""
+    """An island narrower than the bevel (D < b) is a lens of half height hb(D) < t/2, never an inverted bevel."""
     t, b = 0.10, 0.05
     halves = [H.half_height(t, b, 0.0, D) for D in (0.002, 0.01, 0.025, 0.049, 0.05, 0.2)]
     assert all(h2 >= h1 for h1, h2 in zip(halves, halves[1:]))         # monotone in the island's size
@@ -56,7 +56,7 @@ def test_inflate_dome_and_sphere():
     assert H.half_height(t, b, k, D) == pytest.approx(t / 2 + k * D)
     assert np.isinf(H.slope(np.array([0.0]), 0.0, k, D)[0])           # inflate alone also meets the rim vertically
     assert H.slope(np.array([D]), b, k, D)[0] == pytest.approx(0.0)
-    # bevel = radius = half the thickness: a disc of radius R becomes a near-sphere — a round edge of radius
+    # bevel = radius = half the thickness: a disc of radius R becomes a near-sphere, with a round edge of radius
     # (1 − WALL_MIN)·R on the minimum wall WALL_MIN·R (round 8: no knife-thin rims)
     R = 0.2
     r = np.linspace(0, R, 9)
@@ -82,8 +82,8 @@ def test_round_edge_is_capped_at_the_local_half_width():
 
 
 def test_local_width_of_strips_discs_and_corners():
-    """local_width(): the largest tangent disc at each outline vertex — a strip's half width along its sides, a disc's
-    radius; the sliding max over ±b keeps a wide part's corner at the plain round edge (w ≥ b there)."""
+    """local_width(): the largest tangent disc at each outline vertex (a strip's half width along its sides, a disc's
+    radius); the sliding max over ±b keeps a wide part's corner at the plain round edge (w ≥ b there)."""
     strip = _poly([(-0.5, -0.03), (0.5, -0.03), (0.5, 0.03), (-0.5, 0.03)])
     ol, D = _outline([strip], 0.08)
     w = H.local_width(ol, D, 2 * H.CHORD_TOL)
@@ -153,7 +153,7 @@ def test_open_subpath_with_coincident_end_is_a_closed_fill():
 
 
 def test_open_subpath_with_gap_gets_a_straight_closing_edge():
-    """Gmail: a 3-point spline left open with a gap — SVG fills it as if closed by a straight line."""
+    """Gmail: a 3-point spline left open with a gap; SVG fills it as if closed by a straight line."""
     sp = _poly([(0, 0), (0.4, 0), (0.4, 0.3)], closed=False)
     sp["points"][-1]["hr"] = [9.0, 9.0]       # dangling handles of an open path are meaningless
     sp["points"][0]["hl"] = [-9.0, -9.0]
@@ -245,7 +245,7 @@ def test_softmin_direction_is_symmetric_on_a_ridge():
 
 def test_round_blob_keeps_exact_gradient_directions():
     """A disc has ONE foot point per interior point: g stays the exact radial unit vector down to near the centre
-    (a sphere head / dome keeps true normals; averaging every segment flattened — even reversed — them)."""
+    (a sphere head / dome keeps true normals; averaging every segment flattened them, or even reversed them)."""
     circ = H.flatten_spline(G.circle_spline(0, 0, 0.3), H.CHORD_TOL, H.MAX_EDGE)
     A, B, _ = H._segments([circ])
     ang = np.linspace(0, 2 * np.pi, 7, endpoint=False)
@@ -306,7 +306,7 @@ def test_merge_points_drops_near_duplicates():
 def test_dome_and_bevelled_sphere_get_an_apex():
     """The rings stop short of the island's centre (≤ 0.74·D at 6 segments): a dome / bevelled sphere head ended in a
     flat cap 3.4 % low (13 % at 3 segments). The island's inradius centre is added as a Steiner point whenever the
-    profile still rises there — inflate, or D < bevel — and never for a flat-topped body or next to a medial point."""
+    profile still rises there (inflate, or D < bevel), and never for a flat-topped body or next to a medial point."""
     disc = [G.circle_spline(0.05, -0.02, 0.3)]
     ol, _ = _outline(disc, 0.05)
     centres: dict = {}
@@ -449,7 +449,7 @@ def _clearance(ra, rb):
 def test_inset_clears_the_other_pieces_corners(tip):
     """Round 9 (Calendar merged: the page's digit holes vs the digits, 79 intersecting face pairs): a corner of B that
     touches A BETWEEN two of A's outline samples. Pulling back only A's vertices left that corner on (or inside) A's
-    outline; the contact stretch now follows B's outline offset by the gap — B's corner rounded off at radius gap."""
+    outline; the contact stretch now follows B's outline offset by the gap, with B's corner rounded off at radius gap."""
     gap = 0.003
     a = H.piece_rings([G.rect_spline(-0.4, -0.2, 0.0, 0.2)])
     b = H.piece_rings([_poly([tip, (0.3, -0.2), (0.3, 0.2)])])
@@ -457,7 +457,7 @@ def test_inset_clears_the_other_pieces_corners(tip):
     ai = H.inset_rings(a, b, gap)
     da, db, a_in_b, b_in_a = _clearance(ai, b)
     assert a_in_b == 0 and b_in_a == 0
-    assert da >= gap * (1 - 1e-4) and db >= 0.85 * gap, (da / gap, db / gap)     # HEAD: db 0.07–0.54 gap, or inside
+    assert da >= gap * (1 - 1e-4) and db >= 0.85 * gap, (da / gap, db / gap)     # HEAD: db 0.07-0.54 gap, or inside
     assert len(ai[0]) < len(a[0]) + 12                                            # thinned back: a few arc points
     assert np.vstack(ai)[:, 0].min() == pytest.approx(-0.4)                      # the rest of A unchanged
     assert _self_crossings(ai) == 0
@@ -465,7 +465,7 @@ def test_inset_clears_the_other_pieces_corners(tip):
 
 def test_inset_at_corners_both_outlines_share():
     """Two pieces of equal height side by side (the shared edge ends at corners of BOTH): the corner points have no
-    direction away from B of their own — moved along B's vertex normal they poked out of A as a crossed spike and the
+    direction away from B of their own: moved along B's vertex normal they poked out of A as a crossed spike and the
     body failed to build (an element-material split of a merged layer lost a piece)."""
     a = H.piece_rings([G.rect_spline(-0.5, -0.3, 0.0, 0.3)])
     b = H.piece_rings([G.rect_spline(0.0, -0.3, 0.5, 0.3)])
@@ -510,7 +510,7 @@ def _subdivided(corners, step, jitter, rng, closed=True):
 @pytest.mark.parametrize("half_angle", [12.0, 30.0, 60.0])
 def test_inset_cuts_off_the_swallowtail_at_the_other_pieces_concave_corner(half_angle):
     """Review r9: A's tip filling B's V-notch (B's CONCAVE corner). The samples moved onto B's offset from both walls
-    overshoot each other past the offset corner — the outline crossed itself (a swallowtail: 83 of the corpus' 205 inset
+    overshoot each other past the offset corner, so the outline crossed itself (a swallowtail: 83 of the corpus' 205 inset
     pieces with every layer split, and up to 22,000 points from the refinement in a sharp notch). The loop is cut off
     at the crossing: a simple ring, ≥ gap from B everywhere, bounded size."""
     gap, rng = 0.003, np.random.default_rng(3)
@@ -533,7 +533,7 @@ def test_inset_cuts_off_the_swallowtail_at_the_other_pieces_concave_corner(half_
 def test_inset_of_randomly_cut_pieces_stays_simple_and_clear():
     """Review r9 fuzz: a square cut in two along a random zigzag / wave, each side flattened with its own spacing and
     jitter (the shared edge then interleaves within the touch tolerance), either side inset from the other: every
-    result is a simple ring that keeps at least ~gap from the other piece — chords included."""
+    result is a simple ring that keeps at least ~gap from the other piece, chords included."""
     gap, rng = 0.003, np.random.default_rng(11)
     tested = 0
     for it in range(24):
@@ -565,7 +565,7 @@ def test_inset_of_randomly_cut_pieces_stays_simple_and_clear():
 
 def test_inset_drops_slivers_along_the_other_piece():
     """An outer ring of A that lies wholly within gap of B (≤ 2·gap wide) has nothing left once pulled back. Kept as it
-    was it cut into B (Files_1 / DJI / Translate with every piece split: 73–159 intersecting face pairs); left to the
+    was it cut into B (Files_1 / DJI / Translate with every piece split: 73-159 intersecting face pairs); left to the
     old vertex moves it became a degenerate outline. It is dropped: an island of a piece with other outline left goes,
     a piece that is only that sliver comes back empty (scene._layer skips it)."""
     gap = 0.003
@@ -582,7 +582,7 @@ def test_inset_drops_slivers_along_the_other_piece():
 
 def test_coincident_outlines_overlap_not_touch():
     """A translucent overlay with (nearly) the base's own outline has every vertex within tol of the other outline:
-    it OVERLAPS (stacks), it does not TOUCH — pulled back as a 'touch', the base grew outward around the overlay
+    it OVERLAPS (stacks), it does not TOUCH. Pulled back as a 'touch', the base grew outward around the overlay
     (0.399 -> 0.403) and the two bodies interpenetrated (538-751 intersecting face pairs in the scene)."""
     tol = 3 * H.CHORD_TOL
     sq = H.piece_rings([G.rect_spline(-0.4, -0.4, 0.4, 0.4)])

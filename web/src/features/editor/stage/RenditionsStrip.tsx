@@ -101,7 +101,7 @@ function RenditionTile({
     <button
       type="button"
       onClick={() => setAppearance(appearance)}
-      data-tip={supported ? `Edit ${long}` : `${long} — not used by this platform`}
+      data-tip={supported ? `Edit ${long}` : `${long} (not used by this platform)`}
       aria-label={`${long} appearance`}
       aria-pressed={active}
       data-tip-kbd={String(index + 1)}
@@ -126,7 +126,7 @@ function RenditionTile({
             <LoaderCircle className="h-4 w-4 animate-spin text-white" />
           </div>
         )}
-        {stale && <span className="absolute left-1 top-1 h-1.5 w-1.5 rounded-full bg-warn shadow-[0_0_4px_rgb(245_185_66/0.9)]" data-tip="Outdated — rendered before your latest edits" />}
+        {stale && <span className="absolute left-1 top-1 h-1.5 w-1.5 rounded-full bg-warn shadow-[0_0_4px_rgb(245_185_66/0.9)]" data-tip="Outdated: rendered before your latest edits" />}
       </div>
       <span className={cn('text-3xs font-medium', active ? 'text-fg' : 'text-fg-4 group-hover:text-fg-2')}>{label}</span>
     </button>

@@ -1,4 +1,4 @@
-// Post-processing: neon bloom (selective — like the worker's Glare on the Emission pass only, so a bright white plate
+// Post-processing: neon bloom (selective, like the worker's Glare on the Emission pass only, so a bright white plate
 // or a chrome rim never glows) → tone mapping matching the project's colour mode ('brand' = Standard + the
 // worker's highlight soft clip by default, round 5; Khronos PBR Neutral, AgX) → selection + hover outlines → SMAA.
 import { use, useEffect, useMemo, useSyncExternalStore } from 'react'

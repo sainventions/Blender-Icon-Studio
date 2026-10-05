@@ -1,4 +1,4 @@
-// Promise-based confirmation dialog: `if (await confirmDialog({...})) …` — the in-app replacement for window.confirm.
+// Promise-based confirmation dialog: `if (await confirmDialog({...})) …`, the in-app replacement for window.confirm.
 import type { ReactNode } from 'react'
 import { create } from 'zustand'
 import { TriangleAlert } from 'lucide-react'

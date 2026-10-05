@@ -61,10 +61,10 @@ Files in this folder:
 ## 2. Verified installs (Python 3.13.5, Windows 11, this venv)
 
 ```powershell
-& "C:/Users/sainv/GitHub/Blender Icon Studio/.venv/Scripts/python.exe" -m pip install picosvg skia-pathops shapely   # runtime (lxml + absl-py come with picosvg)
-& "C:/Users/sainv/GitHub/Blender Icon Studio/.venv/Scripts/python.exe" -m pip install resvg-py pillow numpy         # thumbnails + tests
+& ".venv/Scripts/python.exe" -m pip install picosvg skia-pathops shapely   # runtime (lxml + absl-py come with picosvg)
+& ".venv/Scripts/python.exe" -m pip install resvg-py pillow numpy         # thumbnails + tests
 # evaluated, not recommended:
-& "C:/Users/sainv/GitHub/Blender Icon Studio/.venv/Scripts/python.exe" -m pip install svgelements svgpathtools skia-python
+& ".venv/Scripts/python.exe" -m pip install svgelements svgpathtools skia-python
 ```
 
 All of these installed from binary wheels with no compiler: skia-pathops `cp310-abi3-win_amd64`, lxml `cp313-win_amd64`, shapely `cp313`, skia-python `cp313`.
@@ -107,7 +107,7 @@ All of these installed from binary wheels with no compiler: skia-pathops `cp310-
 
 | Test | Result | Pixel diff vs original (resvg, 256 px) |
 |---|---|---|
-| a, c, d, f, g, i | OK | 0–0.1% |
+| a, c, d, f, g, i | OK | 0-0.1% |
 | b (Lucide) | OK, but **stroke geometry wrong** (`r=1` circle → squircle) | 1.2% @192 px, still 0.8% @2048 px (real error, not AA) |
 | e | **throws** `Only use #fragment supported` (SVG2 `href`); `<symbol>` → `BadElement` | n/a |
 | h | **throws** `BadElement: /svg[0]/style[0]`; with `drop_unsupported=True` all CSS colors are lost | 72% |
@@ -186,7 +186,7 @@ SVG text
  └─ build_layers()          → per layer: silhouette splines, occlusion-cut regions, layer SVG, names
 ```
 
-Timings: 0.01–0.16 s per test icon. A synthetic 400-element icon takes 3.0 s; the O(n²) pair analysis dominates. A naive agglomeration took 64 s, so cluster stats are cached and updated incrementally, with a lazy heap.
+Timings: 0.01-0.16 s per test icon. A synthetic 400-element icon takes 3.0 s; the O(n²) pair analysis dominates. A naive agglomeration took 64 s, so cluster stats are cached and updated incrementally, with a lazy heap.
 
 ### 5.1 Recovering per-element metadata (the key trick)
 

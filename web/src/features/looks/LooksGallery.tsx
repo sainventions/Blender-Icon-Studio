@@ -39,7 +39,7 @@ export function LookCard({
       onFocus={() => onHover?.(id)}
       onBlur={() => onHover?.(null)}
       aria-pressed={active}
-      aria-label={`${look.label} look — ${look.description}`}
+      aria-label={`${look.label} look: ${look.description}`}
       data-tip={compact && !onHover ? look.description : undefined}
       className={cn(
         'group flex min-w-0 flex-col text-left outline-none disabled:cursor-not-allowed disabled:opacity-50',
@@ -119,7 +119,7 @@ export function LooksGrid({
     )
   }
   if (!looks.length && !before) {
-    return <div className="rounded-lg border border-dashed border-line-2 px-3 py-5 text-center text-2xs text-fg-4">No looks available — the server's presets.json has no "looks".</div>
+    return <div className="rounded-lg border border-dashed border-line-2 px-3 py-5 text-center text-2xs text-fg-4">No looks available: the server's presets.json has no "looks".</div>
   }
   return (
     <div className={cn('grid', variant === 'compact' ? 'gap-x-1.5 gap-y-2' : 'gap-1', className)} style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>

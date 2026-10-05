@@ -1,4 +1,4 @@
-// Shared data contract — hand-mirrored from server/bis/models.py. Keep both in sync.
+// Shared data contract, hand-mirrored from server/bis/models.py. Keep both in sync.
 // Coordinate spaces: SVG (viewBox, y down) · ART (centre origin, y UP, longer side = 2.0, i.e. −1..1)
 // Canvas: plate spans −1..1; artwork root = canvas.art; layer transform after that; z toward camera.
 
@@ -80,7 +80,7 @@ export interface Lighting {
 export interface CameraSpec {
   view: 'front' | 'perspective'; tiltX: number; tiltY: number; fov: number; zoom: number
   iso?: number // CAD-style POV: 0 = head-on .. 1 = isometric (real distances, orthographic)
-  explode: number // legacy — keep 1
+  explode: number // legacy: keep 1
 }
 export interface LayerOverride {
   fill?: Fill | null; opacity?: number | null; visible?: boolean | null
@@ -93,7 +93,7 @@ export type AppearanceId = 'light' | 'dark' | 'clear-light' | 'clear-dark' | 'ti
 export type Quality = 'draft' | 'preview' | 'final' | 'ultra'
 export interface RenderSettings {
   quality: Quality; size?: number | null
-  /** 'brand' (round 5): Standard + highlight soft clip — blender_worker's default for a missing / unknown mode. */
+  /** 'brand' (round 5): Standard + highlight soft clip; blender_worker's default for a missing / unknown mode. */
   colorMode: 'brand' | 'neutral' | 'standard' | 'agx' | 'agx-punchy'
   backdrop: 'transparent' | 'color' | 'wallpaper'; backdropColor: ColorHex
   autoPreview: boolean
@@ -190,7 +190,7 @@ export interface ParamSchema {
 }
 export interface MaterialPreset {
   label: string; category: string; description: string
-  paint?: 'tint' | 'base' | 'emission' // legacy (pre-§11): presets.json no longer carries it — params.paintMode does
+  paint?: 'tint' | 'base' | 'emission' // legacy (pre-§11): presets.json no longer carries it; params.paintMode does
   engines: { cycles: string; eevee: string }
   eeveeNote?: string
   params: Record<string, ParamSchema>

@@ -1,5 +1,5 @@
 // Synthetic Project + GeometryBundle for the viewport harness: Bézier shapes with holes (ring, rounded star with a
-// centre hole, a sharp-cornered bolt, three "individual" sparks) and generated layer textures — no backend needed.
+// centre hole, a sharp-cornered bolt, three "individual" sparks) and generated layer textures; no backend needed.
 import type {
   GeometryBundle,
   Layer,

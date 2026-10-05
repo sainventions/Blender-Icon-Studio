@@ -1,4 +1,4 @@
-// CAD-style iso view (PLAN §11 View) — the live twin of blender_worker/framing.py's iso_basis / ortho_plan.
+// CAD-style iso view (PLAN §11 View): the live twin of blender_worker/framing.py's iso_basis / ortho_plan.
 //
 // The head-on view is the CAD "top" view of the icon lying flat (stack axis +Z toward the viewer, art +Y up).
 // camera.iso t in 0..1 turns an ORTHOGRAPHIC camera along the shortest rotation (quaternion slerp) from that basis to
@@ -8,7 +8,7 @@
 // canvas square stands in) with the front view's own border, so t → 0 continues the front framing (2.24 / zoom).
 import * as THREE from 'three'
 
-/** The front view's border (plate edge 5.4 % from the frame) — framing.FRONT_MARGIN. */
+/** The front view's border (plate edge 5.4 % from the frame), as in framing.FRONT_MARGIN. */
 export const FRONT_MARGIN = (1 - 2.0 / 2.24) / 2
 /** Head-on framing: ortho_scale = FRONT_ORTHO_SCALE / zoom. */
 export const FRONT_ORTHO_SCALE = 2.24
@@ -130,7 +130,7 @@ export function polyArea(p: ArrayLike<number>): number {
   return a / 2
 }
 
-/** Intersection area of two convex CCW polygons (Sutherland–Hodgman clipping of `a` by every edge of `b`). */
+/** Intersection area of two convex CCW polygons (Sutherland-Hodgman clipping of `a` by every edge of `b`). */
 export function convexOverlapArea(a: ArrayLike<number>, b: ArrayLike<number>): number {
   let poly: number[] = Array.from(a)
   const m = b.length >> 1

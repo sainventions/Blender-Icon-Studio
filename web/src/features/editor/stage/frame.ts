@@ -2,8 +2,8 @@
 
 /**
  * Side of the icon frame in CSS px. Live view (`nativePx` null): the fitted square × zoom. Render / Compare with a
- * render: at 100 % ("Fit") never larger than the render's own pixels — a 512 px preview is shown at 512 device px,
- * centred, instead of being blown up to the fitted ~740 px — and zoom scales from there (zooming past 1:1 is still
+ * render: at 100 % ("Fit") never larger than the render's own pixels (a 512 px preview is shown at 512 device px,
+ * centred, instead of being blown up to the fitted ~740 px), and zoom scales from there (zooming past 1:1 is still
  * possible, explicitly). Snapped to whole device pixels so a 1:1 render is not resampled.
  */
 export function frameSide(fit: number, zoom: number, dpr: number, nativePx: number | null | undefined): number {

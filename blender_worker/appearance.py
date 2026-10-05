@@ -2,15 +2,15 @@
 
 Appearances only change Principled inputs (and the plate fill / backdrop), never the shader graph's nature:
 
-* light        — base project.
-* dark         — ``appearances.dark`` overrides (default plate fill system-dark); env × 0.6, key × 0.85; glyphs that
+* light:         base project.
+* dark:          ``appearances.dark`` overrides (default plate fill system-dark); env × 0.6, key × 0.85; glyphs that
                  transmit more than DARK_GLYPH allows become lit glass (transmission 0.5, subsurface 1, art base)
                  unless the user set the layer's dark material.
-* clear-*      — ``appearances.mono`` overrides; every visible layer becomes clear glass: white base (tint 0),
+* clear-*:       ``appearances.mono`` overrides; every visible layer becomes clear glass: white base (tint 0),
                  transmission 1, roughness CLEAR_GLYPH['roughness']; the plate is frosted glass over the wallpaper.
-* tinted-light — mono luminance × tint colour into the glass Base Color; plate = pale tinted frosted glass over
+* tinted-light:  mono luminance × tint colour into the glass Base Color; plate = pale tinted frosted glass over
                  the light wallpaper.
-* tinted-dark  — plate system-dark satin; foreground = mono luminance × tint as DARK_GLYPH lit glass (no emission).
+* tinted-dark:   plate system-dark satin; foreground = mono luminance × tint as DARK_GLYPH lit glass (no emission).
 
 watchOS ignores appearances (always light). Per-layer LayerOverride fields replace base values.
 """
@@ -46,10 +46,10 @@ MONO_MIN_RANGE = 0.5
 TINTED_GLYPH = {"tint": 1.0, "transmission": 1.0, "roughness": 0.15, "ior": 1.5, "metallic": 0.0,
                 "coatWeight": 0.6, "coatRoughness": 0.03, "paintMode": "base", "emissionStrength": 0.0}
 TINTED_PLATE = {"tint": 0.6, "transmission": 1.0, "roughness": 0.45, "ior": 1.45, "coatWeight": 0.3}
-# dark renditions (dark, tinted-dark): clear glass over a near-black plate only transmits that plate — the glyphs
+# dark renditions (dark, tinted-dark): clear glass over a near-black plate only transmits that plate: the glyphs
 # vanished (QA r8 #2). Physically, Principled inputs only: at most DARK_GLYPH['transmission'] of the glyph stays
 # specular transmission, the rest scatters inside (subsurface, radius = the art colour) and the art colour is the base
-# (tint ≥ DARK_GLYPH['tintMin']) — lit glass / opal that keeps its colour over any plate.
+# (tint ≥ DARK_GLYPH['tintMin']): lit glass / opal that keeps its colour over any plate.
 DARK_GLYPH = {"transmission": 0.5, "subsurfaceWeight": 1.0, "tintMin": 0.9}
 TINTED_DARK_GLOW = 0.5          # LEGACY (unused since round 7: tinted-dark glyphs are lit, no emission); the viewport's
                                 # appearance.ts mirror still reads it until it ports DARK_GLYPH
@@ -134,7 +134,7 @@ def _dark_params(preset: str, params: dict) -> Optional[dict]:
 
 def _dark_glyphs(proj: dict, explicit: set) -> None:
     """Dark renditions: every visible layer (and its per-shape materials) that transmits more than DARK_GLYPH allows
-    gets the DARK_GLYPH inputs — except layers whose dark material the user set explicitly (``explicit``)."""
+    gets the DARK_GLYPH inputs, except layers whose dark material the user set explicitly (``explicit``)."""
     for L in proj["layers"]:
         if not L.get("visible", True) or L["id"] in explicit or not L.get("glass", True):
             continue

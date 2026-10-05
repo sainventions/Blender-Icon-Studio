@@ -1,4 +1,4 @@
-"""Auto-framing maths (blender_worker/framing.py): perspective views and the CAD iso view (PLAN §11 View) — pure
+"""Auto-framing maths (blender_worker/framing.py): perspective views and the CAD iso view (PLAN §11 View). Pure
 numpy, no Blender needed."""
 from __future__ import annotations
 
@@ -155,7 +155,7 @@ def test_iso_basis_runs_from_head_on_to_isometric():
 
 
 def test_iso_shows_real_distances():
-    """Orthographic: a layer gap of h appears as h · cos(elevation) on screen — never spread apart."""
+    """Orthographic: a layer gap of h appears as h · cos(elevation) on screen, never spread apart."""
     for t in (0.0, 0.5, 1.0):
         d, rot = F.iso_basis(t)
         for h in (0.05, 0.3):

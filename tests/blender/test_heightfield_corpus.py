@@ -165,8 +165,8 @@ open({out!r}, "w").write(json.dumps(out))
 """
 
     def test_domes_and_bevelled_spheres_reach_their_apex(tmp_path):
-        """A disc of radius D: inflate k gives half height e + b + k·D, bevel = radius gives a sphere of radius D —
-        at the APEX, not at a flat cap where the rings stop (3.4 % low at 6 segments, 13 % at 3)."""
+        """A disc of radius D: inflate k gives half height e + b + k·D, bevel = radius gives a sphere of radius D,
+        reached at the APEX, not at a flat cap where the rings stop (3.4 % low at 6 segments, 13 % at 3)."""
         out = tmp_path / "apex.json"
         expr = _APEX_EXPR.format(repo=str(REPO), out=str(out))
         p = subprocess.run([str(wc.BLENDER), "-b", "--factory-startup", "--python-expr", expr],
@@ -183,7 +183,7 @@ open({out!r}, "w").write(json.dumps(out))
         for v in r.values():
             assert v["nonManifold"] == 0 and v["misoriented"] == 0 and v["invertedNormals"] == 0 and v["volume"] > 0
         # a flat slab (no bevel, no inflate) is all creases: every corner normal is its face's own (the wall corners
-        # were shaded with the corner bisector — a sharp slab looked rounded); rim loops + 4 vertical corner edges
+        # were shaded with the corner bisector, so a sharp slab looked rounded); rim loops + 4 vertical corner edges
         slab = r["slab"]
         assert slab["minNormalDot"] > 0.999
         assert slab["sharp"] == 2 * slab["outline"] + 4
@@ -258,7 +258,7 @@ open({out!r}, "w").write(json.dumps(out))
         """PLAN §11 round 7: the inflate dome is k·D·sqrt(u/u_max) with −∇²u = 4 (u = 0 on the outline). An ellipse
         matches the analytic solution, a thin stadium becomes a ROUND tube (semicircular cross-section), and the
         corpus shapes that grew creased fins with the distance dome (Gemini's tips, iMessage's tail, Gmail's legs)
-        stay smooth: adjacent top faces of the upper dome meet at < 30° (the distance dome: 66–92°)."""
+        stay smooth: adjacent top faces of the upper dome meet at < 30° (the distance dome: 66-92°)."""
         index_path, _names = corpus_index
         index = json.loads(index_path.read_text(encoding="utf-8"))
         shapes = []
@@ -340,13 +340,13 @@ open({out!r}, "w").write(json.dumps(out))
         g = T.geo([("d", [T.circle(0.3)], "#3366ff", 1.0)])
         g["maxRadius"] = 0.4                                   # the contract value wins over the worker's estimate
         cases["maxr"] = list(T.scene([lay], {"A": g}))
-        # round 8: H = max(rule height, in-layer stacked height) — here the rule (maxRadius 1.0) is the taller one
+        # round 8: H = max(rule height, in-layer stacked height); here the rule (maxRadius 1.0) is the taller one
         lay = T.layer("A", z=0.0)
         lay["depth"]["inflate"] = 0.5
         g = T.geo([("sq", [T.square(0.4)], "#3366ff", 1.0), ("disc", [T.circle(0.25, 0.2, 0.1)], "#ffffff", 0.6)])
         g["maxRadius"] = 1.0
         cases["both"] = list(T.scene([lay], {"A": g}))
-        # round 9: Calendar's L1 + L2 merged — the page with the digits cut out as holes and the digits filling them
+        # round 9: Calendar's L1 + L2 merged, the page with the digits cut out as holes and the digits filling them
         # (outlines flattened differently, they touch): pulling back only the digits' VERTICES left the page's corners
         # poking into them between two samples (79 intersecting face pairs, the full body height deep)
         cal = json.loads((HERE / "data" / "calendar_merged_layer.json").read_text(encoding="utf-8"))
@@ -404,7 +404,7 @@ def folds(arr, xmax=None):
     return float(np.percentile(ang, 99)), float(ang.max())
 
 out = {{}}
-# a stroke narrower than 2 x bevel (t 0.16, b 0.08, half width 0.03): a ROUND TUBE of radius 0.03 — HEAD built a roof
+# a stroke narrower than 2 x bevel (t 0.16, b 0.08, half width 0.03): a ROUND TUBE of radius 0.03; HEAD built a roof
 # ridge along its spine (hb(0.03; 0.08) with slope 1.25 there)
 for tag, k in (("strip", 0.0), ("strip_k", 0.25)):
     arr = H.build([G.rect_spline(-0.4, -0.03, 0.4, 0.03)], 0.16, 0.08, k, 8, 1.0)
@@ -421,7 +421,7 @@ open({out!r}, "w").write(json.dumps(out))
 """
 
     def test_thin_strokes_are_round_tubes(corpus_index, tmp_path):
-        """PLAN §11 round 8 (QA r9 N4): the round edge is capped at each part's LOCAL half-width — a stroke narrower than
+        """PLAN §11 round 8 (QA r9 N4): the round edge is capped at each part's LOCAL half-width; a stroke narrower than
         2 × bevel is a round tube (no roof ridge on its spine); Syno Photos' rings and Ti84's keys at their import depth
         keep their dome folds low (HEAD: p99 58° / 74°)."""
         index_path, _names = corpus_index

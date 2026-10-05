@@ -60,7 +60,7 @@ export function RenderInspector() {
             value={String(r.size ?? 'tier')}
             onChange={(v) => setRender('size', { size: v === 'tier' ? null : Number(v) }, { render: false })}
             options={[
-              { value: 'tier', label: `Tier default (${tier?.size ?? '—'} px)` },
+              { value: 'tier', label: `Tier default (${tier?.size ?? '-'} px)` },
               ...[256, 512, 768, 1024, 2048, 4096].map((s) => ({ value: String(s), label: `${s} px` })),
             ]}
             className="flex-1"
@@ -118,7 +118,7 @@ export function RenderInspector() {
           <span className="text-3xs text-fg-4">{r.autoPreview ? 'Cycles after edits settle' : 'EEVEE drafts only'}</span>
         </Row>
         <p className="text-3xs leading-snug text-fg-4">
-          Drafts (EEVEE, ~0.2 s) render automatically ~350 ms after every edit. EEVEE can’t show glass behind glass — the Cycles preview is the first faithful view.
+          Drafts (EEVEE, ~0.2 s) render automatically ~350 ms after every edit. EEVEE can’t show glass behind glass; the Cycles preview is the first faithful view.
         </p>
       </Section>
 
@@ -130,15 +130,15 @@ export function RenderInspector() {
         <div className="space-y-1 text-2xs text-fg-3">
           <div className="flex justify-between">
             <span>Version</span>
-            <span className="text-fg-2">{system?.blender.version ?? '—'}</span>
+            <span className="text-fg-2">{system?.blender.version ?? '-'}</span>
           </div>
           <div className="flex justify-between">
             <span>Device</span>
-            <span className="text-fg-2">{system?.gpu.device ?? '—'} · {system?.gpu.name ?? '—'}</span>
+            <span className="text-fg-2">{system?.gpu.device ?? '-'} · {system?.gpu.name ?? '-'}</span>
           </div>
           <div className="flex justify-between">
             <span>Worker</span>
-            <span className="capitalize text-fg-2">{system?.worker.state ?? '—'}{system?.worker.pid ? ` · pid ${system.worker.pid}` : ''}</span>
+            <span className="capitalize text-fg-2">{system?.worker.state ?? '-'}{system?.worker.pid ? ` · pid ${system.worker.pid}` : ''}</span>
           </div>
         </div>
         <div className="flex gap-1.5 pt-1">

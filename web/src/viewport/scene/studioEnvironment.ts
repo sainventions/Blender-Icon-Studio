@@ -1,4 +1,4 @@
-// Procedural studio environment built only from emissive "lightformers" (no network HDRIs) — the three.js twin of
+// Procedural studio environment built only from emissive "lightformers" (no network HDRIs), the three.js twin of
 // the worker's world shader + area-light rig: a vertical gradient dome with a front-fill term, a key softbox, a
 // grazing rim strip on the lit side, a weaker opposite strip, a cool fill card and two faint side kickers.
 //
@@ -144,7 +144,7 @@ export class StudioEnvironment {
     const env = rig.environment
     const domeU = this.dome.material.uniforms
     // Worker _world_graph: (gradient + key softbox spot · max(0.2, key) + front · max(0.3, fill)) × 0.6 · WORLD_CAL ·
-    // environment — every term linear in the environment, like the worker — the fill area light × DIFFUSE_CAL; the rim
+    // environment (every term linear in the environment, like the worker), the fill area light × DIFFUSE_CAL; the rim
     // strips and side kickers keep their energy. LIVE_LIGHT_CAL: per-component live calibration (rig.ts).
     domeU.strength.value = 0.6 * WORLD_CAL * env * LIVE_LIGHT_CAL.dome
     domeU.front.value = (0.5 * Math.max(0.3, rig.fill) * LIVE_LIGHT_CAL.front) / LIVE_LIGHT_CAL.dome

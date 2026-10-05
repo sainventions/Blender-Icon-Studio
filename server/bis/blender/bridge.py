@@ -1,4 +1,4 @@
-"""BlenderBridge — the server's connection to Blender 5.0 (PLAN §7, D8).
+"""BlenderBridge: the server's connection to Blender 5.0 (PLAN §7, D8).
 
 Persistent worker (drafts / previews)
     ``blender -b --factory-startup --python blender_worker/worker.py -- --port 0 --root <repo>``
@@ -406,7 +406,7 @@ class BlenderBridge(Bridge):
             self._set_state(
                 "error",
                 f"Worker crashed {len(self._crashes)}× in {self._crash_window:.0f}s (last exit code {rc}). "
-                f"{tail[:160]} — restart it from the status bar.",
+                f"{tail[:160]}; restart it from the status bar.",
             )
             return
         delay = self.RESTART_BACKOFF[min(len(self._crashes) - 1, len(self.RESTART_BACKOFF) - 1)]

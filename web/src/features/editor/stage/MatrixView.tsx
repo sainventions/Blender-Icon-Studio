@@ -34,7 +34,7 @@ export function MatrixView() {
           <div>
             <h3 className="text-sm font-semibold text-fg">Renditions</h3>
             <p className="text-2xs text-fg-4">
-              Every appearance the OS can show — click one to edit it. {presets?.platforms[platform]?.label} uses {allowed.length} of 6.
+              Every appearance the OS can show. Click one to edit it. {presets?.platforms[platform]?.label} uses {allowed.length} of 6.
             </p>
           </div>
           <div className="flex-1" />
@@ -43,8 +43,8 @@ export function MatrixView() {
             value={quality}
             onChange={(v) => set({ matrixQuality: v })}
             options={[
-              { value: 'draft', label: 'Draft', tip: 'EEVEE — fast' },
-              { value: 'preview', label: 'Preview', tip: 'Cycles OptiX — faithful glass' },
+              { value: 'draft', label: 'Draft', tip: 'EEVEE: fast' },
+              { value: 'preview', label: 'Preview', tip: 'Cycles OptiX: faithful glass' },
             ]}
           />
           <Button variant="primary" size="sm" icon={anyRunning ? <LoaderCircle className="animate-spin" /> : <RefreshCw />} onClick={() => void renderAll(quality)} disabled={anyRunning} tipKbd="Shift+M" tipLabel="Render all renditions">
@@ -61,7 +61,7 @@ export function MatrixView() {
         <div className="mt-8">
           <div className="mb-3 flex items-baseline gap-2">
             <h3 className="text-sm font-semibold text-fg">Size waterfall</h3>
-            <span className="text-2xs text-fg-4">{appearanceLabel(appearance, presets)} · actual pixels — check legibility at small sizes</span>
+            <span className="text-2xs text-fg-4">{appearanceLabel(appearance, presets)} · actual pixels; check legibility at small sizes</span>
           </div>
           <div className="flex items-end gap-6 overflow-x-auto rounded-2xl border border-line px-6 pb-4 pt-6" style={{ background: APPEARANCE_VISUAL[appearance].bg }}>
             {WATERFALL.map((px) => (

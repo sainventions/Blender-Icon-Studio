@@ -1,4 +1,4 @@
-// The layer stack: one group per visible layer (canvas.art ∘ layer.transform, z = depth.z + ε — REAL distances,
+// The layer stack: one group per visible layer (canvas.art ∘ layer.transform, z = depth.z + ε at REAL distances,
 // PLAN §11), one height-field body per region ('individual') or the union silhouette ('combined' / touching opaque
 // pieces), flat raster cards, and ONE Principled material per shape (layer material merged with
 // Layer.elementMaterials). Picking, hover and drag-to-move (head-on view only). The stack itself is built in ./stack.ts.

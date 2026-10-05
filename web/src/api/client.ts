@@ -37,7 +37,7 @@ function messageFromDetail(detail: unknown, fallback: string): string {
 export interface RequestOptions {
   signal?: AbortSignal
   keepalive?: boolean
-  /** Raw body (FormData) — sent without a JSON content-type. */
+  /** Raw body (FormData), sent without a JSON content-type. */
   form?: FormData
 }
 
